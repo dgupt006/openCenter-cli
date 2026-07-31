@@ -59,12 +59,12 @@ type ValidationResult struct {
 
 // ValidateService handles cluster validation business logic
 type ValidateService struct {
-	pathResolver          *paths.PathResolver
-	validationEngine      *validation.ValidationEngine
-	configManager         *config.ConfigManager
-	configurationMgr      *config.ConfigurationManager
-	fileSystem            fs.FileSystem
-	openStackDiscovery    openstackcloud.DiscoveryClient
+	pathResolver       *paths.PathResolver
+	validationEngine   *validation.ValidationEngine
+	configManager      *config.ConfigManager
+	configurationMgr   *config.ConfigurationManager
+	fileSystem         fs.FileSystem
+	openStackDiscovery openstackcloud.DiscoveryClient
 }
 
 // NewValidateService creates a new ValidateService

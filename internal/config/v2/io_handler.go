@@ -18,7 +18,7 @@ import (
 	"fmt"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
-	
+
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 	"gopkg.in/yaml.v3"
 )

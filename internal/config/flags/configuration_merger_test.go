@@ -426,4 +426,3 @@ func TestDefaultConfigurationMerger_PrecedenceOrdering(t *testing.T) {
 }
 
 // Helper functions
-

@@ -57,9 +57,9 @@ type ServiceImage struct {
 //     from these fields. This eliminates per-service boilerplate for standard services.
 //   - Complex services (keycloak, cert-manager) keep explicit descriptors.
 type BaseConfig struct {
-	Enabled      bool         `yaml:"enabled" json:"enabled" jsonschema:"description=Whether this service is deployed"`
-	AdoptionMode AdoptionMode `yaml:"adoption_mode,omitempty" json:"adoption_mode,omitempty" jsonschema:"description=How Flux interacts with this service,enum=managed,enum=external,enum=sync,enum=deferred,enum=takeover,default=managed"`
-	Namespace    string       `yaml:"namespace,omitempty" json:"namespace,omitempty" jsonschema:"description=Kubernetes namespace for the service"`
+	Enabled      bool          `yaml:"enabled" json:"enabled" jsonschema:"description=Whether this service is deployed"`
+	AdoptionMode AdoptionMode  `yaml:"adoption_mode,omitempty" json:"adoption_mode,omitempty" jsonschema:"description=How Flux interacts with this service,enum=managed,enum=external,enum=sync,enum=deferred,enum=takeover,default=managed"`
+	Namespace    string        `yaml:"namespace,omitempty" json:"namespace,omitempty" jsonschema:"description=Kubernetes namespace for the service"`
 	Source       ServiceSource `yaml:"source,omitempty" json:"source,omitempty" jsonschema:"description=GitOps source configuration"`
 	Image        ServiceImage  `yaml:"image,omitempty" json:"image,omitempty" jsonschema:"description=Container image configuration"`
 

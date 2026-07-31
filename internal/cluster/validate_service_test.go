@@ -527,7 +527,6 @@ func validTestConfig() string {
 `
 }
 
-
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsSubstring(s, substr))
 }

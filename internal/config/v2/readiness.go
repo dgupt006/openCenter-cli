@@ -445,4 +445,3 @@ func isMissingSecret(value string) bool {
 func valueSet(value string) bool {
 	return !isMissingSecret(value)
 }
-

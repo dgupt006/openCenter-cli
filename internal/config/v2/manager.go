@@ -448,7 +448,6 @@ func (cm *ConfigurationManager) List(ctx context.Context) ([]string, error) {
 	return cm.ListWithOrganization(ctx, "")
 }
 
-
 // ListWithOrganization returns cluster names filtered by organization.
 //
 // If organization is empty, returns clusters from all organizations.

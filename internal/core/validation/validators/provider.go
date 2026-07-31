@@ -528,5 +528,4 @@ func (v *ProviderValidator) validateVMwareConfig(result *validation.ValidationRe
 	}
 }
 
-
 // isValidMACAddress checks if a string is a valid MAC address.

@@ -218,4 +218,3 @@ func genArrayIndex() gopter.Gen {
 	// Generate valid array indices (non-negative integers)
 	return gen.IntRange(0, 99) // Keep reasonable range for testing
 }
-

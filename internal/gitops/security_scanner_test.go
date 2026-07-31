@@ -229,4 +229,3 @@ stringData:
 	}
 	assertFinding(t, findings, "stub-secret-changeme")
 }
-

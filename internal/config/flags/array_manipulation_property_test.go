@@ -266,7 +266,6 @@ func genTestValue() gopter.Gen {
 	)
 }
 
-
 // Helper function for max (Go 1.21+ has this built-in)
 func max(a, b int) int {
 	if a > b {

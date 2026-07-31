@@ -278,5 +278,3 @@ func verifyOriginMatchesGitURL(ctx context.Context, gitDir, expectedURL string) 
 	}
 	return nil
 }
-
-

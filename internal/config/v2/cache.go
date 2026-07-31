@@ -18,7 +18,6 @@ import (
 	"time"
 
 	configcache "github.com/opencenter-cloud/opencenter-cli/internal/config/cache"
-	
 )
 
 // ConfigCache provides thread-safe caching of configurations.

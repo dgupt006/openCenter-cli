@@ -273,7 +273,6 @@ func (g *ConfigGenerator) randomKubernetesVersion() string {
 	return versions[g.rand.Intn(len(versions))]
 }
 
-
 func (g *ConfigGenerator) randomRegion() string {
 	regions := []string{"RegionOne", "RegionTwo", "us-east", "us-west", "eu-central"}
 	return regions[g.rand.Intn(len(regions))]

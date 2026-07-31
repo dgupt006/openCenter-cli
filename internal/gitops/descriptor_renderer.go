@@ -607,4 +607,3 @@ func cleanupSingleServiceOutputs(target string, serviceName string, isManaged bo
 
 	return nil
 }
-

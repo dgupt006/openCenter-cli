@@ -707,7 +707,6 @@ func firstNonEmptyFormatter(values ...string) string {
 	return ""
 }
 
-
 func (s *ValidateService) formatWarnings(warnings []string) string {
 	var out strings.Builder
 	out.WriteString("\nWarnings:\n")

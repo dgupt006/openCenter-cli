@@ -21,7 +21,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 // **Feature: secrets-cli-consolidation, Property 4: Keys subcommands have required flags**
 // **Validates: Requirements 6.6, 6.7**
 //

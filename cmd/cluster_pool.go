@@ -483,7 +483,7 @@ func outputPoolsStructured(cmd *cobra.Command, cfg *v2.Config, format OutputForm
 	var pools []poolEntry
 	pools = append(pools, poolEntry{
 		Name: "default", Type: "linux",
-		Count: cfg.OpenCenter.Infrastructure.Compute.WorkerCount,
+		Count:  cfg.OpenCenter.Infrastructure.Compute.WorkerCount,
 		Flavor: cfg.OpenCenter.Infrastructure.Compute.FlavorWorker,
 		Status: poolStatus(cfg.OpenCenter.Infrastructure.Compute.WorkerCount),
 	})

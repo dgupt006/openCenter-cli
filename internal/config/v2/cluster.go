@@ -26,16 +26,16 @@ type ClusterConfig struct {
 // KubernetesConfig represents Kubernetes cluster configuration.
 // Requirements: 3.2, 9.3, 9.4
 type KubernetesConfig struct {
-	Version                    string                   `yaml:"version" json:"version" validate:"required,semver"`
-	APIPort                    int                      `yaml:"api_port" json:"api_port" validate:"required,min=1,max=65535"`
-	KubeVIPEnabled             bool                     `yaml:"kube_vip_enabled" json:"kube_vip_enabled"`
-	KubeletRotateServerCerts   bool                     `yaml:"kubelet_rotate_server_certs" json:"kubelet_rotate_server_certs"`
-	SubnetPods                 string                   `yaml:"subnet_pods" json:"subnet_pods" validate:"required,cidrv4"`
-	SubnetServices             string                   `yaml:"subnet_services" json:"subnet_services" validate:"required,cidrv4"`
-	NetworkPlugin              NetworkPluginConfig      `yaml:"network_plugin" json:"network_plugin" validate:"required"`
-	StoragePlugin              StoragePluginConfig      `yaml:"storage_plugin,omitempty" json:"storage_plugin,omitempty"`
-	Security                   KubernetesSecurityConfig `yaml:"security,omitempty" json:"security,omitempty"`
-	OIDC                       OIDCConfig               `yaml:"oidc,omitempty" json:"oidc,omitempty"`
+	Version                  string                   `yaml:"version" json:"version" validate:"required,semver"`
+	APIPort                  int                      `yaml:"api_port" json:"api_port" validate:"required,min=1,max=65535"`
+	KubeVIPEnabled           bool                     `yaml:"kube_vip_enabled" json:"kube_vip_enabled"`
+	KubeletRotateServerCerts bool                     `yaml:"kubelet_rotate_server_certs" json:"kubelet_rotate_server_certs"`
+	SubnetPods               string                   `yaml:"subnet_pods" json:"subnet_pods" validate:"required,cidrv4"`
+	SubnetServices           string                   `yaml:"subnet_services" json:"subnet_services" validate:"required,cidrv4"`
+	NetworkPlugin            NetworkPluginConfig      `yaml:"network_plugin" json:"network_plugin" validate:"required"`
+	StoragePlugin            StoragePluginConfig      `yaml:"storage_plugin,omitempty" json:"storage_plugin,omitempty"`
+	Security                 KubernetesSecurityConfig `yaml:"security,omitempty" json:"security,omitempty"`
+	OIDC                     OIDCConfig               `yaml:"oidc,omitempty" json:"oidc,omitempty"`
 }
 
 // NetworkPluginConfig represents CNI plugin configuration.
@@ -48,17 +48,17 @@ type NetworkPluginConfig struct {
 
 // CalicoConfig represents Calico CNI configuration.
 type CalicoConfig struct {
-	Enabled                    bool              `yaml:"enabled" json:"enabled"`
-	Version                    string            `yaml:"version,omitempty" json:"version,omitempty"`
-	IPIPMode                   string            `yaml:"ipip_mode,omitempty" json:"ipip_mode,omitempty" validate:"omitempty,oneof=Always CrossSubnet Never"`
-	VXLANMode                  string            `yaml:"vxlan_mode,omitempty" json:"vxlan_mode,omitempty" validate:"omitempty,oneof=Always CrossSubnet Never"`
-	NetworkPolicy              bool              `yaml:"network_policy" json:"network_policy"`
-	CNIIface                   string            `yaml:"cni_iface,omitempty" json:"cni_iface,omitempty"`
-	CalicoInterfaceAutodetect  string            `yaml:"calico_interface_autodetect,omitempty" json:"calico_interface_autodetect,omitempty"`
-	AutodetectCIDR             string            `yaml:"autodetect_cidr,omitempty" json:"autodetect_cidr,omitempty"`
-	EncapsulationType          string            `yaml:"encapsulation_type,omitempty" json:"encapsulation_type,omitempty"`
-	NATOutgoing                bool              `yaml:"nat_outgoing" json:"nat_outgoing"`
-	Modules                    CNIModulesConfig  `yaml:"modules,omitempty" json:"modules,omitempty"`
+	Enabled                   bool             `yaml:"enabled" json:"enabled"`
+	Version                   string           `yaml:"version,omitempty" json:"version,omitempty"`
+	IPIPMode                  string           `yaml:"ipip_mode,omitempty" json:"ipip_mode,omitempty" validate:"omitempty,oneof=Always CrossSubnet Never"`
+	VXLANMode                 string           `yaml:"vxlan_mode,omitempty" json:"vxlan_mode,omitempty" validate:"omitempty,oneof=Always CrossSubnet Never"`
+	NetworkPolicy             bool             `yaml:"network_policy" json:"network_policy"`
+	CNIIface                  string           `yaml:"cni_iface,omitempty" json:"cni_iface,omitempty"`
+	CalicoInterfaceAutodetect string           `yaml:"calico_interface_autodetect,omitempty" json:"calico_interface_autodetect,omitempty"`
+	AutodetectCIDR            string           `yaml:"autodetect_cidr,omitempty" json:"autodetect_cidr,omitempty"`
+	EncapsulationType         string           `yaml:"encapsulation_type,omitempty" json:"encapsulation_type,omitempty"`
+	NATOutgoing               bool             `yaml:"nat_outgoing" json:"nat_outgoing"`
+	Modules                   CNIModulesConfig `yaml:"modules,omitempty" json:"modules,omitempty"`
 	// InstallMethod specifies how the CNI should be installed.
 	// Valid values: "helm" (default), "kustomize-helm", or "kubespray" for non-OpenStack migration compatibility.
 	InstallMethod string `yaml:"install_method,omitempty" json:"install_method,omitempty" validate:"omitempty,oneof=kubespray helm kustomize-helm"`
@@ -66,14 +66,14 @@ type CalicoConfig struct {
 
 // CiliumConfig represents Cilium CNI configuration.
 type CiliumConfig struct {
-	Enabled                bool             `yaml:"enabled" json:"enabled"`
-	Version                string           `yaml:"version,omitempty" json:"version,omitempty"`
-	TunnelMode             string           `yaml:"tunnel_mode,omitempty" json:"tunnel_mode,omitempty" validate:"omitempty,oneof=vxlan geneve disabled"`
-	Hubble                 bool             `yaml:"hubble" json:"hubble"`
-	NetworkPolicy          bool             `yaml:"network_policy" json:"network_policy"`
-	OperatorEnabled        bool             `yaml:"operator_enabled" json:"operator_enabled"`
-	KubeProxyReplacement   bool             `yaml:"kube_proxy_replacement" json:"kube_proxy_replacement"`
-	Modules                CNIModulesConfig `yaml:"modules,omitempty" json:"modules,omitempty"`
+	Enabled              bool             `yaml:"enabled" json:"enabled"`
+	Version              string           `yaml:"version,omitempty" json:"version,omitempty"`
+	TunnelMode           string           `yaml:"tunnel_mode,omitempty" json:"tunnel_mode,omitempty" validate:"omitempty,oneof=vxlan geneve disabled"`
+	Hubble               bool             `yaml:"hubble" json:"hubble"`
+	NetworkPolicy        bool             `yaml:"network_policy" json:"network_policy"`
+	OperatorEnabled      bool             `yaml:"operator_enabled" json:"operator_enabled"`
+	KubeProxyReplacement bool             `yaml:"kube_proxy_replacement" json:"kube_proxy_replacement"`
+	Modules              CNIModulesConfig `yaml:"modules,omitempty" json:"modules,omitempty"`
 	// InstallMethod specifies how the CNI should be installed.
 	// Valid values: "helm" (default), "kustomize-helm", or "kubespray" for non-OpenStack migration compatibility.
 	InstallMethod string `yaml:"install_method,omitempty" json:"install_method,omitempty" validate:"omitempty,oneof=kubespray helm kustomize-helm"`
@@ -81,11 +81,11 @@ type CiliumConfig struct {
 
 // KubeOVNConfig represents Kube-OVN CNI configuration.
 type KubeOVNConfig struct {
-	Enabled            bool             `yaml:"enabled" json:"enabled"`
-	Version            string           `yaml:"version,omitempty" json:"version,omitempty"`
-	NetworkPolicy      bool             `yaml:"network_policy" json:"network_policy"`
-	CiliumIntegration  bool             `yaml:"cilium_integration" json:"cilium_integration"`
-	Modules            CNIModulesConfig `yaml:"modules,omitempty" json:"modules,omitempty"`
+	Enabled           bool             `yaml:"enabled" json:"enabled"`
+	Version           string           `yaml:"version,omitempty" json:"version,omitempty"`
+	NetworkPolicy     bool             `yaml:"network_policy" json:"network_policy"`
+	CiliumIntegration bool             `yaml:"cilium_integration" json:"cilium_integration"`
+	Modules           CNIModulesConfig `yaml:"modules,omitempty" json:"modules,omitempty"`
 	// InstallMethod specifies how the CNI should be installed.
 	// Valid values: "helm" (default), "kustomize-helm", or "kubespray" for non-OpenStack migration compatibility.
 	InstallMethod string `yaml:"install_method,omitempty" json:"install_method,omitempty" validate:"omitempty,oneof=kubespray helm kustomize-helm"`
@@ -159,26 +159,26 @@ type TridentCsiConfig struct {
 
 // KubernetesSecurityConfig represents Kubernetes security configuration.
 type KubernetesSecurityConfig struct {
-	PodSecurityPolicy      bool     `yaml:"pod_security_policy" json:"pod_security_policy"`
-	PodSecurityStandards   string   `yaml:"pod_security_standards,omitempty" json:"pod_security_standards,omitempty" validate:"omitempty,oneof=privileged baseline restricted"`
-	PodSecurityExemptions  []string `yaml:"pod_security_exemptions,omitempty" json:"pod_security_exemptions,omitempty"`
-	AuditLogging           bool     `yaml:"audit_logging" json:"audit_logging"`
-	EncryptionAtRest       bool     `yaml:"encryption_at_rest" json:"encryption_at_rest"`
-	AdmissionControllers   []string `yaml:"admission_controllers,omitempty" json:"admission_controllers,omitempty"`
-	K8sHardening           bool     `yaml:"k8s_hardening" json:"k8s_hardening"`
+	PodSecurityPolicy     bool     `yaml:"pod_security_policy" json:"pod_security_policy"`
+	PodSecurityStandards  string   `yaml:"pod_security_standards,omitempty" json:"pod_security_standards,omitempty" validate:"omitempty,oneof=privileged baseline restricted"`
+	PodSecurityExemptions []string `yaml:"pod_security_exemptions,omitempty" json:"pod_security_exemptions,omitempty"`
+	AuditLogging          bool     `yaml:"audit_logging" json:"audit_logging"`
+	EncryptionAtRest      bool     `yaml:"encryption_at_rest" json:"encryption_at_rest"`
+	AdmissionControllers  []string `yaml:"admission_controllers,omitempty" json:"admission_controllers,omitempty"`
+	K8sHardening          bool     `yaml:"k8s_hardening" json:"k8s_hardening"`
 }
 
 // OIDCConfig represents OIDC authentication configuration.
 type OIDCConfig struct {
-	Enabled              bool   `yaml:"enabled" json:"enabled"`
-	IssuerURL            string `yaml:"issuer_url,omitempty" json:"issuer_url,omitempty" validate:"required_if=Enabled true,omitempty,url"`
-	ClientID             string `yaml:"client_id,omitempty" json:"client_id,omitempty" validate:"required_if=Enabled true"`
-	ClientSecret         string `yaml:"client_secret,omitempty" json:"client_secret,omitempty" validate:"required_if=Enabled true"`
-	UsernameClaim        string `yaml:"username_claim,omitempty" json:"username_claim,omitempty"`
-	GroupsClaim          string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty"`
-	KubeOIDCURL          string `yaml:"kube_oidc_url,omitempty" json:"kube_oidc_url,omitempty"`
-	KubeOIDCClientID     string `yaml:"kube_oidc_client_id,omitempty" json:"kube_oidc_client_id,omitempty"`
-	KubeOIDCCAFile       string `yaml:"kube_oidc_ca_file,omitempty" json:"kube_oidc_ca_file,omitempty"`
+	Enabled                bool   `yaml:"enabled" json:"enabled"`
+	IssuerURL              string `yaml:"issuer_url,omitempty" json:"issuer_url,omitempty" validate:"required_if=Enabled true,omitempty,url"`
+	ClientID               string `yaml:"client_id,omitempty" json:"client_id,omitempty" validate:"required_if=Enabled true"`
+	ClientSecret           string `yaml:"client_secret,omitempty" json:"client_secret,omitempty" validate:"required_if=Enabled true"`
+	UsernameClaim          string `yaml:"username_claim,omitempty" json:"username_claim,omitempty"`
+	GroupsClaim            string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty"`
+	KubeOIDCURL            string `yaml:"kube_oidc_url,omitempty" json:"kube_oidc_url,omitempty"`
+	KubeOIDCClientID       string `yaml:"kube_oidc_client_id,omitempty" json:"kube_oidc_client_id,omitempty"`
+	KubeOIDCCAFile         string `yaml:"kube_oidc_ca_file,omitempty" json:"kube_oidc_ca_file,omitempty"`
 	KubeOIDCUsernameClaim  string `yaml:"kube_oidc_username_claim,omitempty" json:"kube_oidc_username_claim,omitempty"`
 	KubeOIDCUsernamePrefix string `yaml:"kube_oidc_username_prefix,omitempty" json:"kube_oidc_username_prefix,omitempty"`
 	KubeOIDCGroupsClaim    string `yaml:"kube_oidc_groups_claim,omitempty" json:"kube_oidc_groups_claim,omitempty"`

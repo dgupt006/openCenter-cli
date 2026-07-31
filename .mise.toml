@@ -1,5 +1,6 @@
 [tools]
-golang = "1.26.4"
+golang = "1.26.5"
+golangci-lint = "2.11.4"
 kubectl = "latest"
 kind = "latest"
 helm = "latest"
@@ -45,6 +46,15 @@ go build -ldflags "\
   -o bin/opencenter
 
 echo "Built opencenter ${VERSION} (${GIT_COMMIT:0:7})"
+'''
+
+# Report the Go toolchain inputs that affect reproducible builds and race tests.
+build-info = '''
+#!/usr/bin/env bash
+set -e
+
+go version
+go env GOOS GOARCH CGO_ENABLED GOROOT GOENV GOFLAGS
 '''
 
 # Build the local workflow plugin
@@ -378,7 +388,7 @@ echo "Done. Run 'mise run test' to verify."
 # Lint Go source files
 lint = [
   "echo Linting...",
-  "bin/golangci-lint run ./..."
+  "golangci-lint run ./..."
 ]
 
 # ---------------------------------------------------------------------------

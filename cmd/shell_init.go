@@ -66,7 +66,6 @@ Features:
 	return cmd
 }
 
-
 func runShellInit(cmd *cobra.Command, args []string) error {
 	shell, _ := cmd.Flags().GetString("shell")
 

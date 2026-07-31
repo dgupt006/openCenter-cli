@@ -62,5 +62,3 @@ func (stf *SecureTempFile) Close() error {
 func (stf *SecureTempFile) Remove() error {
 	return os.Remove(stf.Path)
 }
-
-

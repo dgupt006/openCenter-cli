@@ -151,4 +151,3 @@ func TestProvider_DetectDriftUsesSharedComparer(t *testing.T) {
 	require.Len(t, report.Drifts, 1)
 	assert.Equal(t, cloud.SeverityCritical, report.Drifts[0].Severity)
 }
-

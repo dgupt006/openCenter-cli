@@ -401,7 +401,6 @@ func bootstrapStepIDs(steps []bootstrapStep) []string {
 	return ids
 }
 
-
 func assertRecordedCommandContains(t *testing.T, calls []recordedLifecycleCommand, name, argsSubstring string) {
 	t.Helper()
 	for _, call := range calls {
@@ -411,7 +410,6 @@ func assertRecordedCommandContains(t *testing.T, calls []recordedLifecycleComman
 	}
 	t.Fatalf("expected command %s containing %q, got:\n%s", name, argsSubstring, renderRecordedCommands(calls))
 }
-
 
 func renderRecordedCommands(calls []recordedLifecycleCommand) string {
 	var b strings.Builder

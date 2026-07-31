@@ -451,7 +451,6 @@ func isEquivalentConfiguration(config1, config2 Configuration) bool {
 
 // Generators for backward compatibility testing
 
-
 // Create paired generators to ensure type compatibility
 func genCompatiblePathValue() gopter.Gen {
 	return gen.OneConstOf(
