@@ -125,7 +125,7 @@ func TestRenderAutoServiceActions_WithReleaseTag(t *testing.T) {
 
 	// Source should use tag in the active SSH block
 	assert.Contains(t, actions[0].Content, "# --- ssh auth (active) ---")
-	assert.Contains(t, actions[0].Content, "tag: 2026.01.2")
+	assert.Contains(t, actions[0].Content, `tag: "2026.01.2"`)
 	// Alternative token block should be commented out
 	assert.Contains(t, actions[0].Content, "# --- token auth (alternative) ---")
 	assert.Contains(t, actions[0].Content, "# url: https://github.com/opencenter-cloud/openCenter-gitops-base.git")
@@ -156,7 +156,7 @@ func TestRenderAutoServiceActions_TwoStage(t *testing.T) {
 	assert.Contains(t, actions[0].Content, "name: opencenter-sealed-secrets")
 	assert.Contains(t, actions[0].Content, "# --- token auth (active) ---")
 	assert.Contains(t, actions[0].Content, "url: https://github.com/rackerlabs/openCenter-gitops-base.git")
-	assert.Contains(t, actions[0].Content, "branch: main")
+	assert.Contains(t, actions[0].Content, `branch: "main"`)
 	assert.Contains(t, actions[0].Content, "secretRef:")
 	assert.Contains(t, actions[0].Content, "name: opencenter-base")
 	// Alternative SSH block should be commented out
@@ -468,5 +468,5 @@ func TestBuildAutoServiceContextPreservesServiceSourceOverride(t *testing.T) {
 	assert.Contains(t, actions[0].Content, "# --- ssh auth (active) ---")
 	assert.Contains(t, actions[0].Content, "url: ssh://git@gitlab.example.com/team/custom-service.git")
 	assert.Contains(t, actions[0].Content, "# url: https://gitlab.example.com/team/custom-service.git")
-	assert.Contains(t, actions[0].Content, "branch: develop")
+	assert.Contains(t, actions[0].Content, `branch: "develop"`)
 }

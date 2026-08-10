@@ -509,7 +509,7 @@ func TestCopyBaseRendersAllSourceAuthBlocksAndPreservesServiceRepo(t *testing.T)
 	certText := string(certContents)
 	if !strings.Contains(certText, "# --- token auth (active) ---") ||
 		!strings.Contains(certText, "url: https://gitlab.example.com/team/cert-manager.git") ||
-		!strings.Contains(certText, "tag: v1.2.3") ||
+		!strings.Contains(certText, `tag: "v1.2.3"`) ||
 		!strings.Contains(certText, "# url: ssh://git@gitlab.example.com/team/cert-manager.git") {
 		t.Fatalf("cert-manager source did not preserve custom repository/ref or render both variants:\n%s", certText)
 	}
