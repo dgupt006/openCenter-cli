@@ -389,7 +389,7 @@ func TestBootstrapService_DryRunKindBuildsProviderPlan(t *testing.T) {
 	if result.Plan.Provider != "kind" {
 		t.Fatalf("provider = %q, want kind", result.Plan.Provider)
 	}
-	wantIDs := []string{"kind-create", "kind-export-kubeconfig", "gitea-attach-kind", "flux-bootstrap", "reconcile-base-repo-secret", "gitea-rebase", "gitops-push", "flux-verify"}
+	wantIDs := []string{"kind-create", "kind-export-kubeconfig", "gitea-attach-kind", "flux-bootstrap", "reconcile-base-repo-secret", "reconcile-sops-age-secret", "gitea-rebase", "gitops-push", "flux-verify"}
 	if got := planStepIDs(result.Plan); strings.Join(got, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("plan steps = %v, want %v", got, wantIDs)
 	}

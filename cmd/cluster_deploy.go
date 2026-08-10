@@ -241,7 +241,7 @@ func parseBootstrapOptions(cmd *cobra.Command, args []string, clusterName string
 // printPostDeployNextSteps prints next steps after a successful deploy.
 func printPostDeployNextSteps(cmd *cobra.Command, name string) {
 	fmt.Fprintln(cmd.OutOrStdout(), "\nNext steps:")
-	fmt.Fprintf(cmd.OutOrStdout(), "  1. Sync secrets:    opencenter cluster secrets sync %s\n", name)
+	fmt.Fprintf(cmd.OutOrStdout(), "  1. Sync secrets:    opencenter secrets sync %s\n", name)
 	fmt.Fprintf(cmd.OutOrStdout(), "  2. Commit changes:  git add -A && git commit -m \"deploy %s\"\n", name)
 	fmt.Fprintln(cmd.OutOrStdout(), "  3. Push to remote:  git push")
 }

@@ -177,6 +177,17 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 			},
 		},
 		{
+			ID:          sopsAgeSecretStepID,
+			Description: "Reconcile SOPS Age decryption key for Flux",
+			Plan:        newSopsAgeSecretStep(clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner).Plan,
+			Run: func(ctx context.Context) error {
+				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
+					return nil
+				}
+				return reconcileSopsAgeSecret(ctx, clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner)
+			},
+		},
+		{
 			ID:          "gitea-rebase",
 			Description: "Rebase local checkout with Flux bootstrap commits from Gitea",
 			Plan: BootstrapPlanStep{

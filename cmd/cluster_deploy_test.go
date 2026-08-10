@@ -298,3 +298,29 @@ func TestVerifyOriginMatchesGitURL_NoRemote(t *testing.T) {
 		t.Fatalf("expected no error when origin is absent, got: %v", err)
 	}
 }
+
+func TestPrintPostDeployNextSteps(t *testing.T) {
+	cmd := newClusterDeployCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetArgs([]string{})
+
+	printPostDeployNextSteps(cmd, "my-cluster")
+
+	output := out.String()
+
+	// The correct command is "opencenter secrets sync" (top-level), not
+	// "opencenter cluster secrets sync" which doesn't exist.
+	if !strings.Contains(output, "opencenter secrets sync my-cluster") {
+		t.Fatalf("expected next-steps to contain correct 'opencenter secrets sync' command, got:\n%s", output)
+	}
+	if strings.Contains(output, "opencenter cluster secrets sync") {
+		t.Fatalf("next-steps must not suggest non-existent 'opencenter cluster secrets sync' command, got:\n%s", output)
+	}
+	if !strings.Contains(output, "git add -A") {
+		t.Fatalf("expected next-steps to contain git commit instruction, got:\n%s", output)
+	}
+	if !strings.Contains(output, "git push") {
+		t.Fatalf("expected next-steps to contain git push instruction, got:\n%s", output)
+	}
+}
