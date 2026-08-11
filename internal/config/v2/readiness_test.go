@@ -298,3 +298,268 @@ func renderIssues(issues []ValidationIssue) string {
 	}
 	return b.String()
 }
+
+
+// --- Baremetal provider validation tests ---
+
+func TestValidateReadinessBaremetalRequiresMasterNodes(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Compute.MasterCount = 3
+	cfg.OpenCenter.Infrastructure.Compute.MasterNodes = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.compute.master_nodes")
+}
+
+func TestValidateReadinessBaremetalRequiresWorkerNodes(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Compute.WorkerCount = 2
+	cfg.OpenCenter.Infrastructure.Compute.WorkerNodes = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.compute.worker_nodes")
+}
+
+func TestValidateReadinessBaremetalValidatesStaticNodeFields(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Compute.MasterCount = 1
+	cfg.OpenCenter.Infrastructure.Compute.MasterNodes = []StaticNode{
+		{Name: "", AccessIPv4: ""},
+	}
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.compute.master_nodes[0].name")
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.compute.master_nodes[0].access_ip_v4")
+}
+
+func TestValidateReadinessBaremetalCountMismatchWarning(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Compute.MasterCount = 3
+	cfg.OpenCenter.Infrastructure.Compute.MasterNodes = []StaticNode{
+		{Name: "master-1", AccessIPv4: "10.0.0.1"},
+	}
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityWarning, CategoryProvider, "opencenter.infrastructure.compute.master_count")
+}
+
+func TestValidateReadinessBaremetalRejectsCloudSections(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &OpenStackCloudConfig{
+		AuthURL: "https://keystone.example.com/v3",
+	}
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud")
+}
+
+func TestValidateReadinessBaremetalBastionWarning(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = true
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityWarning, CategoryProvider, "opencenter.infrastructure.bastion.enabled")
+}
+
+func TestValidateReadinessBaremetalVIPInterfaceWarning(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = true
+	cfg.OpenCenter.Infrastructure.Networking.VIPInterface = ""
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityWarning, CategoryProvider, "opencenter.infrastructure.networking.vip_interface")
+}
+
+func TestValidateReadinessBaremetalValidConfigPasses(t *testing.T) {
+	cfg := validReadinessConfig(t, "baremetal")
+	cfg.OpenCenter.Infrastructure.Compute.MasterCount = 1
+	cfg.OpenCenter.Infrastructure.Compute.MasterNodes = []StaticNode{
+		{Name: "master-1", AccessIPv4: "10.0.0.1"},
+	}
+	cfg.OpenCenter.Infrastructure.Compute.WorkerCount = 1
+	cfg.OpenCenter.Infrastructure.Compute.WorkerNodes = []StaticNode{
+		{Name: "worker-1", AccessIPv4: "10.0.0.2"},
+	}
+	cfg.OpenCenter.Infrastructure.Cloud = CloudConfig{}
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = false
+	cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = false
+
+	report := ValidateReadiness(cfg)
+
+	// Should have no provider errors (may have other warnings from services etc.)
+	for _, issue := range report.Issues {
+		if issue.Severity == SeverityError && issue.Category == CategoryProvider {
+			t.Fatalf("unexpected provider error: %s — %s", issue.Path, issue.Message)
+		}
+	}
+}
+
+// --- VMware provider validation tests ---
+
+func TestValidateReadinessVMwareRequiresCloudSection(t *testing.T) {
+	cfg := validReadinessConfig(t, "vmware")
+	cfg.OpenCenter.Infrastructure.Cloud.VMware = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.vmware")
+}
+
+func TestValidateReadinessVMwareRequiresVCenterServer(t *testing.T) {
+	cfg := validReadinessConfig(t, "vmware")
+
+	if cfg.OpenCenter.Infrastructure.Cloud.VMware == nil {
+		cfg.OpenCenter.Infrastructure.Cloud.VMware = &VMwareCloudConfig{}
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.VMware.VCenterServer = ""
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.vmware.vcenter_server")
+}
+
+func TestValidateReadinessVMwareRejectsOtherCloudSections(t *testing.T) {
+	cfg := validReadinessConfig(t, "vmware")
+	if cfg.OpenCenter.Infrastructure.Cloud.VMware == nil {
+		cfg.OpenCenter.Infrastructure.Cloud.VMware = &VMwareCloudConfig{
+			VCenterServer: "vcenter.example.com",
+			Datacenter:    "DC1",
+			Datastore:     "datastore1",
+			Network:       "VM Network",
+			Template:      "ubuntu-22.04",
+		}
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &OpenStackCloudConfig{
+		AuthURL: "https://keystone.example.com/v3",
+	}
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud")
+}
+
+func TestValidateReadinessVMwareWarnsNoVSphereCSI(t *testing.T) {
+	cfg := validReadinessConfig(t, "vmware")
+	if cfg.OpenCenter.Infrastructure.Cloud.VMware == nil {
+		cfg.OpenCenter.Infrastructure.Cloud.VMware = &VMwareCloudConfig{
+			VCenterServer: "vcenter.example.com",
+			Datacenter:    "DC1",
+			Datastore:     "datastore1",
+			Network:       "VM Network",
+			Template:      "ubuntu-22.04",
+		}
+	}
+	cfg.OpenCenter.Cluster.Kubernetes.StoragePlugin.VSphereCsi = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityWarning, CategoryProvider, "opencenter.cluster.kubernetes.storage_plugin.vsphere_csi")
+}
+
+// --- Kind provider validation tests ---
+
+func TestValidateReadinessKindRejectsBastionEnabled(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = true
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.bastion.enabled")
+}
+
+func TestValidateReadinessKindRejectsKubeVIP(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = true
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.cluster.kubernetes.kube_vip_enabled")
+}
+
+func TestValidateReadinessKindRejectsVRRP(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Networking.VRRPEnabled = true
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.networking.vrrp_enabled")
+}
+
+func TestValidateReadinessKindWarnsCloudSections(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &OpenStackCloudConfig{
+		AuthURL: "https://keystone.example.com/v3",
+	}
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityWarning, CategoryProvider, "opencenter.infrastructure.cloud")
+}
+
+func TestValidateReadinessKindValidConfigPasses(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = false
+	cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = false
+	cfg.OpenCenter.Infrastructure.Networking.VRRPEnabled = false
+	cfg.OpenCenter.Infrastructure.Cloud = CloudConfig{}
+
+	report := ValidateReadiness(cfg)
+
+	for _, issue := range report.Issues {
+		if issue.Severity == SeverityError && issue.Category == CategoryProvider {
+			t.Fatalf("unexpected provider error: %s — %s", issue.Path, issue.Message)
+		}
+	}
+}
+
+// --- AWS provider validation tests ---
+
+func TestValidateReadinessAWSRequiresCloudSection(t *testing.T) {
+	cfg := validReadinessConfig(t, "aws")
+	cfg.OpenCenter.Infrastructure.Cloud.AWS = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.aws")
+}
+
+func TestValidateReadinessAWSRequiresRegion(t *testing.T) {
+	cfg := validReadinessConfig(t, "aws")
+	if cfg.OpenCenter.Infrastructure.Cloud.AWS == nil {
+		cfg.OpenCenter.Infrastructure.Cloud.AWS = &AWSCloudConfig{}
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.AWS.Region = ""
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.aws.region")
+}
+
+// --- GCP provider validation tests ---
+
+func TestValidateReadinessGCPRequiresCloudSection(t *testing.T) {
+	cfg := validReadinessConfig(t, "gcp")
+	cfg.OpenCenter.Infrastructure.Cloud.GCP = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.gcp")
+}
+
+// --- Azure provider validation tests ---
+
+func TestValidateReadinessAzureRequiresCloudSection(t *testing.T) {
+	cfg := validReadinessConfig(t, "azure")
+	cfg.OpenCenter.Infrastructure.Cloud.Azure = nil
+
+	report := ValidateReadiness(cfg)
+
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.azure")
+}

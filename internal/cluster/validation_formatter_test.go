@@ -286,3 +286,166 @@ func TestFormatResultJSON_IncludesOperatorReportFields(t *testing.T) {
 		t.Fatalf("mode = %v, want online", payload["mode"])
 	}
 }
+
+
+func TestParseYAMLFieldError_ProviderAsSectionSuggestion(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		wantSuggestion string
+	}{
+		{
+			name:           "baremetal used as section in InfrastructureConfig",
+			input:          "line 47: field baremetal not found in type v2.InfrastructureConfig",
+			wantSuggestion: "'baremetal' is a provider name",
+		},
+		{
+			name:           "openstack used as section in InfrastructureConfig",
+			input:          "line 20: field openstack not found in type v2.InfrastructureConfig",
+			wantSuggestion: "'openstack' is a provider name",
+		},
+		{
+			name:           "vmware used as section in InfrastructureConfig",
+			input:          "line 30: field vmware not found in type v2.InfrastructureConfig",
+			wantSuggestion: "'vmware' is a provider name",
+		},
+		{
+			name:           "aws used as section in InfrastructureConfig",
+			input:          "line 15: field aws not found in type v2.InfrastructureConfig",
+			wantSuggestion: "'aws' is a provider name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseYAMLFieldError(tt.input)
+			if !ok {
+				t.Fatal("expected error to be parsed")
+			}
+			if !strings.Contains(got.Suggestion, tt.wantSuggestion) {
+				t.Errorf("Suggestion = %q, want it to contain %q", got.Suggestion, tt.wantSuggestion)
+			}
+			// Should also suggest setting provider: <name>
+			if !strings.Contains(got.Suggestion, "Set 'provider:") {
+				t.Errorf("Suggestion = %q, want it to contain 'Set provider:' guidance", got.Suggestion)
+			}
+		})
+	}
+}
+
+func TestParseYAMLFieldError_DidYouMeanSuggestion(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		wantContains   string
+		description    string
+	}{
+		{
+			name:         "typo in NetworkingConfig: vip_interfce -> vip_interface",
+			input:        "line 50: field vip_interfce not found in type v2.NetworkingConfig",
+			wantContains: "vip_interface",
+			description:  "should suggest vip_interface for close typo",
+		},
+		{
+			name:         "typo in ComputeConfig: master_node -> master_nodes",
+			input:        "line 60: field master_node not found in type v2.ComputeConfig",
+			wantContains: "master_nodes",
+			description:  "should suggest master_nodes for singular/plural mistake",
+		},
+		{
+			name:         "typo in InfrastructureConfig: neworking -> networking",
+			input:        "line 10: field neworking not found in type v2.InfrastructureConfig",
+			wantContains: "networking",
+			description:  "should suggest networking for typo",
+		},
+		{
+			name:         "typo in KubernetesConfig: kube_vip_enable -> kube_vip_enabled",
+			input:        "line 25: field kube_vip_enable not found in type v2.KubernetesConfig",
+			wantContains: "kube_vip_enabled",
+			description:  "should suggest kube_vip_enabled for missing trailing 'd'",
+		},
+		{
+			name:         "typo in SSHConfig: authorized_key -> authorized_keys",
+			input:        "line 30: field authorized_key not found in type v2.SSHConfig",
+			wantContains: "authorized_keys",
+			description:  "should suggest authorized_keys for plural",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseYAMLFieldError(tt.input)
+			if !ok {
+				t.Fatal("expected error to be parsed")
+			}
+			if !strings.Contains(got.Suggestion, tt.wantContains) {
+				t.Errorf("Suggestion = %q, want it to contain %q", got.Suggestion, tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestParseYAMLFieldError_UnknownFieldShowsValidOptions(t *testing.T) {
+	// A field that's completely unrelated should show available fields
+	got, ok := parseYAMLFieldError("line 5: field xyzzy_foobar not found in type v2.SSHConfig")
+	if !ok {
+		t.Fatal("expected error to be parsed")
+	}
+	// Should contain "Valid fields include:" since no close match exists
+	if !strings.Contains(got.Suggestion, "Valid fields include:") {
+		t.Errorf("Suggestion = %q, want it to contain 'Valid fields include:'", got.Suggestion)
+	}
+	// Should mention at least one valid field
+	if !strings.Contains(got.Suggestion, "authorized_keys") {
+		t.Errorf("Suggestion = %q, want it to mention 'authorized_keys'", got.Suggestion)
+	}
+}
+
+func TestLevenshteinDistanceFormatter(t *testing.T) {
+	tests := []struct {
+		s1, s2   string
+		expected int
+	}{
+		{"", "", 0},
+		{"abc", "", 3},
+		{"", "abc", 3},
+		{"abc", "abc", 0},
+		{"abc", "abd", 1},
+		{"baremetal", "basemetal", 1},
+		{"networking", "neworking", 1},
+		{"vip_interface", "vip_interfce", 1},
+		{"master_nodes", "master_node", 1},
+		{"completely_different", "xyz", 19},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.s1+"_vs_"+tt.s2, func(t *testing.T) {
+			got := levenshteinDistanceFormatter(tt.s1, tt.s2)
+			if got != tt.expected {
+				t.Errorf("levenshteinDistanceFormatter(%q, %q) = %d, want %d", tt.s1, tt.s2, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatResultGrouped_InlineSuggestions(t *testing.T) {
+	service := &ValidateService{}
+	result := &ValidationResult{
+		Valid:       false,
+		ConfigValid: false,
+		Errors: []string{
+			"[validation] line 47: field baremetal not found in type v2.InfrastructureConfig",
+		},
+	}
+
+	output := service.FormatResultGrouped(result, "openstack")
+
+	// Should contain the inline suggestion with → prefix
+	if !strings.Contains(output, "→") {
+		t.Errorf("output missing inline suggestion (→ prefix):\n%s", output)
+	}
+	// Should mention it's a provider name
+	if !strings.Contains(output, "provider name") {
+		t.Errorf("output should explain 'baremetal' is a provider name:\n%s", output)
+	}
+}

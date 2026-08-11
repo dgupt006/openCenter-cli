@@ -89,7 +89,20 @@ func (r *readinessBuilder) validateProvider(cfg *Config) {
 	switch provider {
 	case "openstack":
 		r.validateOpenStackProvider(cfg)
-	case "kind", "aws", "gcp", "azure", "baremetal", "vsphere", "vmware":
+	case "baremetal":
+		r.validateBaremetalProvider(cfg)
+	case "vmware":
+		r.validateVMwareProvider(cfg)
+	case "kind":
+		r.validateKindProvider(cfg)
+	case "aws":
+		r.validateAWSProvider(cfg)
+	case "gcp":
+		r.validateGCPProvider(cfg)
+	case "azure":
+		r.validateAzureProvider(cfg)
+	case "vsphere":
+		// vSphere is deprecated in favor of vmware; accept silently.
 		return
 	case "":
 		r.addError(CategoryProvider, "opencenter.infrastructure.provider", "provider is required", "Set infrastructure.provider to a supported provider.")
@@ -216,6 +229,231 @@ func (r *readinessBuilder) validateOpenStackProvider(cfg *Config) {
 
 	if cloud.AWS != nil || cloud.GCP != nil || cloud.Azure != nil || cloud.VMware != nil {
 		r.addError(CategoryProvider, "opencenter.infrastructure.cloud", "inactive provider cloud sections are configured alongside openstack.", "Remove cloud sections for providers that are not active.")
+	}
+}
+
+func (r *readinessBuilder) validateBaremetalProvider(cfg *Config) {
+	infra := cfg.OpenCenter.Infrastructure
+	compute := infra.Compute
+	cloud := infra.Cloud
+
+	// Baremetal requires pre-provisioned node definitions, not cloud flavors.
+	if compute.MasterCount > 0 && len(compute.MasterNodes) == 0 {
+		r.addError(CategoryProvider, "opencenter.infrastructure.compute.master_nodes",
+			fmt.Sprintf("baremetal provider requires master_nodes when master_count is %d.", compute.MasterCount),
+			"Define master_nodes with name and access_ip_v4 for each control plane node.")
+	}
+	if compute.WorkerCount > 0 && len(compute.WorkerNodes) == 0 {
+		r.addError(CategoryProvider, "opencenter.infrastructure.compute.worker_nodes",
+			fmt.Sprintf("baremetal provider requires worker_nodes when worker_count is %d.", compute.WorkerCount),
+			"Define worker_nodes with name and access_ip_v4 for each worker node.")
+	}
+	if compute.WorkerCountWindows > 0 && len(compute.WindowsNodes) == 0 {
+		r.addError(CategoryProvider, "opencenter.infrastructure.compute.windows_nodes",
+			fmt.Sprintf("baremetal provider requires windows_nodes when worker_count_windows is %d.", compute.WorkerCountWindows),
+			"Define windows_nodes with name and access_ip_v4 for each Windows worker node.")
+	}
+
+	// Validate each static node has required fields.
+	for i, node := range compute.MasterNodes {
+		r.validateStaticNode("master_nodes", i, node)
+	}
+	for i, node := range compute.WorkerNodes {
+		r.validateStaticNode("worker_nodes", i, node)
+	}
+	for i, node := range compute.WindowsNodes {
+		r.validateStaticNode("windows_nodes", i, node)
+	}
+
+	// Count mismatch warnings.
+	if compute.MasterCount > 0 && len(compute.MasterNodes) > 0 && compute.MasterCount != len(compute.MasterNodes) {
+		r.addWarning(CategoryProvider, "opencenter.infrastructure.compute.master_count",
+			fmt.Sprintf("master_count (%d) does not match the number of master_nodes defined (%d).", compute.MasterCount, len(compute.MasterNodes)),
+			"Set master_count to match the number of master_nodes entries.")
+	}
+	if compute.WorkerCount > 0 && len(compute.WorkerNodes) > 0 && compute.WorkerCount != len(compute.WorkerNodes) {
+		r.addWarning(CategoryProvider, "opencenter.infrastructure.compute.worker_count",
+			fmt.Sprintf("worker_count (%d) does not match the number of worker_nodes defined (%d).", compute.WorkerCount, len(compute.WorkerNodes)),
+			"Set worker_count to match the number of worker_nodes entries.")
+	}
+
+	// Bastion should be disabled for baremetal (nodes are pre-provisioned).
+	if infra.Bastion.Enabled {
+		r.addWarning(CategoryProvider, "opencenter.infrastructure.bastion.enabled",
+			"bastion is enabled but baremetal nodes are pre-provisioned — bastion provisioning will be skipped.",
+			"Set bastion.enabled to false for baremetal deployments.")
+	}
+
+	// VIP interface warning when kube-vip is used.
+	if cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled && infra.Networking.VIPInterface == "" {
+		r.addWarning(CategoryProvider, "opencenter.infrastructure.networking.vip_interface",
+			"kube_vip_enabled is true but vip_interface is not set — kube-vip may bind to the wrong interface.",
+			"Set networking.vip_interface to the interface where the VIP should be advertised (e.g., eth0, bond0).")
+	}
+
+	// No cloud sections should be active for baremetal.
+	if cloud.OpenStack != nil || cloud.AWS != nil || cloud.GCP != nil || cloud.Azure != nil || cloud.VMware != nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud",
+			"baremetal provider should not have cloud provider sections configured.",
+			"Remove all cloud.* sections — baremetal uses pre-provisioned nodes defined in compute.master_nodes/worker_nodes.")
+	}
+}
+
+func (r *readinessBuilder) validateStaticNode(nodeType string, index int, node StaticNode) {
+	path := fmt.Sprintf("opencenter.infrastructure.compute.%s[%d]", nodeType, index)
+	if strings.TrimSpace(node.Name) == "" {
+		r.addError(CategoryProvider, path+".name",
+			fmt.Sprintf("%s[%d].name is required.", nodeType, index),
+			"Each baremetal node must have a unique name.")
+	}
+	if strings.TrimSpace(node.AccessIPv4) == "" {
+		r.addError(CategoryProvider, path+".access_ip_v4",
+			fmt.Sprintf("%s[%d].access_ip_v4 is required.", nodeType, index),
+			"Each baremetal node must have an IP address for SSH access.")
+	}
+}
+
+func (r *readinessBuilder) validateVMwareProvider(cfg *Config) {
+	cloud := cfg.OpenCenter.Infrastructure.Cloud
+
+	if cloud.VMware == nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud.vmware",
+			"vmware provider requires cloud.vmware configuration section.",
+			"Add infrastructure.cloud.vmware with vcenter_server, datacenter, datastore, network, and template.")
+		return
+	}
+
+	vmw := cloud.VMware
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.vmware.vcenter_server", vmw.VCenterServer, "VMware vCenter server address is required.", "Set cloud.vmware.vcenter_server to the vCenter hostname or IP.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.vmware.datacenter", vmw.Datacenter, "VMware datacenter is required.", "Set cloud.vmware.datacenter.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.vmware.datastore", vmw.Datastore, "VMware datastore is required.", "Set cloud.vmware.datastore.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.vmware.network", vmw.Network, "VMware network is required.", "Set cloud.vmware.network.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.vmware.template", vmw.Template, "VMware VM template is required.", "Set cloud.vmware.template to the base VM template name.")
+
+	// Warn if vSphere CSI is not enabled.
+	if !vsphereCSIEnabled(cfg) {
+		r.addWarning(CategoryProvider, "opencenter.cluster.kubernetes.storage_plugin.vsphere_csi",
+			"vmware provider typically requires vSphere CSI for persistent storage.",
+			"Enable storage_plugin.vsphere_csi or configure an alternative CSI driver.")
+	}
+
+	// No other cloud sections should be active.
+	if cloud.OpenStack != nil || cloud.AWS != nil || cloud.GCP != nil || cloud.Azure != nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud",
+			"inactive provider cloud sections are configured alongside vmware.",
+			"Remove cloud sections for providers that are not active.")
+	}
+}
+
+func (r *readinessBuilder) validateKindProvider(cfg *Config) {
+	infra := cfg.OpenCenter.Infrastructure
+
+	// Kind should not have bastion enabled.
+	if infra.Bastion.Enabled {
+		r.addError(CategoryProvider, "opencenter.infrastructure.bastion.enabled",
+			"bastion must be disabled for kind provider — kind runs locally.",
+			"Set bastion.enabled to false.")
+	}
+
+	// Kind should not use kube-vip.
+	if cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled {
+		r.addError(CategoryProvider, "opencenter.cluster.kubernetes.kube_vip_enabled",
+			"kube_vip_enabled must be false for kind provider.",
+			"Set cluster.kubernetes.kube_vip_enabled to false.")
+	}
+
+	// Kind should not use VRRP.
+	if infra.Networking.VRRPEnabled {
+		r.addError(CategoryProvider, "opencenter.infrastructure.networking.vrrp_enabled",
+			"vrrp_enabled must be false for kind provider.",
+			"Set networking.vrrp_enabled to false.")
+	}
+
+	// No cloud sections should be active for kind.
+	cloud := infra.Cloud
+	if cloud.OpenStack != nil || cloud.AWS != nil || cloud.GCP != nil || cloud.Azure != nil || cloud.VMware != nil {
+		r.addWarning(CategoryProvider, "opencenter.infrastructure.cloud",
+			"kind provider does not use cloud sections — they will be ignored.",
+			"Remove cloud.* sections for kind deployments.")
+	}
+}
+
+func (r *readinessBuilder) validateAWSProvider(cfg *Config) {
+	cloud := cfg.OpenCenter.Infrastructure.Cloud
+
+	if cloud.AWS == nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud.aws",
+			"aws provider requires cloud.aws configuration section.",
+			"Add infrastructure.cloud.aws with region, vpc_id, subnet_ids, and ami_id.")
+		return
+	}
+
+	aws := cloud.AWS
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.aws.region", aws.Region, "AWS region is required.", "Set cloud.aws.region (e.g., us-east-1).")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.aws.vpc_id", aws.VPCID, "AWS VPC ID is required.", "Set cloud.aws.vpc_id.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.aws.ami_id", aws.AMIID, "AWS AMI ID is required.", "Set cloud.aws.ami_id to the base image for cluster nodes.")
+	if len(aws.SubnetIDs) == 0 {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud.aws.subnet_ids",
+			"AWS subnet_ids is required.",
+			"Set cloud.aws.subnet_ids to at least one subnet.")
+	}
+
+	// No other cloud sections should be active.
+	if cloud.OpenStack != nil || cloud.GCP != nil || cloud.Azure != nil || cloud.VMware != nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud",
+			"inactive provider cloud sections are configured alongside aws.",
+			"Remove cloud sections for providers that are not active.")
+	}
+}
+
+func (r *readinessBuilder) validateGCPProvider(cfg *Config) {
+	cloud := cfg.OpenCenter.Infrastructure.Cloud
+
+	if cloud.GCP == nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud.gcp",
+			"gcp provider requires cloud.gcp configuration section.",
+			"Add infrastructure.cloud.gcp with project, region, network, subnetwork, and image_family.")
+		return
+	}
+
+	gcp := cloud.GCP
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.gcp.project", gcp.Project, "GCP project is required.", "Set cloud.gcp.project.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.gcp.region", gcp.Region, "GCP region is required.", "Set cloud.gcp.region (e.g., us-central1).")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.gcp.network", gcp.Network, "GCP network is required.", "Set cloud.gcp.network.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.gcp.subnetwork", gcp.Subnetwork, "GCP subnetwork is required.", "Set cloud.gcp.subnetwork.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.gcp.image_family", gcp.ImageFamily, "GCP image family is required.", "Set cloud.gcp.image_family.")
+
+	// No other cloud sections should be active.
+	if cloud.OpenStack != nil || cloud.AWS != nil || cloud.Azure != nil || cloud.VMware != nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud",
+			"inactive provider cloud sections are configured alongside gcp.",
+			"Remove cloud sections for providers that are not active.")
+	}
+}
+
+func (r *readinessBuilder) validateAzureProvider(cfg *Config) {
+	cloud := cfg.OpenCenter.Infrastructure.Cloud
+
+	if cloud.Azure == nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud.azure",
+			"azure provider requires cloud.azure configuration section.",
+			"Add infrastructure.cloud.azure with subscription_id, resource_group, location, vnet_name, subnet_name, and image_reference.")
+		return
+	}
+
+	az := cloud.Azure
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.subscription_id", az.SubscriptionID, "Azure subscription ID is required.", "Set cloud.azure.subscription_id.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.resource_group", az.ResourceGroup, "Azure resource group is required.", "Set cloud.azure.resource_group.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.location", az.Location, "Azure location is required.", "Set cloud.azure.location (e.g., eastus).")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.vnet_name", az.VNetName, "Azure VNet name is required.", "Set cloud.azure.vnet_name.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.subnet_name", az.SubnetName, "Azure subnet name is required.", "Set cloud.azure.subnet_name.")
+	r.requireNonPlaceholder(CategoryProvider, "opencenter.infrastructure.cloud.azure.image_reference", az.ImageReference, "Azure image reference is required.", "Set cloud.azure.image_reference.")
+
+	// No other cloud sections should be active.
+	if cloud.OpenStack != nil || cloud.AWS != nil || cloud.GCP != nil || cloud.VMware != nil {
+		r.addError(CategoryProvider, "opencenter.infrastructure.cloud",
+			"inactive provider cloud sections are configured alongside azure.",
+			"Remove cloud sections for providers that are not active.")
 	}
 }
 

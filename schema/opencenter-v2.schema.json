@@ -2197,6 +2197,9 @@
                 "use_octavia": {
                   "type": "boolean"
                 },
+                "vip_interface": {
+                  "type": "string"
+                },
                 "vlan": {
                   "additionalProperties": false,
                   "properties": {

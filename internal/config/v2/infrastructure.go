@@ -120,6 +120,9 @@ type NetworkingConfig struct {
 	// Time synchronization
 	NTPServers []string `yaml:"ntp_servers" json:"ntp_servers" validate:"required,min=1"`
 
+	// VIP interface (used by kube-vip to bind the virtual IP)
+	VIPInterface string `yaml:"vip_interface,omitempty" json:"vip_interface,omitempty"`
+
 	// Security
 	Security NetworkSecurityConfig `yaml:"security,omitempty" json:"security,omitempty"`
 

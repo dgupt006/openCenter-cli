@@ -37,6 +37,7 @@ import (
 //	    DNSNameservers: cfg.Networking.DNSNameservers,
 //	    VRRPEnabled:    cfg.Networking.VRRPEnabled,
 //	    VRRPIP:         cfg.Networking.VRRPIP,
+//	    VIPInterface:   cfg.Networking.VIPInterface,
 //	}
 type NetworkConfig struct {
 	SubnetNodes    string
@@ -45,6 +46,7 @@ type NetworkConfig struct {
 	DNSNameservers []string
 	VRRPEnabled    bool
 	VRRPIP         string
+	VIPInterface   string
 }
 
 // NetworkValidator validates network configuration including CIDR ranges and IP addresses.
@@ -147,6 +149,14 @@ func (v *NetworkValidator) Validate(ctx context.Context, value interface{}) (*va
 				"Provide a valid IPv4 or IPv6 address",
 				"Example: 192.168.1.100")
 		}
+	}
+
+	// Warn if VRRP is enabled but vip_interface is not set
+	if networkConfig.VRRPEnabled && networkConfig.VIPInterface == "" {
+		result.AddWarning("vip_interface",
+			"vip_interface not specified but VRRP is enabled; kube-vip may not bind to the correct interface",
+			"Set vip_interface to the network interface for the VIP (e.g., eth0, ens3, bond0)",
+			"Example: vip_interface: eth0")
 	}
 
 	// Add warnings for common misconfigurations

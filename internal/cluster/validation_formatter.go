@@ -350,6 +350,111 @@ var configTypeToSection = map[string]string{
 	"Config":                   "General",
 }
 
+// configTypeFields maps v2 Go type names to their valid YAML field names.
+// Used for "Did you mean?" suggestions when an unknown field is encountered.
+var configTypeFields = map[string][]string{
+	"InfrastructureConfig": {
+		"provider", "ssh", "os_version", "server_group_affinity", "k8s_api_ip",
+		"node_naming", "bastion", "networking", "compute", "storage", "cloud", "kind",
+	},
+	"NetworkingConfig": {
+		"subnet_nodes", "allocation_pool_start", "allocation_pool_end", "gateway",
+		"vrrp_ip", "vrrp_enabled", "use_octavia", "loadbalancer_provider",
+		"use_designate", "dns_zone_name", "dns_nameservers", "ntp_servers",
+		"security", "vlan", "vip_interface",
+	},
+	"ComputeConfig": {
+		"flavor_bastion", "flavor_master", "flavor_worker", "flavor_worker_windows",
+		"master_count", "worker_count", "worker_count_windows",
+		"master_nodes", "worker_nodes", "windows_nodes",
+		"additional_server_pools_worker", "additional_server_pools_worker_windows",
+	},
+	"StorageConfig": {
+		"default_storage_class", "worker_volume_size", "worker_volume_destination_type",
+		"worker_volume_source_type", "worker_volume_type", "worker_volume_delete_on_termination",
+		"master_volume_size", "master_volume_destination_type", "master_volume_source_type",
+		"master_volume_type", "master_volume_delete_on_termination", "additional_block_devices",
+	},
+	"ClusterConfig": {
+		"cluster_name", "base_domain", "cluster_fqdn", "admin_email", "kubernetes",
+	},
+	"KubernetesConfig": {
+		"version", "api_port", "kube_vip_enabled", "kubelet_rotate_server_certs",
+		"subnet_pods", "subnet_services", "network_plugin", "storage_plugin", "security", "oidc",
+	},
+	"SSHConfig": {
+		"authorized_keys", "username", "user", "key_path",
+	},
+	"BastionConfig": {
+		"enabled", "address", "flavor", "image",
+	},
+	"OpenStackCloudConfig": {
+		"auth_url", "region", "project_id", "project_name",
+		"application_credential_id", "application_credential_secret",
+		"insecure", "domain", "domain_name", "tenant_name",
+		"user_domain_name", "project_domain_name",
+		"image_id", "image_id_windows", "image_name", "availability_zone",
+		"network_id", "network_name", "subnet_id",
+		"floating_ip_pool", "floating_network_id", "external_network_name",
+		"router_external_network_id", "dns_zone_name", "availability_zones",
+		"use_octavia", "use_designate", "ca", "networking", "modules",
+	},
+	"AWSCloudConfig": {
+		"region", "vpc_id", "subnet_ids", "ami_id",
+		"availability_zones", "key_pair_name", "security_group_ids",
+	},
+	"GCPCloudConfig": {
+		"project", "region", "zone", "network", "subnetwork",
+		"image_family", "availability_zones",
+	},
+	"AzureCloudConfig": {
+		"subscription_id", "resource_group", "location",
+		"vnet_name", "subnet_name", "image_reference", "availability_zones",
+	},
+	"VMwareCloudConfig": {
+		"vcenter_server", "datacenter", "cluster", "datastore",
+		"network", "template", "folder",
+	},
+	"MetaConfig": {
+		"env", "description", "labels", "annotations",
+	},
+	"GitOpsConfig": {
+		"repository", "base_repo", "auth", "resolved_auth_method",
+	},
+	"CalicoConfig": {
+		"enabled", "version", "ipip_mode", "vxlan_mode", "network_policy",
+		"cni_iface", "calico_interface_autodetect", "autodetect_cidr",
+		"encapsulation_type", "nat_outgoing", "modules", "install_method",
+	},
+	"CiliumConfig": {
+		"enabled", "version", "tunnel_mode", "hubble", "network_policy",
+		"operator_enabled", "kube_proxy_replacement", "modules", "install_method",
+	},
+	"KubeOVNConfig": {
+		"enabled", "version", "network_policy", "cilium_integration", "modules", "install_method",
+	},
+	"KindCompatibilityConfig": {
+		"cluster_name", "kubernetes_version", "node_image",
+		"control_plane_count", "worker_count", "api_server_address", "api_server_port",
+		"pod_subnet", "service_subnet", "disable_default_cni", "ingress_enabled",
+		"runtime", "kubeconfig_path_policy", "registry",
+		"extra_port_mappings", "extra_mounts",
+	},
+}
+
+// providerNames are the known provider values — used to detect when a user mistakenly
+// uses a provider name as a config section.
+var providerNames = map[string]bool{
+	"openstack": true,
+	"aws":       true,
+	"gcp":       true,
+	"azure":     true,
+	"baremetal": true,
+	"vsphere":   true,
+	"vmware":    true,
+	"kind":      true,
+}
+
 // parseYAMLFieldError attempts to parse a single YAML "field not found" error
 // into a structured ValidationError. Returns the error and true if parsed.
 func parseYAMLFieldError(text string) (ValidationError, bool) {
@@ -367,14 +472,138 @@ func parseYAMLFieldError(text string) (ValidationError, bool) {
 		section = s
 	}
 
+	suggestion := fieldNotFoundSuggestion(field, typeName)
+
 	return ValidationError{
-		Section:  section,
-		Field:    field,
-		YAMLPath: "",
-		Tag:      "unknown_field",
-		Message:  fmt.Sprintf("unknown field '%s' (line %s) — not recognized in current schema, may need migration", field, line),
-		Category: "configuration",
+		Section:    section,
+		Field:      field,
+		YAMLPath:   "",
+		Tag:        "unknown_field",
+		Message:    fmt.Sprintf("unknown field '%s' (line %s) — not recognized in current schema", field, line),
+		Category:   "configuration",
+		Suggestion: suggestion,
 	}, true
+}
+
+// fieldNotFoundSuggestion generates a helpful suggestion when a YAML field is not found.
+// It checks for provider-name-as-section mistakes and suggests close field name matches.
+func fieldNotFoundSuggestion(field, typeName string) string {
+	var parts []string
+
+	// Check if the field is a provider name used as a section key.
+	if providerNames[strings.ToLower(field)] {
+		parts = append(parts, fmt.Sprintf(
+			"'%s' is a provider name, not a config section. Set 'provider: %s' instead. "+
+				"For provider-specific settings, see 'opencenter cluster template --provider=%s'.",
+			field, field, field))
+	}
+
+	// Find close matches from the known fields for this type.
+	if knownFields, ok := configTypeFields[typeName]; ok {
+		matches := findCloseFieldMatches(field, knownFields, 3)
+		if len(matches) > 0 {
+			if len(matches) == 1 {
+				parts = append(parts, fmt.Sprintf("Did you mean '%s'?", matches[0]))
+			} else {
+				parts = append(parts, fmt.Sprintf("Did you mean one of: %s?", strings.Join(quoteAll(matches), ", ")))
+			}
+		}
+
+		// If no close match and not a provider name, list what's available.
+		if len(matches) == 0 && !providerNames[strings.ToLower(field)] {
+			// Show a sample of valid fields (up to 6).
+			sample := knownFields
+			if len(sample) > 6 {
+				sample = sample[:6]
+			}
+			parts = append(parts, fmt.Sprintf("Valid fields include: %s", strings.Join(sample, ", ")))
+		}
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// findCloseFieldMatches finds field names within Levenshtein distance of the input.
+func findCloseFieldMatches(input string, candidates []string, maxDistance int) []string {
+	input = strings.ToLower(input)
+	type match struct {
+		name     string
+		distance int
+	}
+	var matches []match
+
+	for _, candidate := range candidates {
+		distance := levenshteinDistanceFormatter(input, strings.ToLower(candidate))
+		if distance <= maxDistance && distance > 0 {
+			matches = append(matches, match{name: candidate, distance: distance})
+		}
+	}
+
+	// Sort by distance (closest first).
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].distance < matches[j].distance
+	})
+
+	// Return top 3.
+	limit := 3
+	if len(matches) < limit {
+		limit = len(matches)
+	}
+	result := make([]string, limit)
+	for i := 0; i < limit; i++ {
+		result[i] = matches[i].name
+	}
+	return result
+}
+
+// levenshteinDistanceFormatter calculates the Levenshtein distance between two strings.
+func levenshteinDistanceFormatter(s1, s2 string) int {
+	if len(s1) == 0 {
+		return len(s2)
+	}
+	if len(s2) == 0 {
+		return len(s1)
+	}
+
+	matrix := make([][]int, len(s1)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(s2)+1)
+		matrix[i][0] = i
+	}
+	for j := range matrix[0] {
+		matrix[0][j] = j
+	}
+
+	for i := 1; i <= len(s1); i++ {
+		for j := 1; j <= len(s2); j++ {
+			cost := 0
+			if s1[i-1] != s2[j-1] {
+				cost = 1
+			}
+			del := matrix[i-1][j] + 1
+			ins := matrix[i][j-1] + 1
+			sub := matrix[i-1][j-1] + cost
+			best := del
+			if ins < best {
+				best = ins
+			}
+			if sub < best {
+				best = sub
+			}
+			matrix[i][j] = best
+		}
+	}
+
+	return matrix[len(s1)][len(s2)]
+}
+
+// quoteAll wraps each string in single quotes.
+func quoteAll(ss []string) []string {
+	quoted := make([]string, len(ss))
+	for i, s := range ss {
+		quoted[i] = "'" + s + "'"
+	}
+	return quoted
 }
 
 // parseRawErrors parses all raw error strings into structured ValidationErrors.
@@ -569,6 +798,9 @@ func (s *ValidateService) FormatResultGrouped(result *ValidationResult, provider
 					out.WriteString(fmt.Sprintf("    ✗ %s — %s\n", e.YAMLPath, e.Message))
 				} else {
 					out.WriteString(fmt.Sprintf("    ✗ %s\n", e.Message))
+				}
+				if e.Suggestion != "" {
+					out.WriteString(fmt.Sprintf("      → %s\n", e.Suggestion))
 				}
 			}
 		}

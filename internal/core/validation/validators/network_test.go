@@ -554,6 +554,7 @@ func TestNetworkValidator_CompleteConfiguration(t *testing.T) {
 		DNSNameservers: []string{"8.8.8.8", "8.8.4.4"},
 		VRRPEnabled:    true,
 		VRRPIP:         "192.168.1.100",
+		VIPInterface:   "eth0",
 	}
 
 	result, err := validator.Validate(ctx, networkConfig)
@@ -571,5 +572,95 @@ func TestNetworkValidator_CompleteConfiguration(t *testing.T) {
 	// Should have no warnings for complete configuration
 	if len(result.Warnings) > 0 {
 		t.Logf("Got %d warnings (this is acceptable for complete config)", len(result.Warnings))
+	}
+}
+
+
+func TestNetworkValidator_VIPInterface(t *testing.T) {
+	validator := NewNetworkValidator()
+	ctx := context.Background()
+
+	tests := []struct {
+		name           string
+		vrrpEnabled    bool
+		vipInterface   string
+		wantWarning    bool
+		warningField   string
+		description    string
+	}{
+		{
+			name:         "VRRP enabled without vip_interface produces warning",
+			vrrpEnabled:  true,
+			vipInterface: "",
+			wantWarning:  true,
+			warningField: "vip_interface",
+			description:  "should warn when VRRP is enabled but vip_interface is not set",
+		},
+		{
+			name:         "VRRP enabled with vip_interface produces no vip_interface warning",
+			vrrpEnabled:  true,
+			vipInterface: "eth0",
+			wantWarning:  false,
+			warningField: "vip_interface",
+			description:  "should not warn when VRRP is enabled and vip_interface is set",
+		},
+		{
+			name:         "VRRP disabled without vip_interface produces no warning",
+			vrrpEnabled:  false,
+			vipInterface: "",
+			wantWarning:  false,
+			warningField: "vip_interface",
+			description:  "should not warn about vip_interface when VRRP is disabled",
+		},
+		{
+			name:         "VRRP disabled with vip_interface set is fine",
+			vrrpEnabled:  false,
+			vipInterface: "ens3",
+			wantWarning:  false,
+			warningField: "vip_interface",
+			description:  "should not warn when VRRP is disabled even if vip_interface is set",
+		},
+		{
+			name:         "vip_interface with bond interface name",
+			vrrpEnabled:  true,
+			vipInterface: "bond0",
+			wantWarning:  false,
+			warningField: "vip_interface",
+			description:  "should accept bond interface names",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			networkConfig := &NetworkConfig{
+				SubnetPods:     "10.244.0.0/16",
+				SubnetServices: "10.96.0.0/12",
+				DNSNameservers: []string{"8.8.8.8"},
+				VRRPEnabled:    tt.vrrpEnabled,
+				VRRPIP:         "192.168.1.100",
+				VIPInterface:   tt.vipInterface,
+			}
+
+			result, err := validator.Validate(ctx, networkConfig)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// Check for vip_interface warning
+			hasVIPInterfaceWarning := false
+			for _, w := range result.Warnings {
+				if w.Field == tt.warningField {
+					hasVIPInterfaceWarning = true
+					break
+				}
+			}
+
+			if tt.wantWarning && !hasVIPInterfaceWarning {
+				t.Errorf("expected warning for field %q, but not found", tt.warningField)
+			}
+			if !tt.wantWarning && hasVIPInterfaceWarning {
+				t.Errorf("did not expect warning for field %q, but got one", tt.warningField)
+			}
+		})
 	}
 }
