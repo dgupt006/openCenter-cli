@@ -151,14 +151,19 @@ func (s *Service) Sync(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if subnet == "" {
+
+	result := &Result{ConfigPath: opts.ConfigPath, OSCloud: opts.OSCloud}
+
+	if subnet == "" && opts.SubnetID == "" && len(d.InternalSubnets) > 1 {
+		// Multiple subnets discovered without an explicit override; skip
+		// subnet selection so a new subnet will be created during deployment.
+		result.Warnings = append(result.Warnings, "multiple subnets found; skipping subnet selection (a new subnet will be created during deployment)")
+	} else if subnet == "" {
 		// A missing inventory response must not erase a previously configured
 		// subnet; it is common for restricted credentials to lack network list
 		// visibility while still being able to manage existing resources.
 		subnet = getString(root, "opencenter.infrastructure.cloud.openstack.subnet_id")
 	}
-
-	result := &Result{ConfigPath: opts.ConfigPath, OSCloud: opts.OSCloud}
 	zone := getString(root, "opencenter.infrastructure.cloud.openstack.availability_zone")
 	if zone == "" {
 		zone = firstSorted(d.AvailabilityZones)
@@ -338,10 +343,9 @@ func selectSubnet(override string, subnets []Subnet) (string, error) {
 	if len(subnets) == 1 {
 		return subnets[0].ID, nil
 	}
-	if len(subnets) == 0 {
-		return "", nil
-	}
-	return "", fmt.Errorf("multiple internal subnets discovered; pass --subnet-id")
+	// Zero or multiple subnets: return empty so the caller falls back to the
+	// existing config value or leaves it unset (new-cluster behaviour).
+	return "", nil
 }
 func sorted(values []string) []string {
 	out := append([]string(nil), values...)
