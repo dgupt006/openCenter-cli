@@ -10,7 +10,7 @@ env:
 
 jobs:
   docs-p0:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v7
