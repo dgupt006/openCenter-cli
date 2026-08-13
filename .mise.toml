@@ -385,6 +385,9 @@ go mod tidy
 echo "Done. Run 'mise run test' to verify."
 '''
 
+# Run go vet on all packages
+vet = "go vet ./..."
+
 # Lint Go source files
 lint = [
   "echo Linting...",
@@ -435,7 +438,7 @@ property = '''
 set -e
 
 echo "=== Running Property-Based Tests ==="
-go test ./internal/... -v -run "TestProperty"
+go test ./internal/... ./cmd/... -v -run "TestProperty" -count=1
 echo "=== Property-Based Tests Complete ==="
 '''
 
@@ -475,11 +478,14 @@ set -e
 go test -tags perf ./internal/config -run "TestMemoryUsageRegression" -count=1
 '''
 
-# Run all tests: unit + BDD + property
-test-all = [
+# Run all tests: unit + race + vet + BDD + property + vulncheck
+"test:all" = [
   "mise run test",
+  "mise run test-race",
+  "mise run vet",
   "mise run godog",
-  "mise run test-properties"
+  "mise run property",
+  "mise run govulncheck"
 ]
 
 # Run local verification checks that catch CI regressions.
