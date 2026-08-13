@@ -207,6 +207,10 @@ func TestDefaultFileSystem_ReadFile_Error(t *testing.T) {
 }
 
 func TestDefaultFileSystem_WriteFileAtomic_CleanupOnFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping: root ignores directory permissions")
+	}
+
 	fs := NewDefaultFileSystem(errors.NewDefaultErrorHandlerWithoutMasking())
 	tmpDir := t.TempDir()
 
@@ -277,6 +281,10 @@ func TestDefaultFileSystem_WriteFileAtomic_TempWriteError(t *testing.T) {
 
 // TestDefaultFileSystem_WriteFileAtomic_RenameError tests rename failure and cleanup
 func TestDefaultFileSystem_WriteFileAtomic_RenameError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping: root ignores directory permissions")
+	}
+
 	fs := NewDefaultFileSystem(errors.NewDefaultErrorHandlerWithoutMasking())
 	tmpDir := t.TempDir()
 
