@@ -81,7 +81,7 @@ spec:
         firstName: Admin
         lastName: User
         groups:
-          - /admins
+          - /cluster-admins
         credentials:
           - type: password
             temporary: true
