@@ -7,6 +7,7 @@ resources:
 {{- end }}
 {{- if (index .OpenCenter.Services "kube-prometheus-stack").Enabled }}
   - ./fluxcd-configs/podmonitor.yaml
+  - ./observability-namespace.yaml
 {{- end }}
 
 {{- if (index .OpenCenter.Services "cert-manager").Enabled }}
