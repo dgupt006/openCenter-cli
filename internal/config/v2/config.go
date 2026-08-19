@@ -193,6 +193,7 @@ type WeaveGitOpsSecrets struct {
 }
 
 type GrafanaSecrets struct {
+	AdminUser     string `yaml:"admin_user,omitempty" json:"admin_user,omitempty"`
 	AdminPassword string `yaml:"admin_password,omitempty" json:"admin_password,omitempty"`
 }
 

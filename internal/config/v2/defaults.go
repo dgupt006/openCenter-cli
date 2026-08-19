@@ -747,7 +747,7 @@ func defaultServiceMap(clusterFQDN string) ServiceMap {
 		"rbac-manager": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system", BaseOnly: true, ConditionalDependencies: []services.ConditionalDependency{{Name: "kube-prometheus-stack-base", WhenEnabled: "kube-prometheus-stack"}}}},
 		// The sources FluxCD Kustomization deploys GitRepository objects for all services.
 		"sources":               &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
-		"kube-prometheus-stack": &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "kube-prometheus-stack"}},
+		"kube-prometheus-stack": &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "kube-prometheus-stack", CustomResources: []string{"secret.yaml"}}},
 		"kyverno":               &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kyverno", HasOverrideValues: boolPtr(false), KustomizationContent: "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - \"../base/kyverno/default-ruleset\"\n"}},
 		"loki":                  &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "loki"}},
 		"openstack-ccm":         &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-ccm", OverrideValuesRendererKey: "openstack-ccm"}},

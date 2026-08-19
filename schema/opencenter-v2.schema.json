@@ -14574,6 +14574,9 @@
           "properties": {
             "admin_password": {
               "type": "string"
+            },
+            "admin_user": {
+              "type": "string"
             }
           },
           "type": "object"

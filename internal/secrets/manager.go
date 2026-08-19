@@ -1316,6 +1316,14 @@ func (m *DefaultSecretsManager) generateSecretManifest(
 
 // generateSecretName generates a Kubernetes Secret name from a service name.
 func (m *DefaultSecretsManager) generateSecretName(service string) string {
+	// Service-specific secret name overrides where the Helm chart expects
+	// a particular secret name that doesn't match the standard pattern.
+	overrides := map[string]string{
+		"grafana": "grafana-admin-password",
+	}
+	if name, ok := overrides[service]; ok {
+		return name
+	}
 	// Standard naming pattern: opencenter-<service>-secret
 	return fmt.Sprintf("opencenter-%s-secret", service)
 }
