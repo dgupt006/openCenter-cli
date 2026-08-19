@@ -44,6 +44,7 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 		{
 			ID:          "opentofu-init",
 			Description: "Initialize OpenTofu",
+			NeverSkip:   true,
 			Plan: BootstrapPlanStep{
 				ID:          "opentofu-init",
 				Action:      "Initialize OpenTofu",

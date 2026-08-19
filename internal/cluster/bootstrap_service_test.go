@@ -318,6 +318,62 @@ func TestBootstrapService_executeBootstrapStepsPrintsDebugPreambleBeforeStepRun(
 	}
 }
 
+func TestBootstrapService_executeBootstrapStepsNeverSkipRunsDespiteState(t *testing.T) {
+	pathResolver := paths.NewPathResolver(t.TempDir())
+	bootstrapService := NewBootstrapService(pathResolver, validation.NewValidationEngine())
+
+	var executed []string
+	steps := []bootstrapStep{
+		{
+			ID:          "preflight",
+			Description: "Preflight checks",
+			Run: func(ctx context.Context) error {
+				executed = append(executed, "preflight")
+				return nil
+			},
+		},
+		{
+			ID:          "opentofu-init",
+			Description: "Initialize OpenTofu",
+			NeverSkip:   true,
+			Run: func(ctx context.Context) error {
+				executed = append(executed, "opentofu-init")
+				return nil
+			},
+		},
+		{
+			ID:          "opentofu-apply",
+			Description: "Apply OpenTofu infrastructure",
+			Run: func(ctx context.Context) error {
+				executed = append(executed, "opentofu-apply")
+				return nil
+			},
+		},
+	}
+
+	// Simulate stale state where all steps were previously marked as success
+	state := bootstrapService.newBootstrapState()
+	bootstrapService.setStepStatus(state, "preflight", bootstrapStatusSuccess, "")
+	bootstrapService.setStepStatus(state, "opentofu-init", bootstrapStatusSuccess, "")
+	bootstrapService.setStepStatus(state, "opentofu-apply", bootstrapStatusSuccess, "")
+
+	result := &BootstrapResult{}
+	// stateEnabled=true, ignoreState=false — normal resume scenario
+	err := bootstrapService.executeBootstrapSteps(context.Background(), steps, false, true, "", state, result, &BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("executeBootstrapSteps() error = %v", err)
+	}
+
+	// preflight and opentofu-apply should be skipped (state says success)
+	// opentofu-init should still run because NeverSkip=true
+	if len(executed) != 1 {
+		t.Fatalf("expected 1 step to run, got %d: %v", len(executed), executed)
+	}
+	if executed[0] != "opentofu-init" {
+		t.Errorf("expected opentofu-init to run, got %q", executed[0])
+	}
+}
+
 func TestBootstrapService_OpenStackDryRunDoesNotUseLegacyConfigValidator(t *testing.T) {
 	tmpDir := t.TempDir()
 	clusterName := "openstack-bootstrap"

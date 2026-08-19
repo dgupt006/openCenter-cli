@@ -224,11 +224,15 @@ func TestBootstrapServiceOpenStackProvisionInfrastructureHonorsSavedState(t *tes
 		t.Fatalf("provisionInfrastructure() error = %v", err)
 	}
 
-	if len(fakeRunner.calls) < 2 {
-		t.Fatalf("expected opentofu apply and network plugin commands to run after resuming, got %d calls", len(fakeRunner.calls))
+	if len(fakeRunner.calls) < 3 {
+		t.Fatalf("expected opentofu init, opentofu apply, and network plugin commands to run after resuming, got %d calls", len(fakeRunner.calls))
 	}
-	if len(fakeRunner.calls[0].args) == 0 || fakeRunner.calls[0].args[0] != "apply" {
-		t.Fatalf("expected resumed command to be opentofu apply, got %#v", fakeRunner.calls[0])
+	// opentofu-init always runs (NeverSkip) even when state marks it as completed
+	if len(fakeRunner.calls[0].args) == 0 || fakeRunner.calls[0].args[0] != "init" {
+		t.Fatalf("expected first resumed command to be opentofu init (NeverSkip), got %#v", fakeRunner.calls[0])
+	}
+	if len(fakeRunner.calls[1].args) == 0 || fakeRunner.calls[1].args[0] != "apply" {
+		t.Fatalf("expected second resumed command to be opentofu apply, got %#v", fakeRunner.calls[1])
 	}
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo add projectcalico")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator")

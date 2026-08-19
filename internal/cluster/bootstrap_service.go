@@ -195,6 +195,7 @@ type bootstrapStep struct {
 	Description string
 	Plan        BootstrapPlanStep
 	Run         func(ctx context.Context) error
+	NeverSkip   bool // When true, the step always runs even if state marks it as completed.
 }
 
 // bootstrapState tracks the state of bootstrap steps
@@ -463,6 +464,7 @@ func (s *BootstrapService) buildBootstrapSteps(cfg *v2.Config, clusterPaths *pat
 			{
 				ID:          "terraform-init",
 				Description: "Initialize Terraform",
+				NeverSkip:   true,
 				Plan: BootstrapPlanStep{
 					ID:          "terraform-init",
 					Action:      "Initialize Terraform",
@@ -512,8 +514,8 @@ func (s *BootstrapService) executeBootstrapSteps(ctx context.Context, selectedSt
 
 	// Execute steps
 	for i, step := range selectedSteps {
-		// Skip if already completed (unless ignoring state)
-		if !ignoreState && stateEnabled && s.isStepSuccess(state, step.ID) {
+		// Skip if already completed (unless ignoring state or step is marked NeverSkip)
+		if !step.NeverSkip && !ignoreState && stateEnabled && s.isStepSuccess(state, step.ID) {
 			s.progress("  [%d/%d] ⏭ %s (%s) (already completed)", i+1, totalSteps, step.Description, step.ID)
 			logging.Debugf("bootstrap: step %s skipped (already completed in saved state)", step.ID)
 			logBootstrapMessage(ctx, "step skipped from saved state: %s", step.ID)
