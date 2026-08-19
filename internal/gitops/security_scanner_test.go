@@ -210,6 +210,116 @@ data:
 	}
 }
 
+func TestSecretScannerDoesNotFlagListYAMLAsInvalid(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// An Ansible-style playbook is a top-level YAML list — valid YAML, not a map.
+	writeFile(t, root, "playbooks/install.yaml", `- name: Install packages
+  hosts: all
+  become: true
+  tasks:
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: present
+`)
+
+	findings, err := ScanGitOpsSecrets(root)
+	if err != nil {
+		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+	}
+	for _, f := range findings {
+		if f.Rule == "invalid-yaml" {
+			t.Fatalf("list-rooted YAML incorrectly flagged as invalid-yaml: %+v", f)
+		}
+	}
+}
+
+func TestSecretScannerDoesNotFlagMultiDocListYAMLAsInvalid(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// Multi-document YAML where some documents are lists and some are maps.
+	writeFile(t, root, "resources/mixed.yaml", `- item1
+- item2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: safe
+data:
+  key: value
+---
+- another list
+`)
+
+	findings, err := ScanGitOpsSecrets(root)
+	if err != nil {
+		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+	}
+	for _, f := range findings {
+		if f.Rule == "invalid-yaml" {
+			t.Fatalf("multi-doc YAML with list documents incorrectly flagged as invalid-yaml: %+v", f)
+		}
+	}
+}
+
+func TestSecretScannerStillDetectsSecretsAfterListDocument(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// A list document followed by a Secret — the scanner should skip the list
+	// and still inspect the Secret.
+	writeFile(t, root, "resources/list-then-secret.yaml", `- preliminary
+- data
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unsafe
+stringData:
+  password: plaintext
+`)
+
+	findings, err := ScanGitOpsSecrets(root)
+	if err != nil {
+		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+	}
+	assertFinding(t, findings, "unencrypted-kubernetes-secret")
+	assertFinding(t, findings, "plaintext-secret-field")
+	for _, f := range findings {
+		if f.Rule == "invalid-yaml" {
+			t.Fatalf("should not flag invalid-yaml: %+v", f)
+		}
+	}
+}
+
+func TestSecretScannerStubDetectionSkipsListDocuments(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	// List document should not crash stub-secret scanning, and a map document
+	// after the list should still be scanned for stubs.
+	writeFile(t, root, "resources/list-then-values.yaml", `- hosts: all
+  tasks: []
+---
+harborAdminPassword: PLACEHOLDER-HARBOR-ADMIN-PASSWORD
+secretkey: PLACEHOLDER-HARBOR-SECRET-KEY
+`)
+
+	findings, err := ScanGitOpsSecrets(root)
+	if err != nil {
+		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+	}
+	assertFinding(t, findings, "stub-secret-placeholder")
+	for _, f := range findings {
+		if f.Rule == "invalid-yaml" {
+			t.Fatalf("should not flag invalid-yaml: %+v", f)
+		}
+	}
+}
+
 func TestSecretScannerDetectsChangemeInSecretManifest(t *testing.T) {
 	t.Parallel()
 

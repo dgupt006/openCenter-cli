@@ -189,8 +189,8 @@ func scanYAMLSecrets(path string, data []byte) []SecretScanFinding {
 	var findings []SecretScanFinding
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	for {
-		var doc map[string]any
-		if err := decoder.Decode(&doc); err != nil {
+		var raw any
+		if err := decoder.Decode(&raw); err != nil {
 			if err == io.EOF {
 				break
 			}
@@ -204,7 +204,8 @@ func scanYAMLSecrets(path string, data []byte) []SecretScanFinding {
 			})
 			break
 		}
-		if len(doc) == 0 {
+		doc, ok := raw.(map[string]any)
+		if !ok || len(doc) == 0 {
 			continue
 		}
 		kind, _ := doc["kind"].(string)
@@ -309,14 +310,15 @@ func scanYAMLStubSecrets(path string, data []byte) []SecretScanFinding {
 	var findings []SecretScanFinding
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	for {
-		var doc map[string]any
-		if err := decoder.Decode(&doc); err != nil {
+		var raw any
+		if err := decoder.Decode(&raw); err != nil {
 			if err == io.EOF {
 				break
 			}
 			break
 		}
-		if len(doc) == 0 {
+		doc, ok := raw.(map[string]any)
+		if !ok || len(doc) == 0 {
 			continue
 		}
 
