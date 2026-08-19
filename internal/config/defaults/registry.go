@@ -16,6 +16,7 @@ package defaults
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -35,16 +36,17 @@ func NewRegistry() Registry {
 }
 
 // GetDefaults retrieves the defaults for a specific provider-region combination.
+// Lookups are case-insensitive; both provider and region are normalized to lowercase.
 func (r *defaultRegistry) GetDefaults(provider, region string) (ProviderDefaults, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	providerDefaults, ok := r.defaults[provider]
+	providerDefaults, ok := r.defaults[strings.ToLower(provider)]
 	if !ok {
 		return nil, fmt.Errorf("provider '%s' not found in registry", provider)
 	}
 
-	regionDefaults, ok := providerDefaults[region]
+	regionDefaults, ok := providerDefaults[strings.ToLower(region)]
 	if !ok {
 		return nil, fmt.Errorf("region '%s' not found for provider '%s'", region, provider)
 	}
@@ -53,14 +55,16 @@ func (r *defaultRegistry) GetDefaults(provider, region string) (ProviderDefaults
 }
 
 // RegisterDefaults registers defaults for a provider-region combination.
+// Keys are normalized to lowercase for case-insensitive lookups.
 func (r *defaultRegistry) RegisterDefaults(provider, region string, defaults ProviderDefaults) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.defaults[provider] == nil {
-		r.defaults[provider] = make(map[string]ProviderDefaults)
+	p := strings.ToLower(provider)
+	if r.defaults[p] == nil {
+		r.defaults[p] = make(map[string]ProviderDefaults)
 	}
-	r.defaults[provider][region] = defaults
+	r.defaults[p][strings.ToLower(region)] = defaults
 }
 
 // ListProviders returns all registered provider names.
@@ -77,11 +81,12 @@ func (r *defaultRegistry) ListProviders() []string {
 }
 
 // ListRegions returns all registered regions for a specific provider.
+// The provider name is case-insensitive.
 func (r *defaultRegistry) ListRegions(provider string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	providerDefaults, ok := r.defaults[provider]
+	providerDefaults, ok := r.defaults[strings.ToLower(provider)]
 	if !ok {
 		return []string{}
 	}
