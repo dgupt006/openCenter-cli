@@ -19,5 +19,43 @@ func overlayFilesToEncrypt(cfg *v2.Config) []string {
 		)
 	}
 
+	// Service override-values files that contain credentials must be
+	// encrypted before commit. The encryption is full-file (not partial via
+	// encrypted_regex) so that no plaintext credential leaks into git.
+	// FluxCD decrypts these at reconciliation time via its SOPS provider.
+	files = append(files, serviceOverrideValuesFilesToEncrypt(cfg)...)
+
+	return files
+}
+
+// serviceOverrideValuesFilesToEncrypt returns override-values.yaml paths for
+// services whose Helm values contain embedded credentials.
+// Non-existent files are silently skipped by callers (EncryptOverlayFiles,
+// encryptFilesForCommit) so it is safe to include paths for services that
+// may not be enabled or may not have generated an override-values file yet.
+func serviceOverrideValuesFilesToEncrypt(cfg *v2.Config) []string {
+	// Services with credentials in their override-values.yaml templates:
+	//   - openstack-ccm: application-credential-id/secret (openstack only)
+	//   - openstack-csi: application-credential-id/secret (openstack only)
+	//   - loki: swift application_credential_secret or S3 secretAccessKey
+	//   - tempo: swift application_credential_secret or S3 secret_key
+	//   - mimir: S3 secret_access_key
+	var files []string
+
+	if cfg.OpenCenter.Infrastructure.Provider == "openstack" {
+		files = append(files,
+			"services/openstack-ccm/helm-values/override-values.yaml",
+			"services/openstack-csi/helm-values/override-values.yaml",
+		)
+	}
+
+	// Loki, Tempo, and Mimir always embed storage credentials (swift or S3)
+	// in their override-values regardless of provider.
+	files = append(files,
+		"services/loki/helm-values/override-values.yaml",
+		"services/tempo/helm-values/override-values.yaml",
+		"services/mimir/helm-values/override-values.yaml",
+	)
+
 	return files
 }
