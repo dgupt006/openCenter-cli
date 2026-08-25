@@ -143,7 +143,7 @@ opencenter cluster edit dev
 opencenter:
   meta:
     name: dev
-    environment: development
+    env: development
     organization: my-company
 
   infrastructure:
@@ -208,7 +208,7 @@ opencenter cluster edit staging
 opencenter:
   meta:
     name: staging
-    environment: staging
+    env: staging
     organization: my-company
 
   infrastructure:
@@ -275,7 +275,7 @@ opencenter cluster edit prod
 opencenter:
   meta:
     name: prod
-    environment: production
+    env: production
     organization: my-company
 
   infrastructure:

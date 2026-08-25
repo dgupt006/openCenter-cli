@@ -64,32 +64,63 @@ That’s it. The auto-descriptor engine generates:
 * `services/fluxcd/my-service.yaml` (two-stage Kustomization)
 * `services/my-service/kustomization.yaml` (overlay with secretGenerator)
 * `services/my-service/helm-values/override-values.yaml` (placeholder)
+* `services/my-service/custom/` (user-owned, seeded once, never overwritten)
 * Entries in aggregate `kustomization.yaml` files
+* An entry per generated file in the overlay's `.opencenter-generated.json` manifest
 
 ### Step 3: Regenerate Schema
 
 ```bash
-go test ./internal/config/v2schema/ -run TestRegenSchema
+mise run schema-v2
 ```
+
+The regeneration test file is created on demand by the mise task, so
+`go test -run TestRegenSchema` on its own will not find anything to run.
 
 ### BaseConfig Rendering Fields
 
-Control rendering behavior via `BaseConfig` fields:
+Control rendering behavior via `BaseConfig` fields. These are set in Go, in
+`defaultServiceMap()` -- they are contributor surface, not user surface.
 
-| Field | Default | Use When |
-| --- | --- | --- |
-| `Namespace` | (required) | Always set -- target namespace |
-| `Edition` | `""` | Service has community/enterprise variants in gitops-base |
-| `SourceName` | `opencenter-<name>` | Multiple services share one GitRepository (e.g. observability) |
-| `SingleStage` | `false` | Service has no base in gitops-base (overlay-only) |
-| `BaseOnly` | `false` | Service needs no cluster-specific overlay |
-| `HasOverrideValues` | `true` (nil) | Set `false` to skip secretGenerator |
-| `EnterpriseRegistry` | `false` | Service needs enterprise OCI registry credentials |
-| `CustomResources` | `[]` | Extra files in overlay kustomization (HTTPRoutes, IPAddressPools, etc.) |
-| `ExtraDependencies` | `[]` | Additional dependsOn for the base stage |
-| `ConditionalDependencies` | `[]` | Dependencies gated on another service being enabled |
-| `OverrideDependsOn` | `[]` | Override stage dependsOn (default: `[<service>-base]`) |
-| `OverrideValues` | `""` | Inline override-values content (default: empty placeholder) |
+| Field | Default | Use When | YAML key |
+| --- | --- | --- | --- |
+| `Namespace` | (required) | Always set -- target namespace | supported |
+| `Edition` | `""` | Service has community/enterprise variants in gitops-base | supported |
+| `ExtraDependencies` | `[]` | Additional dependsOn for the base stage | supported |
+| `ConditionalDependencies` | `[]` | Dependencies gated on another service being enabled | supported |
+| `OverrideValues` | `""` | Inline override-values content (default: empty placeholder) | supported |
+| `EnterpriseRegistry` | `false` | Service needs enterprise OCI registry credentials | supported |
+| `GeneratedResourceFiles` | `[]` | Extra **generator-owned** files a renderer emits into the overlay | deprecated |
+| `SourceName` | `opencenter-<name>` | Multiple services share one GitRepository (e.g. observability) | deprecated |
+| `SingleStage` | `false` | Service has no base in gitops-base (overlay-only) | deprecated |
+| `BaseOnly` | `false` | Service needs no cluster-specific overlay | deprecated |
+| `HasOverrideValues` | `true` (nil) | Set `false` to skip secretGenerator | deprecated |
+| `OverrideDependsOn` | `[]` | Override stage dependsOn (default: `[<service>-base]`) | deprecated |
+
+`GeneratedResourceFiles` was previously named `CustomResources`. The rename is
+deliberate: the field only adds `resources:` entries to the generated overlay
+kustomization. It does **not** create those files and does **not** protect them
+from deletion. Every filename listed here must be emitted by a renderer in the
+same pass, otherwise `kustomize build` fails after regeneration. Prefer letting
+the renderer report its own emitted files rather than listing them here.
+
+To keep hand-authored manifests in an overlay, put them in the service's
+`custom/` directory. That directory is user-owned: the generator never writes to
+it, never deletes from it, and includes it in the overlay kustomization.
+
+#### On the "deprecated" column
+
+The `deprecated` marker applies to the **YAML key only**. The Go fields remain
+fully supported and are the intended way to configure a service you are adding.
+Setting the corresponding key in a cluster config marks it `deprecated: true` in
+the JSON schema (an editor hint; validation still passes) and prints a warning to
+stderr. The registry lives in `internal/config/services/deprecations.go`.
+
+These keys are deprecated at the YAML layer because they select internal
+rendering topology -- which Flux template is used, which GitRepository is
+referenced, whether an override secret is emitted -- and the only correct value
+is the one that matches what exists in openCenter-gitops-base. Overriding them
+per cluster produces a broken render, not a customization.
 
 ### Examples
 
@@ -120,7 +151,7 @@ Control rendering behavior via `BaseConfig` fields:
     Enabled:           true,
     Namespace:         "gateway",
     SingleStage:       true,
-    ExtraDependencies: []string{"gateway-api-base"},
+    ExtraDependencies: []string{"envoy-gateway-api-base"},
 }},
 ```
 
@@ -206,7 +237,7 @@ go build ./...
 go test ./internal/gitops/ ./internal/config/... ./internal/services/...
 
 # Regenerate schema
-go test ./internal/config/v2schema/ -run TestRegenSchema
+mise run schema-v2
 
 # Test rendering (dry-run)
 ./bin/opencenter cluster generate <org>/<cluster> --dry-run

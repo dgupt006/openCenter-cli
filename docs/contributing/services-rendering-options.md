@@ -121,6 +121,8 @@ That overlay tree is larger than just `services/`. In the current fixture it may
 4. Managed service overlays under `applications/overlays/<cluster>/managed-services/`
 5. Optional customer-managed overlays under `applications/overlays/<cluster>/customer-managed/`
 
+The generator-owned files in these paths are tracked by `.opencenter-generated.json` at the overlay root. A `custom/` directory inside a service overlay is user-owned and is never modified or deleted. Use `opencenter cluster migrate-layout --custom --org <organization> --cluster <cluster> --apply` to move pre-existing hand-authored files before regeneration.
+
 Each branch may itself contain:
 
 * `sources/`

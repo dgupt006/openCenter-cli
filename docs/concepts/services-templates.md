@@ -360,6 +360,8 @@ Validation runs before rendering. If it fails, the pipeline stops and no files a
 
 After `opencenter cluster generate`, the customer repository contains this structure for cert-manager:
 
+Generated files in the overlay's `services/`, `managed-services/`, and `customer-managed/` paths are tracked in `.opencenter-generated.json` at the overlay root. Keep resources not modeled by openCenter in a service's user-owned `custom/` directory; generation does not modify or delete it. Run `opencenter cluster migrate-layout --custom --org <organization> --cluster <cluster> --apply` to move pre-existing hand-authored files before regenerating.
+
 ```
 applications/overlays/<cluster>/
 ├── kustomization.yaml                          # Top-level: includes flux-system + services/fluxcd

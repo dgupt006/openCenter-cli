@@ -105,7 +105,7 @@ opencenter cluster edit dev-cluster
 opencenter:
   meta:
     name: dev-cluster
-    environment: development
+    env: development
     organization: local
 
   infrastructure:

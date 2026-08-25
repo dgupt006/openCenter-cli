@@ -281,7 +281,7 @@ Configure Kubernetes and networking:
 opencenter:
   meta:
     name: prod-cluster
-    environment: production
+    env: production
     region: on-premises
     organization: my-company
 
@@ -300,14 +300,23 @@ opencenter:
       service_subnet: "10.43.0.0/16"
       cni_plugin: calico
 
-      # Load balancer (MetalLB for on-premises)
-      metallb:
-        enabled: true
-        ip_range: "192.168.1.100-192.168.1.150"  # Available IPs in your network
-
     # Storage (vSphere CSI)
     storage:
       default_storage_class: "vsphere-csi-sc"
+
+  # Load balancer (MetalLB for on-premises)
+  services:
+    metallb:
+      enabled: true
+      namespace: metallb-system
+      ip_address_pools:
+        - name: vmware-pool
+          addresses:
+            - 192.168.1.100-192.168.1.150
+      l2_advertisements:
+        - name: vmware-pool-l2
+          ip_address_pools:
+            - vmware-pool
 ```
 
 **MetalLB IP range:**

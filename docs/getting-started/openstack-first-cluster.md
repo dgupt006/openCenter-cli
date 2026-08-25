@@ -153,7 +153,7 @@ Edit cluster-specific settings:
 opencenter:
   meta:
     name: prod-cluster
-    environment: production
+    env: production
     region: sjc3
     organization: my-company
 

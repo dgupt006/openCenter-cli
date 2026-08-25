@@ -57,7 +57,7 @@ schema_version: "2.0"
 opencenter:
   meta:
     name: my-cluster
-    environment: production
+    env: production
     region: sjc3
     organization: my-org
 
@@ -212,7 +212,7 @@ opencenter cluster generate my-cluster
         └── kubeconfig.yaml        # Generated after deployment
 ```
 
-**Why this design:** Standardized structure (consistency). Templates ensure correctness. Secrets encrypted before commit.
+**Why this design:** Standardized structure (consistency). Templates ensure correctness. Secrets encrypted before commit. Generated files under the overlay's `services/`, `managed-services/`, and `customer-managed/` paths are tracked in `.opencenter-generated.json` at the overlay root. Put user-owned additions in a service's `custom/` directory; openCenter preserves that directory. Use `opencenter cluster migrate-layout --custom --org <organization> --cluster <cluster> --apply` to move pre-existing hand-authored files before regenerating.
 
 **Evidence:** `internal/gitops/`, `tests/features/workflow.feature:58-65`, Session 2 B0 section 15
 

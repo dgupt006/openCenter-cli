@@ -312,14 +312,14 @@ For production, master count should be >= 3.
 # Valid for production
 opencenter:
   meta:
-    environment: production
+    env: production
   cluster:
     master_count: 3
 
 # Warning for production
 opencenter:
   meta:
-    environment: production
+    env: production
   cluster:
     master_count: 1  # Single master - WARNING
 ```

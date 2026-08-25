@@ -17,28 +17,42 @@ MetalLB provides network load-balancer implementation for Kubernetes clusters th
 ## Configuration
 
 ```yaml
-opencenter:
-  services:
-    metallb:
-      enabled: true
-      ip_address_pools:
-        - name: default-pool
-          addresses:
-            - 192.168.1.240-192.168.1.250
-          auto_assign: true
-        - name: reserved-pool
-          addresses:
-            - 10.0.0.100-10.0.0.110
-          auto_assign: false
+services:
+  metallb:
+    enabled: true
+    namespace: metallb-system
+    ip_address_pools:
+      - name: public-pool
+        addresses:
+          - 72.4.119.48/28
+      - name: private-pool
+        addresses:
+          - 10.97.6.61/32
+    l2_advertisements:
+      - name: public-pool-l2
+        ip_address_pools:
+          - public-pool
+        interfaces:
+          - metal.105
 ```
+
+The `services:` fragment above belongs in the cluster configuration under `opencenter:` when it is part of a complete file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable MetalLB service |
+| `namespace` | string | `metallb-system` | Namespace for generated MetalLB resources |
 | `ip_address_pools` | list | — | List of IP address pool definitions |
 | `ip_address_pools[].name` | string | — | Pool identifier |
 | `ip_address_pools[].addresses` | list of strings | — | IP ranges in `start-end` or CIDR format |
-| `ip_address_pools[].auto_assign` | bool | `true` | Automatically assign IPs from this pool |
+| `ip_address_pools[].auto_assign` | bool | `true` when omitted | Automatically assign IPs from this pool |
+| `ip_address_pools[].avoid_buggy_ips` | bool | `false` | Avoid `.0` and `.255` addresses |
+| `l2_advertisements` | list | — | Layer-2 advertisements to generate |
+| `l2_advertisements[].name` | string | — | Advertisement identifier |
+| `l2_advertisements[].ip_address_pools` | list of strings | all pools when empty | Pools selected by the advertisement; an empty list selects all pools per MetalLB semantics |
+| `l2_advertisements[].interfaces` | list of strings | — | Node interfaces on which to advertise |
+
+If `l2_advertisements` is omitted, openCenter generates no L2 advertisements; it does not invent a default. An advertisement with an empty `ip_address_pools` selects all pools according to MetalLB's own semantics.
 
 ### Secrets
 

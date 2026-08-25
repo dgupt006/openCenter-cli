@@ -345,10 +345,15 @@ opencenter:
   services:
     metallb:
       enabled: true
+      namespace: metallb-system
       ip_address_pools:
         - name: default
           addresses:
             - 192.168.1.100-192.168.1.110
+      l2_advertisements:
+        - name: default-l2
+          ip_address_pools:
+            - default
 ```
 
 ### Ingress

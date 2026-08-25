@@ -170,20 +170,25 @@ opencenter:
       loadbalancer_provider: "metallb"
 ```
 
-Configure IP address pool:
+Configure MetalLB pools and advertisements in the cluster configuration:
 
 ```yaml
-# In GitOps repository after setup
-# applications/overlays/<cluster>/services/metallb/ipaddresspool.yaml
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: default
-  namespace: metallb-system
-spec:
-  addresses:
-  - 192.168.1.100-192.168.1.200
+opencenter:
+  services:
+    metallb:
+      enabled: true
+      namespace: metallb-system
+      ip_address_pools:
+        - name: default
+          addresses:
+            - 192.168.1.100-192.168.1.200
+      l2_advertisements:
+        - name: default-l2
+          ip_address_pools:
+            - default
 ```
+
+`opencenter cluster generate` renders `ipaddresspool.yaml` only when at least one pool is configured and `l2advertisement.yaml` only when at least one advertisement is configured. Do not hand-edit those generated files in `applications/overlays/<cluster>/services/metallb/`; regeneration rejects unrecognized files there. For MetalLB resources not modeled by openCenter, such as `BGPPeer` or `BFDProfile`, place manifests under `applications/overlays/<cluster>/services/metallb/custom/`. The `custom/` directory is user-owned and is preserved across regeneration.
 
 ### No Load Balancer
 
@@ -383,19 +388,25 @@ Configure allowed CIDR blocks for API access:
 
 ```yaml
 opencenter:
-  cluster:
-    k8s_api_port_acl:
-      - "10.0.0.0/8"      # Internal network
-      - "192.168.1.0/24"  # Office network
+  infrastructure:
+    cloud:
+      openstack:
+        networking:
+          k8s_api_port_acl:
+            - "10.0.0.0/8"      # Internal network
+            - "192.168.1.0/24"  # Office network
 ```
 
 Allow from anywhere (not recommended for production):
 
 ```yaml
 opencenter:
-  cluster:
-    k8s_api_port_acl:
-      - "0.0.0.0/0"
+  infrastructure:
+    cloud:
+      openstack:
+        networking:
+          k8s_api_port_acl:
+            - "0.0.0.0/0"
 ```
 
 ## Network Security
