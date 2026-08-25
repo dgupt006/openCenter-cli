@@ -204,3 +204,42 @@ func TestParseGlobalOptionsFromFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestNewBuiltinRootCmdIsFreshAndComplete(t *testing.T) {
+	first := NewBuiltinRootCmd()
+	second := NewBuiltinRootCmd()
+	if first == second {
+		t.Fatal("NewBuiltinRootCmd returned the same command instance")
+	}
+	if !first.DisableAutoGenTag {
+		t.Fatal("built-in root should disable nondeterministic Cobra auto-generation tags")
+	}
+
+	expected := map[string]bool{
+		"cluster":    false,
+		"settings":   false,
+		"secrets":    false,
+		"plugins":    false,
+		"shell-init": false,
+		"version":    false,
+		"completion": false,
+	}
+	for _, child := range first.Commands() {
+		if _, ok := expected[child.Name()]; ok {
+			if expected[child.Name()] {
+				t.Fatalf("built-in command %q was registered more than once", child.Name())
+			}
+			expected[child.Name()] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Fatalf("built-in command %q was not registered", name)
+		}
+	}
+	for _, name := range []string{"config-dir", "log-level", "output", "quiet", "yes", "dry-run"} {
+		if first.PersistentFlags().Lookup(name) == nil {
+			t.Fatalf("global flag --%s was not registered", name)
+		}
+	}
+}

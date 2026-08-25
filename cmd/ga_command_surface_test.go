@@ -9,16 +9,7 @@ import (
 )
 
 func newGARootForCommandSurfaceTest() *cobra.Command {
-	root := &cobra.Command{Use: "opencenter"}
-	addGlobalFlags(root)
-	root.AddCommand(NewClusterCmd())
-	root.AddCommand(NewSettingsCmd())
-	root.AddCommand(NewSecretsCmd())
-	root.AddCommand(NewPluginsCmd())
-	root.AddCommand(NewShellInitCmd())
-	root.AddCommand(NewVersionCmd())
-	root.InitDefaultCompletionCmd()
-	return root
+	return NewBuiltinRootCmd()
 }
 
 func findCommandPath(root *cobra.Command, parts ...string) *cobra.Command {

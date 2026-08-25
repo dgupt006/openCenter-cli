@@ -123,12 +123,15 @@ type GlobalFlags struct {
 	BreakLock  bool     // --break-lock: force removal of existing lock before operation
 }
 
-var rootCmd = &cobra.Command{
-	Use:           "opencenter",
-	Short:         "opencenter CLI manages cluster configurations and GitOps scaffolding",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	Long: `opencenter is a command-line tool for managing Kubernetes cluster configurations
+// NewBuiltinRootCmd returns a fresh, deterministic command tree containing only
+// commands built into the CLI. Production adds external plugins separately.
+func NewBuiltinRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:           "opencenter",
+		Short:         "opencenter CLI manages cluster configurations and GitOps scaffolding",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Long: `opencenter is a command-line tool for managing Kubernetes cluster configurations
 and GitOps repositories. It provides a declarative approach to cluster lifecycle
 management with built-in validation, secrets management, and multi-provider support.
 
@@ -142,7 +145,7 @@ Key Features:
 
 Documentation: https://docs.opencenter.cloud
 Support: https://github.com/opencenter-cloud/opencenter-cli/issues`,
-	Example: `  # Initialize a new cluster configuration
+		Example: `  # Initialize a new cluster configuration
   opencenter cluster init my-cluster
 
   # Validate cluster configuration
@@ -159,13 +162,26 @@ Support: https://github.com/opencenter-cloud/opencenter-cli/issues`,
 
   # Show the active cluster
   opencenter cluster active`,
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return applyGlobalOptions(cmd, args)
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return cmd.Help()
-	},
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return applyGlobalOptions(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	rootCmd.DisableAutoGenTag = true
+	addGlobalFlags(rootCmd)
+	rootCmd.AddCommand(NewClusterCmd())
+	rootCmd.AddCommand(NewSettingsCmd())
+	rootCmd.AddCommand(NewSecretsCmd())
+	rootCmd.AddCommand(NewPluginsCmd())
+	rootCmd.AddCommand(NewVersionCmd())
+	rootCmd.AddCommand(NewShellInitCmd())
+	rootCmd.InitDefaultCompletionCmd()
+	return rootCmd
 }
+
+var rootCmd = NewBuiltinRootCmd()
 
 // ExecuteWithContext runs the root command with a context containing the DI container.
 //
@@ -205,17 +221,7 @@ func ExecuteWithContext(ctx context.Context, version string) error {
 	ctx = context.WithValue(ctx, AppKey, app)
 	ctx = context.WithValue(ctx, ContainerKey, container)
 
-	// Add global persistent flags
-	addGlobalFlags(rootCmd)
-
-	// Register subcommands
-	rootCmd.AddCommand(NewClusterCmd())
-	rootCmd.AddCommand(NewSettingsCmd())
-	rootCmd.AddCommand(NewSecretsCmd())
-	rootCmd.AddCommand(NewPluginsCmd())
-	rootCmd.AddCommand(NewVersionCmd())
-	rootCmd.AddCommand(NewShellInitCmd())
-	// Discover and attach external plugins as subcommands
+	// External plugins are intentionally loaded only for the production root.
 	plugins.LoadExternalPlugins(rootCmd)
 
 	// Execute with context
