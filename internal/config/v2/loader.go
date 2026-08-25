@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 )
@@ -136,6 +137,10 @@ func (cl *ConfigLoader) parseYAML(data []byte) (*Config, error) {
 		}
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
+
+	// Scan the original document before defaults are applied. Deprecated keys
+	// remain accepted for compatibility; warnings must never make loading fail.
+	services.WarnDeprecatedConfigKeys(data)
 
 	// Verify schema version
 	if cfg.SchemaVersion != "2.0" {

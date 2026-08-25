@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/registry"
-	_ "github.com/opencenter-cloud/opencenter-cli/internal/config/services"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
@@ -136,7 +136,12 @@ func (g generator) structSchema(t reflect.Type) map[string]any {
 			continue
 		}
 
-		properties[name] = g.schemaFor(field.Type, field.Tag.Get("validate"))
+		fieldSchema := g.schemaFor(field.Type, field.Tag.Get("validate"))
+		if deprecated, ok := services.LookupDeprecatedServiceConfigKey(name); ok {
+			fieldSchema["deprecated"] = true
+			fieldSchema["description"] = fmt.Sprintf("Deprecated: %s. Guidance: %s", deprecated.Reason, deprecated.Guidance)
+		}
+		properties[name] = fieldSchema
 		if hasRequiredValidator(field.Tag.Get("validate")) {
 			requiredSet[name] = true
 		}
