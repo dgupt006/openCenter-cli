@@ -12,6 +12,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
 	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/tofu"
 )
 
@@ -33,11 +34,16 @@ type SetupResult struct {
 	Warnings         []string
 }
 
+type overlayFileEncryptor interface {
+	EncryptServiceOverrideValues(ctx context.Context, overlayPath string, cfg *v2.Config) error
+}
+
 // SetupService handles cluster setup business logic
 type SetupService struct {
 	pathResolver     *paths.PathResolver
 	validationEngine *validation.ValidationEngine
 	configurationMgr *config.ConfigurationManager
+	overlayEncryptor overlayFileEncryptor
 }
 
 // NewSetupService creates a new SetupService
@@ -64,6 +70,7 @@ func NewSetupServiceWithConfigMgr(
 		pathResolver:     pathResolver,
 		validationEngine: validationEngine,
 		configurationMgr: configurationMgr,
+		overlayEncryptor: sops.NewSOPSManager(),
 	}
 }
 
@@ -227,8 +234,9 @@ func (s *SetupService) generateGitOpsManifests(ctx context.Context, cfg v2.Confi
 		return 0, fmt.Errorf("copying base GitOps structure: %w", err)
 	}
 
-	// Render cluster-specific applications
-	if err := gitops.RenderClusterApps(cfg); err != nil {
+	// Render cluster-specific applications and encrypt the temporary overlay
+	// before its atomic promotion to the final GitOps target.
+	if err := gitops.RenderClusterAppsWithEncryption(ctx, cfg, s.overlayEncryptor.EncryptServiceOverrideValues); err != nil {
 		return 0, fmt.Errorf("rendering cluster apps: %w", err)
 	}
 

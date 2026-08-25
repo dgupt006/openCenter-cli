@@ -2,8 +2,10 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
@@ -47,6 +49,77 @@ func TestNewSetupService(t *testing.T) {
 	if service.validationEngine == nil {
 		t.Error("validationEngine is nil")
 	}
+}
+
+func TestSetupService_generateGitOpsManifests_EncryptsBeforePromotion(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	pathResolver := paths.NewPathResolver(tmpDir)
+	if err := pathResolver.CreateClusterDirectories(ctx, "encryption-boundary", "test-org"); err != nil {
+		t.Fatalf("create cluster directories: %v", err)
+	}
+	clusterPaths, err := pathResolver.Resolve(ctx, "encryption-boundary", "test-org")
+	if err != nil {
+		t.Fatalf("resolve cluster paths: %v", err)
+	}
+
+	cfg := mustNewClusterTestConfig("encryption-boundary", "kind")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = clusterPaths.GitOpsDir
+	cfg.Secrets.Headlamp.OIDCClientSecret = "fixture-headlamp-secret"
+
+	var calls int
+	service := NewSetupService(pathResolver, validation.NewValidationEngine())
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(_ context.Context, overlayPath string, gotCfg *v2.Config) error {
+		calls++
+		sensitiveRel := filepath.Join("services", "headlamp", "helm-values", "override-values.yaml")
+		targetPath := filepath.Join(gotCfg.GitDir(), "applications", "overlays", gotCfg.ClusterName(), sensitiveRel)
+		if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+			t.Fatalf("target sensitive file exists before live encryption: %v", err)
+		}
+
+		files, err := filepath.Glob(filepath.Join(overlayPath, "services", "*", "helm-values", "override-values.yaml"))
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("no generated sensitive override values")
+		}
+		for _, path := range files {
+			plain, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(plain), "fixture-headlamp-secret") {
+				if err := os.WriteFile(path, []byte("sops:\n  mac: fixture\nenc: encrypted\n"), 0o644); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+
+	if _, err := service.generateGitOpsManifests(ctx, cfg, clusterPaths, false); err != nil {
+		t.Fatalf("generateGitOpsManifests() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("live generation encryption calls = %d, want 1", calls)
+	}
+
+	sensitivePath := filepath.Join(clusterPaths.GitOpsDir, "applications", "overlays", cfg.ClusterName(), "services", "headlamp", "helm-values", "override-values.yaml")
+	data, err := os.ReadFile(sensitivePath)
+	if err != nil {
+		t.Fatalf("read promoted sensitive override values: %v", err)
+	}
+	if !strings.Contains(string(data), "sops:") || strings.Contains(string(data), "fixture-headlamp-secret") {
+		t.Fatalf("live generation promoted plaintext sensitive values: %q", data)
+	}
+}
+
+// overlayFileEncryptorFunc adapts a test function to the production seam.
+type overlayFileEncryptorFunc func(context.Context, string, *v2.Config) error
+
+func (f overlayFileEncryptorFunc) EncryptServiceOverrideValues(ctx context.Context, overlayPath string, cfg *v2.Config) error {
+	return f(ctx, overlayPath, cfg)
 }
 
 func TestSetupService_generateGitOpsManifests_DryRun(t *testing.T) {
@@ -378,6 +451,9 @@ func TestSetupService_Setup_KindProviderRendersKindConfigOnly(t *testing.T) {
 	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
 
 	service := createTestSetupService(pathResolver)
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error {
+		return nil
+	})
 	result, err := service.Setup(ctx, SetupOptions{
 		ClusterName:    "kind-cluster",
 		Organization:   "opencenter",

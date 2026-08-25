@@ -15,6 +15,7 @@ package gitops
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -371,6 +372,83 @@ func TestRenderInfrastructureClusterAtomicKindTemplate(t *testing.T) {
 	}
 }
 
+func TestRenderClusterAppsWithEncryptionEncryptsBeforePromotion(t *testing.T) {
+	dst := t.TempDir()
+	cfg := newDefault("cluster-apps-encryption")
+	cfg.OpenCenter.Cluster.ClusterName = "cluster-apps-encryption"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+	cfg.Secrets.Headlamp.OIDCClientSecret = "fixture-headlamp-secret"
+
+	sensitiveRel := filepath.Join("services", "headlamp", "helm-values", "override-values.yaml")
+	called := false
+	err := RenderClusterAppsWithEncryption(context.Background(), cfg, func(_ context.Context, overlayPath string, gotCfg *v2.Config) error {
+		called = true
+		if gotCfg.ClusterName() != cfg.ClusterName() {
+			t.Fatalf("encryption config cluster = %q, want %q", gotCfg.ClusterName(), cfg.ClusterName())
+		}
+		if _, err := os.Stat(filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), sensitiveRel)); !os.IsNotExist(err) {
+			t.Fatalf("sensitive target exists before encryption boundary: %v", err)
+		}
+
+		path := filepath.Join(overlayPath, sensitiveRel)
+		plain, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read generated override values: %v", err)
+		}
+		if !strings.Contains(string(plain), "fixture-headlamp-secret") {
+			t.Fatalf("expected plaintext fixture at encryption boundary, got %q", plain)
+		}
+		return os.WriteFile(path, []byte("sops:\n  mac: fixture\nenc: fixture-encrypted-values\n"), 0o644)
+	})
+	if err != nil {
+		t.Fatalf("RenderClusterAppsWithEncryption() error = %v", err)
+	}
+	if !called {
+		t.Fatal("encryption callback was not invoked")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), sensitiveRel))
+	if err != nil {
+		t.Fatalf("read promoted override values: %v", err)
+	}
+	if !strings.Contains(string(data), "sops:") || strings.Contains(string(data), "fixture-headlamp-secret") {
+		t.Fatalf("promoted override values were not encrypted: %q", data)
+	}
+}
+
+func TestRenderClusterAppsWithEncryptionFailureDoesNotPromotePlaintext(t *testing.T) {
+	dst := t.TempDir()
+	cfg := newDefault("cluster-apps-encryption-failure")
+	cfg.OpenCenter.Cluster.ClusterName = "cluster-apps-encryption-failure"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+	target := filepath.Join(dst, "applications", "overlays", cfg.ClusterName())
+	if err := os.MkdirAll(filepath.Join(target, "custom"), 0o755); err != nil {
+		t.Fatalf("create existing target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "custom", "keep.yaml"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("create existing file: %v", err)
+	}
+
+	sensitiveRel := filepath.Join("services", "headlamp", "helm-values", "override-values.yaml")
+	wantErr := "fixture encryption failure"
+	err := RenderClusterAppsWithEncryption(context.Background(), cfg, func(_ context.Context, overlayPath string, _ *v2.Config) error {
+		if _, statErr := os.Stat(filepath.Join(overlayPath, sensitiveRel)); statErr != nil {
+			t.Fatalf("expected sensitive file in temporary overlay: %v", statErr)
+		}
+		return fmt.Errorf("%s", wantErr)
+	})
+	if err == nil || !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("RenderClusterAppsWithEncryption() error = %v, want %q", err, wantErr)
+	}
+	if _, err := os.Stat(filepath.Join(target, sensitiveRel)); !os.IsNotExist(err) {
+		t.Fatalf("plaintext sensitive output was promoted after encryption failure: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "custom", "keep.yaml"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("existing target changed after encryption failure: %q, %v", data, err)
+	}
+}
+
 // TestRenderClusterAppsAtomic tests atomic file operations for cluster apps rendering.
 func TestRenderClusterAppsAtomic(t *testing.T) {
 	tempDir := t.TempDir()
@@ -695,7 +773,6 @@ func TestRenderInfrastructureClusterRendersKubesprayNetworkYaml(t *testing.T) {
 		})
 	}
 }
-
 
 func TestRenderClusterFluxBridgeCreatesBridgeFiles(t *testing.T) {
 	dst := t.TempDir()

@@ -33,6 +33,7 @@ type SOPSManager interface {
 
 	// High-level operations
 	EncryptOverlayFiles(ctx context.Context, overlayPath string, cfg *v2.Config) error
+	EncryptServiceOverrideValues(ctx context.Context, overlayPath string, cfg *v2.Config) error
 	CreateSOPSConfig(overlayPath string, cfg *v2.Config) error
 	ValidateEncryption(overlayPath string, cfg *v2.Config) error
 	CreateSampleEncryptedSecrets(ctx context.Context, repoPath string, ageKey string) error

@@ -464,11 +464,20 @@ func shouldSkipFile(relPath string, cfg v2.Config) bool {
 	return false
 }
 
-// RenderClusterApps renders cluster-apps-base template to applications/overlays/<cluster-name>/
-// This function processes all files in the cluster-apps-base template directory,
-// renders .tmpl files with the cluster configuration, and copies others as-is.
-// It skips directories for disabled services and managed services.
+// OverlayEncryptor encrypts the generated cluster-apps overlay before it is promoted.
+// The callback operates on the temporary workspace path, so failures leave the
+// final target unchanged.
+type OverlayEncryptor func(ctx context.Context, overlayPath string, cfg *v2.Config) error
+
+// RenderClusterApps renders cluster-apps-base and promotes it to the final target.
 func RenderClusterApps(cfg v2.Config) error {
+	return RenderClusterAppsWithEncryption(context.Background(), cfg, nil)
+}
+
+// RenderClusterAppsWithEncryption renders cluster-apps-base into a temporary
+// workspace, optionally encrypts the complete overlay, and only then promotes
+// it to the final target. Encryption errors therefore fail before promotion.
+func RenderClusterAppsWithEncryption(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor) error {
 	clusterName := cfg.ClusterName()
 	if clusterName == "" {
 		return fmt.Errorf("cluster name is empty")
@@ -483,20 +492,23 @@ func RenderClusterApps(cfg v2.Config) error {
 	// Create a temporary workspace for atomic operations
 	tempDir := os.TempDir()
 	manager := NewWorkspaceManager(tempDir)
-	workspace, err := manager.CreateWorkspace(context.Background(), cfg)
+	workspace, err := manager.CreateWorkspace(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("creating workspace: %w", err)
 	}
-	defer manager.CleanupWorkspace(context.Background(), workspace)
+	defer manager.CleanupWorkspace(ctx, workspace)
 
-	// Use atomic version
 	if err := RenderClusterAppsAtomic(cfg, workspace); err != nil {
 		return err
 	}
 
-	// Copy from the workspace's applications overlay directory (where RenderClusterAppsAtomic
-	// actually writes files) to the final target, avoiding double-nesting of the overlay path.
 	workspaceAppsDir := filepath.Join(workspace.RootDir, "applications", "overlays", clusterName)
+	if encrypt != nil {
+		if err := encrypt(ctx, workspaceAppsDir, &cfg); err != nil {
+			return fmt.Errorf("encrypting cluster apps overlay: %w", err)
+		}
+	}
+
 	result, err := promoteOverlay(workspaceAppsDir, target, clusterName, PromoteOptions{})
 	if err != nil {
 		return err

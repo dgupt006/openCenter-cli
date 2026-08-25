@@ -101,24 +101,51 @@ func (m *DefaultSOPSManager) GetEncryptor() Encryptor {
 	return m.encryptor
 }
 
-// EncryptOverlayFiles encrypts sensitive files in an overlay directory
+// EncryptOverlayFiles encrypts the existing compatibility overlay file set.
 func (m *DefaultSOPSManager) EncryptOverlayFiles(ctx context.Context, overlayPath string, cfg *v2.Config) error {
+	return m.encryptFiles(ctx, overlayPath, cfg, overlayFilesToEncrypt(cfg), "")
+}
+
+// EncryptServiceOverrideValues encrypts only credential-bearing service
+// override-values files using full-value encryption.
+func (m *DefaultSOPSManager) EncryptServiceOverrideValues(ctx context.Context, overlayPath string, cfg *v2.Config) error {
+	return m.encryptFiles(ctx, overlayPath, cfg, serviceOverrideValuesFilesToEncrypt(cfg), ".*")
+}
+
+func (m *DefaultSOPSManager) encryptFiles(ctx context.Context, overlayPath string, cfg *v2.Config, filesToEncrypt []string, encryptedRegex string) error {
+	if cfg == nil {
+		return &errors.StructuredError{
+			Type:    errors.SOPSError,
+			Message: "Cannot encrypt overlay with nil configuration",
+		}
+	}
+	if strings.TrimSpace(overlayPath) == "" {
+		return &errors.StructuredError{
+			Type:    errors.SOPSError,
+			Message: "Cannot encrypt overlay with empty path",
+		}
+	}
+
 	m.logger.Info("Starting overlay files encryption", "overlay_path", overlayPath)
 
-	// Get list of files to encrypt
-	filesToEncrypt := overlayFilesToEncrypt(cfg)
 	m.logger.Debug("Files to encrypt", "count", len(filesToEncrypt), "files", filesToEncrypt)
 
 	// Get encryption keys
 	var ageKeys []string
 	if cfg.Secrets.SopsAgeKeyFile != "" {
-		// Load the age key from the specified file
-		if keyPair, err := m.loadAgeKeyFromFile(cfg.Secrets.SopsAgeKeyFile); err == nil {
-			ageKeys = []string{keyPair.PublicKey}
-			m.logger.Debug("Loaded age key from config", "key_file", cfg.Secrets.SopsAgeKeyFile)
-		} else {
-			m.logger.Warn("Failed to load age key from config", "key_file", cfg.Secrets.SopsAgeKeyFile, "error", err)
+		// Load the age key from the specified file. A configured key is
+		// authoritative: do not silently fall back to another key on error.
+		keyPair, err := m.loadAgeKeyFromFile(cfg.Secrets.SopsAgeKeyFile)
+		if err != nil {
+			return &errors.StructuredError{
+				Type:    errors.SOPSError,
+				Field:   cfg.Secrets.SopsAgeKeyFile,
+				Message: "Failed to load configured age key",
+				Cause:   err,
+			}
 		}
+		ageKeys = []string{keyPair.PublicKey}
+		m.logger.Debug("Loaded age key from config", "key_file", cfg.Secrets.SopsAgeKeyFile)
 	}
 
 	// Fallback to key manager if no keys from config
@@ -146,9 +173,10 @@ func (m *DefaultSOPSManager) EncryptOverlayFiles(ctx context.Context, overlayPat
 	}
 
 	encryptConfig := EncryptionConfig{
-		AgeKeys: ageKeys,
-		InPlace: true,
-		Verbose: true,
+		AgeKeys:        ageKeys,
+		EncryptedRegex: encryptedRegex,
+		InPlace:        true,
+		Verbose:        true,
 	}
 
 	// Filter out non-existent files
@@ -209,7 +237,26 @@ func (m *DefaultSOPSManager) EncryptOverlayFiles(ctx context.Context, overlayPat
 		}
 	}
 
-	m.logger.Info("Completed overlay files encryption", "encrypted_count", len(filesToEncrypt))
+	for _, filePath := range existingFiles {
+		encrypted, err := m.encryptor.IsFileEncrypted(filePath)
+		if err != nil {
+			return &errors.StructuredError{
+				Type:    errors.SOPSError,
+				Field:   filePath,
+				Message: "Failed to verify encrypted overlay file",
+				Cause:   err,
+			}
+		}
+		if !encrypted {
+			return &errors.StructuredError{
+				Type:    errors.SOPSError,
+				Field:   filePath,
+				Message: "Overlay file is not encrypted",
+			}
+		}
+	}
+
+	m.logger.Info("Completed overlay files encryption", "encrypted_count", len(existingFiles))
 	return nil
 }
 
@@ -500,7 +547,10 @@ func (m *DefaultSOPSManager) loadAgeKeyFromFile(keyFilePath string) (*crypto.Age
 		return nil, fmt.Errorf("failed to read age key file: %w", err)
 	}
 
-	privateKey := string(privateKeyData)
+	privateKey := extractAgeKey(string(privateKeyData))
+	if privateKey == "" {
+		return nil, fmt.Errorf("age key file does not contain a private age identity")
+	}
 
 	// Parse the private key to get the public key
 	return crypto.ParseAgeKey(privateKey)

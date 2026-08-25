@@ -1,6 +1,10 @@
 package sops
 
-import v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+import (
+	"strings"
+
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+)
 
 // overlayFilesToEncrypt returns the ordered overlay files that should be encrypted.
 func overlayFilesToEncrypt(cfg *v2.Config) []string {
@@ -40,9 +44,11 @@ func serviceOverrideValuesFilesToEncrypt(cfg *v2.Config) []string {
 	//   - loki: swift application_credential_secret or S3 secretAccessKey
 	//   - tempo: swift application_credential_secret or S3 secret_key
 	//   - mimir: S3 secret_access_key
+	//   - headlamp: OIDC client secret
+	//   - harbor: object-storage and registry/admin credentials
 	var files []string
 
-	if cfg.OpenCenter.Infrastructure.Provider == "openstack" {
+	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "openstack") {
 		files = append(files,
 			"services/openstack-ccm/helm-values/override-values.yaml",
 			"services/openstack-csi/helm-values/override-values.yaml",
@@ -55,6 +61,8 @@ func serviceOverrideValuesFilesToEncrypt(cfg *v2.Config) []string {
 		"services/loki/helm-values/override-values.yaml",
 		"services/tempo/helm-values/override-values.yaml",
 		"services/mimir/helm-values/override-values.yaml",
+		"services/headlamp/helm-values/override-values.yaml",
+		"services/harbor/helm-values/override-values.yaml",
 	)
 
 	return files
