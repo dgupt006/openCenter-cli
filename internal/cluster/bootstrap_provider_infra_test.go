@@ -48,6 +48,25 @@ func copyStringMap(input map[string]string) map[string]string {
 	return output
 }
 
+func TestBuildProviderBootstrapEnvironmentBaremetalExcludesOpenStackCredentials(t *testing.T) {
+	cfg := mustNewClusterTestConfig("baremetal-env", "baremetal")
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		AuthURL:                     "https://keystone.example.com/v3",
+		ApplicationCredentialID:     "app-cred-id",
+		ApplicationCredentialSecret: "app-cred-secret",
+	}
+
+	env, err := buildProviderBootstrapEnvironment(&cfg, filepath.Join(t.TempDir(), "kubeconfig.yaml"))
+	if err != nil {
+		t.Fatalf("buildProviderBootstrapEnvironment() error = %v", err)
+	}
+	for name := range env {
+		if strings.HasPrefix(name, "OS_") {
+			t.Fatalf("baremetal environment should not contain OpenStack variable %q: %#v", name, env)
+		}
+	}
+}
+
 func TestOpenStackBootstrapProviderUsesOpenTofuAndNormalizesKubeconfig(t *testing.T) {
 	clusterName := "demo"
 	cfg := mustNewClusterTestConfig(clusterName, "openstack")

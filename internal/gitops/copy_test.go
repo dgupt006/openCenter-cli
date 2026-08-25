@@ -80,6 +80,31 @@ func TestRenderInfrastructureClusterRendersConfigValues(t *testing.T) {
 	}
 }
 
+func TestRenderInfrastructureClusterBaremetalUsesKubesprayOnly(t *testing.T) {
+	dst := t.TempDir()
+	cfg := mustNewGitOpsTestConfig("baremetal-kubespray", "baremetal")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+
+	if err := RenderInfrastructureCluster(cfg); err != nil {
+		t.Fatalf("RenderInfrastructureCluster returned error: %v", err)
+	}
+
+	mainTF := filepath.Join(dst, "infrastructure", "clusters", cfg.ClusterName(), "main.tf")
+	data, err := os.ReadFile(mainTF)
+	if err != nil {
+		t.Fatalf("failed to read rendered main.tf: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, `module "kubespray-cluster"`) {
+		t.Fatalf("rendered baremetal main.tf missing Kubespray module\ncontent:\n%s", content)
+	}
+	for _, forbidden := range []string{`module "openstack-nova"`, "module.openstack-nova"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("rendered baremetal main.tf contains forbidden OpenStack reference %q\ncontent:\n%s", forbidden, content)
+		}
+	}
+}
+
 func TestRenderClusterAppsRendersClusterName(t *testing.T) {
 	dst := t.TempDir()
 	cfg := newDefault("cluster-apps")
