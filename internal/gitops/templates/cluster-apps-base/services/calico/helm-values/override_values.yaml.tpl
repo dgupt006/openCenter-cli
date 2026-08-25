@@ -12,11 +12,11 @@ installation:
         nodeSelector: all()
     nodeAddressAutodetectionV4:
       firstFound: true
-  {{- if gt (.OpenCenter.Infrastructure.Compute.WorkerCountWindows | default 0) 0 }}
-  windowsDataplane: HNS
-  {{- else }}
-  windowsDataplane: Disabled
-  {{- end }}
+    {{- if gt (.OpenCenter.Infrastructure.Compute.WorkerCountWindows | default 0) 0 }}
+    windowsDataplane: HNS
+    {{- else }}
+    windowsDataplane: Disabled
+    {{- end }}
   serviceCIDRs:
     - "{{ .OpenCenter.Cluster.Kubernetes.SubnetServices | default "10.43.0.0/16" }}"
 
