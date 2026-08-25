@@ -1,11 +1,14 @@
 package gitops
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	descriptorcfg "github.com/opencenter-cloud/opencenter-cli/internal/services/descriptors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -469,4 +472,187 @@ func TestBuildAutoServiceContextPreservesServiceSourceOverride(t *testing.T) {
 	assert.Contains(t, actions[0].Content, "url: ssh://git@gitlab.example.com/team/custom-service.git")
 	assert.Contains(t, actions[0].Content, "# url: https://gitlab.example.com/team/custom-service.git")
 	assert.Contains(t, actions[0].Content, `branch: "develop"`)
+}
+
+func TestBuildAutoServiceContextConditionalSecretArtifact(t *testing.T) {
+	base := &services.BaseConfig{Enabled: true, Namespace: "observability"}
+	cfg := newAutoTestConfig("secret-artifact-cluster")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	ctx := buildAutoServiceContextWithArtifacts("kube-prometheus-stack", base, cfg, artifacts)
+	assert.NotContains(t, ctx.GeneratedResourceFiles, "secret.yaml")
+
+	cfg.Secrets.Grafana.AdminPassword = "grafana-password"
+	artifacts, err = secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	materializeSecretArtifact(t, cfg, artifacts[0].Path)
+	ctx = buildAutoServiceContextWithArtifacts("kube-prometheus-stack", base, cfg, artifacts)
+	assert.Contains(t, ctx.GeneratedResourceFiles, "secret.yaml")
+
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{}
+	cfg.Secrets.ServiceSecrets = map[string]any{"custom_service": map[string]any{"token": "value"}}
+	artifacts, err = secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	materializeSecretArtifact(t, cfg, artifacts[0].Path)
+	ctx = buildAutoServiceContextWithArtifacts("custom-service", base, cfg, artifacts)
+	assert.Contains(t, ctx.GeneratedResourceFiles, "secret.yaml")
+}
+
+func materializeSecretArtifact(t *testing.T, cfg v2.Config, relativePath string) {
+	t.Helper()
+	materializeSecretArtifacts(t, cfg, []secretartifacts.Artifact{{Path: relativePath}})
+}
+
+func materializeSecretArtifacts(t *testing.T, cfg v2.Config, artifacts []secretartifacts.Artifact) {
+	t.Helper()
+	overlay := filepath.Join(cfg.GitDir(), "applications", "overlays", cfg.ClusterName())
+	ownershipArtifacts := make([]secretartifacts.OwnershipArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		path := filepath.Join(overlay, filepath.FromSlash(artifact.Path))
+		data := []byte("materialized secret")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+		ownershipArtifacts = append(ownershipArtifacts, secretartifacts.OwnershipArtifact{
+			Path: artifact.Path,
+			Hash: secretartifacts.HashBytes(data),
+		})
+	}
+	require.NoError(t, secretartifacts.WriteOwnershipStateAtomic(overlay, secretartifacts.OwnershipState{
+		Version:   secretartifacts.OwnershipStateVersion,
+		Artifacts: ownershipArtifacts,
+	}))
+}
+
+func TestAutoServiceSecretMembershipAfterSync(t *testing.T) {
+	cfg := newAutoTestConfig("auto-secret-membership")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.Services["custom-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "custom"}}
+	base := extractBaseConfig(cfg.OpenCenter.Services["custom-service"])
+
+	before, err := renderAutoServiceActions(buildAutoServiceContextWithArtifacts("custom-service", base, cfg, nil), cfg)
+	require.NoError(t, err)
+	assert.NotContains(t, kustomizationContent(before), "secret.yaml")
+
+	cfg.Secrets.ServiceSecrets = map[string]any{"custom_service": map[string]any{"token": "value"}}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	require.Len(t, artifacts, 1)
+	materializeSecretArtifact(t, cfg, artifacts[0].Path)
+
+	after, err := renderAutoServiceActions(buildAutoServiceContextWithArtifacts("custom-service", base, cfg, artifacts), cfg)
+	require.NoError(t, err)
+	assert.Contains(t, kustomizationContent(after), "secret.yaml")
+}
+
+func TestValidateMaterializedSecretMembershipRejectsExplicitOmission(t *testing.T) {
+	cfg := newAutoTestConfig("explicit-secret-omission")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.Services["custom-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "custom"}}
+	cfg.Secrets.ServiceSecrets = map[string]any{"custom_service": map[string]any{"token": "value"}}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	materializeSecretArtifact(t, cfg, artifacts[0].Path)
+
+	rendered := filepath.Join(repo, "rendered")
+	output := "services/custom-service/kustomization.yaml"
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(rendered, output)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(rendered, output), []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"), 0o644))
+	err = validateMaterializedSecretMembership(cfg, []clusterAppAction{{Output: output, Content: "explicit"}}, artifacts, rendered)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not include secret.yaml")
+}
+
+func TestValidateMaterializedSecretMembershipAcceptsAutoContent(t *testing.T) {
+	cfg := newAutoTestConfig("auto-content-secret")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.Services["custom-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "custom"}}
+	cfg.Secrets.ServiceSecrets = map[string]any{"custom_service": map[string]any{"token": "value"}}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	materializeSecretArtifact(t, cfg, artifacts[0].Path)
+
+	rendered := filepath.Join(repo, "rendered")
+	output := "services/custom-service/kustomization.yaml"
+	content := "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - secret.yaml\n"
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(rendered, output)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(rendered, output), []byte(content), 0o644))
+	require.NoError(t, validateMaterializedSecretMembership(cfg, []clusterAppAction{{Output: output, Content: content}}, artifacts, rendered))
+}
+
+func TestRenderSingleServiceRejectsConflictingGroupedArtifact(t *testing.T) {
+	cfg := newAutoTestConfig("grouped-secret-conflict")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.Services["kube-prometheus-stack"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "monitoring"}}
+	cfg.Secrets.Grafana.AdminPassword = "grafana-password"
+	cfg.Secrets.ServiceSecrets = map[string]any{"kube_prometheus_stack": map[string]any{"admin_password": "different"}}
+
+	err = RenderSingleService(cfg, "kube-prometheus-stack", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting secret key")
+}
+
+func TestRenderSingleServiceIgnoresUnrelatedMaterializedArtifacts(t *testing.T) {
+	cfg := newAutoTestConfig("single-service-materialized-artifacts")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.Services["custom-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "custom"}}
+	cfg.OpenCenter.Services["other-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "other"}}
+	cfg.Secrets.ServiceSecrets = map[string]any{
+		"custom_service": map[string]any{"token": "custom"},
+		"other_service":  map[string]any{"token": "other"},
+	}
+
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	require.Len(t, artifacts, 2)
+	materializeSecretArtifacts(t, cfg, artifacts)
+
+	require.NoError(t, RenderSingleService(cfg, "custom-service", false))
+}
+
+func TestFilterSingleServiceArtifactsRetainsActionMatchedAggregate(t *testing.T) {
+	cfg := newAutoTestConfig("single-service-aggregate-artifact")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	artifact := secretartifacts.Artifact{
+		TargetService: "aggregate-service",
+		Path:          "services/aggregate-service/secret.yaml",
+	}
+	actions := []clusterAppAction{{Output: "services/aggregate-service/kustomization.yaml"}}
+	materializeSecretArtifacts(t, cfg, []secretartifacts.Artifact{artifact})
+
+	filtered := filterSingleServiceArtifacts("selected-service", actions, []secretartifacts.Artifact{artifact})
+	require.Len(t, filtered, 1)
+
+	rendered := filepath.Join(repo, "rendered")
+	output := filepath.Join(rendered, "services", "aggregate-service", "kustomization.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(output), 0o755))
+	require.NoError(t, os.WriteFile(output, []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"), 0o644))
+	err = validateMaterializedSecretMembership(cfg, actions, filtered, rendered)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not include secret.yaml")
+}
+
+func kustomizationContent(actions []clusterAppAction) string {
+	for _, action := range actions {
+		if strings.HasSuffix(action.Output, "/kustomization.yaml") {
+			return action.Content
+		}
+	}
+	return ""
 }

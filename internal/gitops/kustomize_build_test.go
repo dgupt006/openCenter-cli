@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
 func TestRenderMetalLBOverlayBuildsWithKustomize(t *testing.T) {
@@ -63,21 +65,87 @@ func TestServiceOverlayWithoutCustomResourcesBuilds(t *testing.T) {
 	t.Logf("kustomize output for service without custom resources:\n%s", output)
 }
 
+func TestGeneratedDefaultOverlayKustomizeFailureMatrix(t *testing.T) {
+	if _, err := exec.LookPath("kustomize"); err != nil {
+		if _, err := exec.LookPath("kubectl"); err != nil {
+			t.Skip("kustomize build skipped: neither kustomize nor kubectl is installed")
+		}
+	}
+
+	repo := t.TempDir()
+	cfg := newDefault("kustomize-default-matrix")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	// Secret manifests are materialized by secrets sync; the default overlay
+	// smoke test uses the empty optional Grafana block to avoid a dangling ref.
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{}
+	cfg.Secrets.CertManager = v2.CertManagerSecrets{}
+	cfg.Secrets.Loki = v2.LokiSecrets{}
+	cfg.Secrets.Keycloak = v2.KeycloakSecrets{}
+	cfg.Secrets.Headlamp = v2.HeadlampSecrets{}
+	cfg.Secrets.WeaveGitOps = v2.WeaveGitOpsSecrets{}
+	cfg.Secrets.Tempo = v2.TempoSecrets{}
+	cfg.Secrets.AlertProxy = v2.AlertProxySecrets{}
+	cfg.Secrets.VSphereCsi = v2.VSphereCsiSecrets{}
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("render default overlay: %v", err)
+	}
+
+	overlayRoot := filepath.Join(repo, "applications", "overlays", cfg.ClusterName())
+	var roots []string
+	err := filepath.WalkDir(overlayRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && entry.Name() == "kustomization.yaml" {
+			roots = append(roots, filepath.Dir(path))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("discover generated kustomizations: %v", err)
+	}
+
+	failures := make(map[string]string)
+	for _, root := range roots {
+		relative, err := filepath.Rel(overlayRoot, root)
+		if err != nil {
+			t.Fatalf("relative kustomization directory %s: %v", root, err)
+		}
+		output, buildErr := runKustomizeBuildResult(root)
+		if buildErr != nil {
+			failures[filepath.ToSlash(relative)] = fmt.Sprintf("%v\n%s", buildErr, output)
+		}
+	}
+
+	for relative := range failures {
+		t.Errorf("generated-overlay kustomize failure in %s:\n%s", relative, failures[relative])
+	}
+}
 func runKustomizeBuild(t *testing.T, root string) string {
 	t.Helper()
+	output, err := runKustomizeBuildResult(root)
+	if err != nil {
+		if _, lookErr := exec.LookPath("kustomize"); lookErr != nil {
+			if _, lookErr := exec.LookPath("kubectl"); lookErr != nil {
+				t.Skip("kustomize build skipped: neither kustomize nor kubectl is installed")
+			}
+		}
+		t.Fatalf("kustomize build %s: %v\n%s", root, err, output)
+	}
+	return output
+}
+
+func runKustomizeBuildResult(root string) (string, error) {
 	var cmd *exec.Cmd
 	if _, err := exec.LookPath("kustomize"); err == nil {
 		cmd = exec.Command("kustomize", "build", root)
 	} else if _, err := exec.LookPath("kubectl"); err == nil {
 		cmd = exec.Command("kubectl", "kustomize", root)
 	} else {
-		t.Skip("kustomize build skipped: neither kustomize nor kubectl is installed")
+		return "", fmt.Errorf("neither kustomize nor kubectl is installed")
 	}
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("kustomize build %s: %v\n%s", root, err, output)
-	}
-	return string(output)
+	return string(output), err
 }
 
 func kustomizeKinds(output string, kinds ...string) string {

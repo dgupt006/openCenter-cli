@@ -145,7 +145,7 @@ func TestRenderClusterAppsVerbatimKustomizationDoesNotGainCustomLayer(t *testing
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	root := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "kyverno")
+	root := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "gateway")
 	content, err := os.ReadFile(filepath.Join(root, "kustomization.yaml"))
 	if err != nil {
 		t.Fatal(err)

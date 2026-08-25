@@ -26,6 +26,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	utilfs "github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 )
@@ -614,6 +615,10 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 	if clusterName == "" {
 		return fmt.Errorf("cluster name is empty")
 	}
+	actions, artifacts, err := planSingleServiceActionsWithArtifacts(cfg, serviceName, isManaged)
+	if err != nil {
+		return err
+	}
 	target := filepath.Join(cfg.GitDir(), "applications", "overlays", clusterName)
 
 	// Create target directory
@@ -629,25 +634,6 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 		return fmt.Errorf("creating workspace: %w", err)
 	}
 	defer manager.CleanupWorkspace(context.Background(), workspace)
-
-	actions, err := planSingleServiceActions(cfg, serviceName, isManaged)
-	if err != nil {
-		return err
-	}
-	if !isManaged {
-		if serviceCfg, ok := cfg.OpenCenter.Services[serviceName]; ok {
-			base := extractBaseConfig(serviceCfg)
-			if base != nil {
-				for _, action := range actions {
-					if action.Owner == "auto-service-"+serviceName {
-						ctx := buildAutoServiceContext(serviceName, base, cfg)
-						actions = appendCustomSeedAction(actions, ctx)
-						break
-					}
-				}
-			}
-		}
-	}
 
 	prefix := "services"
 	if isManaged {
@@ -679,6 +665,10 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 			return fmt.Errorf("rendering cert-manager dynamic files: %w", err)
 		}
 	}
+	validationArtifacts := filterSingleServiceArtifacts(serviceName, actions, artifacts)
+	if err := validateMaterializedSecretMembership(cfg, actions, validationArtifacts, targetRoot); err != nil {
+		return err
+	}
 
 	result, err := promoteOverlay(targetRoot, target, clusterName, PromoteOptions{Scope: scopes})
 	if err != nil {
@@ -688,6 +678,30 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
 	return nil
+}
+
+func filterSingleServiceArtifacts(serviceName string, actions []clusterAppAction, artifacts []secretartifacts.Artifact) []secretartifacts.Artifact {
+	actionOutputs := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		actionOutputs[filepath.ToSlash(action.Output)] = struct{}{}
+	}
+
+	filtered := make([]secretartifacts.Artifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.TargetService == serviceName {
+			filtered = append(filtered, artifact)
+			continue
+		}
+
+		artifactKustomization := filepath.ToSlash(filepath.Join(
+			filepath.Dir(filepath.FromSlash(artifact.Path)),
+			"kustomization.yaml",
+		))
+		if _, ok := actionOutputs[artifactKustomization]; ok {
+			filtered = append(filtered, artifact)
+		}
+	}
+	return filtered
 }
 
 // IsServiceDisabled checks if a service configuration has Enabled set to false.
@@ -777,7 +791,7 @@ func RenderClusterAppsAtomic(cfg v2.Config, workspace *GitOpsWorkspace) error {
 		return err
 	}
 
-	actions, err := planClusterAppActions(cfg)
+	actions, artifacts, err := planClusterAppActionsWithArtifacts(cfg)
 	if err != nil {
 		return err
 	}
@@ -792,6 +806,9 @@ func RenderClusterAppsAtomic(cfg v2.Config, workspace *GitOpsWorkspace) error {
 	certManagerDir := filepath.Join(target, "services", "cert-manager")
 	if err := renderCertManagerDynamicFiles(cfg, certManagerDir, workspace); err != nil {
 		return fmt.Errorf("rendering cert-manager dynamic files: %w", err)
+	}
+	if err := validateMaterializedSecretMembership(cfg, actions, artifacts, target); err != nil {
+		return err
 	}
 
 	return nil

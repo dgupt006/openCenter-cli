@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 )
 
 const GeneratedManifestFile = ".opencenter-generated.json"
@@ -66,9 +68,25 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 		return nil, err
 	}
 
+	secretState, _, err := secretartifacts.LoadOwnershipState(targetOverlayDir)
+	if err != nil {
+		return nil, err
+	}
+	ownedSecretPaths := make(map[string]bool)
+	for _, record := range secretState.Artifacts {
+		full := filepath.Join(targetOverlayDir, filepath.FromSlash(record.Path))
+		data, readErr := os.ReadFile(full)
+		if readErr == nil && secretartifacts.HashBytes(data) == record.Hash {
+			ownedSecretPaths[record.Path] = true
+		}
+	}
+
 	result := &PromoteResult{Warnings: append(plannedWarnings, existing.warnings...)}
 	unknown := make([]string, 0)
 	for path := range existing.files {
+		if ownedSecretPaths[path] {
+			continue
+		}
 		if _, tracked := manifest.Files[path]; !tracked {
 			unknown = append(unknown, path)
 		}
@@ -125,14 +143,17 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 	}
 
 	prune := make([]string, 0)
-	for path := range manifest.Files {
+	for path, expectedHash := range manifest.Files {
 		if !isGeneratorOwnedPath(path) || isCustomPath(path) || !scopeAllows(path, opts.Scope) {
 			continue
 		}
 		if _, keep := planned[path]; keep {
 			continue
 		}
-		if _, exists := existing.files[path]; exists {
+		if onDisk, exists := existing.files[path]; exists {
+			if hashBytes(onDisk) != expectedHash {
+				return nil, fmt.Errorf("ownership conflict: refusing to prune modified generated file %s", path)
+			}
 			prune = append(prune, path)
 		}
 	}
@@ -155,7 +176,8 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 		return nil, err
 	}
 	for _, path := range prune {
-		if err := os.Remove(filepath.Join(targetOverlayDir, filepath.FromSlash(path))); err != nil && !os.IsNotExist(err) {
+		expectedHash := manifest.Files[path]
+		if err := removeVerifiedFileMatching(targetOverlayDir, filepath.Join(targetOverlayDir, filepath.FromSlash(path)), expectedHash); err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("prune %s: %w", path, err)
 		}
 	}
@@ -164,10 +186,7 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 	}
 	for path, data := range planned {
 		dst := filepath.Join(targetOverlayDir, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return nil, fmt.Errorf("create parent for %s: %w", path, err)
-		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
+		if err := atomicWriteVerified(targetOverlayDir, dst, data, 0o644); err != nil {
 			return nil, fmt.Errorf("write %s: %w", path, err)
 		}
 	}
@@ -299,11 +318,24 @@ func scanGeneratorOwnedOverlay(root string) (scannedOverlay, error) {
 }
 
 func loadGeneratedManifest(root string) (GeneratedManifest, bool, error) {
+	if err := validateOwnershipRoot(root); err != nil {
+		return GeneratedManifest{}, false, err
+	}
 	path := filepath.Join(root, GeneratedManifestFile)
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return GeneratedManifest{Version: ownershipManifestVersion, Files: make(map[string]string)}, true, nil
 	}
+	if err != nil {
+		return GeneratedManifest{}, false, fmt.Errorf("inspect generated manifest: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return GeneratedManifest{}, false, fmt.Errorf("refusing to read symlinked generated manifest %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return GeneratedManifest{}, false, fmt.Errorf("refusing to read non-regular generated manifest %s", path)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return GeneratedManifest{}, false, fmt.Errorf("read generated manifest: %w", err)
 	}
@@ -332,8 +364,64 @@ func writeGeneratedManifest(root string, manifest GeneratedManifest) error {
 		return fmt.Errorf("marshal generated manifest: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(filepath.Join(root, GeneratedManifestFile), data, 0o644); err != nil {
-		return fmt.Errorf("write generated manifest: %w", err)
+	if err := validateOwnershipRoot(root); err != nil {
+		return err
+	}
+	path := filepath.Join(root, GeneratedManifestFile)
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symlinked generated manifest %s", path)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect generated manifest: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".opencenter-generated-")
+	if err != nil {
+		return fmt.Errorf("create generated manifest temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write generated manifest temporary file: %w", err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod generated manifest temporary file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close generated manifest temporary file: %w", err)
+	}
+	if err := validateOwnershipRoot(root); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symlinked generated manifest %s", path)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect generated manifest: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace generated manifest: %w", err)
+	}
+	return nil
+}
+
+func validateOwnershipRoot(root string) error {
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve overlay root %s: %w", root, err)
+	}
+	info, err := os.Lstat(absolute)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect overlay path %s: %w", absolute, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to use symlinked overlay path %s", absolute)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("overlay root %s is not a directory", root)
 	}
 	return nil
 }
@@ -514,4 +602,78 @@ func isTempPath(path string) bool {
 func hashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func atomicWriteVerified(root, dst string, data []byte, mode os.FileMode) error {
+	if err := validatePlannedTargets(root, map[string][]byte{mustRelative(root, dst): data}); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := validatePlannedTargets(root, map[string][]byte{mustRelative(root, dst): data}); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".opencenter-write-")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(dst); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symlink %s", dst)
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(tmpPath, dst)
+}
+
+func mustRelative(root, path string) string {
+	rel, _ := filepath.Rel(root, path)
+	return filepath.ToSlash(rel)
+}
+
+func removeVerifiedFile(root, path string) error {
+	return removeVerifiedFileMatching(root, path, "")
+}
+
+func removeVerifiedFileMatching(root, path, expectedHash string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !isGeneratorOwnedPath(filepath.ToSlash(rel)) {
+		return fmt.Errorf("path escapes overlay")
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to delete symlink %s", path)
+	} else if err != nil {
+		return err
+	}
+	for current := filepath.Dir(path); current != filepath.Clean(root); current = filepath.Dir(current) {
+		if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to delete through symlink %s", current)
+		}
+		if filepath.Dir(current) == current {
+			break
+		}
+	}
+	if expectedHash != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if hashBytes(data) != expectedHash {
+			return fmt.Errorf("ownership conflict: refusing to prune modified generated file %s", filepath.ToSlash(rel))
+		}
+	}
+	return os.Remove(path)
 }

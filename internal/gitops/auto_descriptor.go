@@ -15,6 +15,8 @@ package gitops
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/Masterminds/sprig/v3"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	descriptorcfg "github.com/opencenter-cloud/opencenter-cli/internal/services/descriptors"
 )
 
@@ -58,6 +61,14 @@ type autoServiceContext struct {
 // planAutoServiceActions generates render actions for enabled services that lack
 // an explicit descriptor in the registry. Uses BaseConfig rendering fields.
 func planAutoServiceActions(cfg v2.Config, registry *descriptorcfg.Registry) ([]clusterAppAction, error) {
+	artifacts, err := secretartifacts.Plan(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	return planAutoServiceActionsWithArtifacts(cfg, registry, artifacts)
+}
+
+func planAutoServiceActionsWithArtifacts(cfg v2.Config, registry *descriptorcfg.Registry, artifacts []secretartifacts.Artifact) ([]clusterAppAction, error) {
 	var actions []clusterAppAction
 
 	for serviceName, serviceCfg := range cfg.OpenCenter.Services {
@@ -73,7 +84,7 @@ func planAutoServiceActions(cfg v2.Config, registry *descriptorcfg.Registry) ([]
 			continue
 		}
 
-		ctx := buildAutoServiceContext(serviceName, base, cfg)
+		ctx := buildAutoServiceContextWithArtifacts(serviceName, base, cfg, artifacts)
 		svcActions, err := renderAutoServiceActions(ctx, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("auto-render service %s: %w", serviceName, err)
@@ -124,6 +135,10 @@ func extractBaseConfig(serviceCfg any) *services.BaseConfig {
 
 // buildAutoServiceContext populates the template context from config.
 func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg v2.Config) autoServiceContext {
+	return buildAutoServiceContextWithArtifacts(serviceName, base, cfg, nil)
+}
+
+func buildAutoServiceContextWithArtifacts(serviceName string, base *services.BaseConfig, cfg v2.Config, artifacts []secretartifacts.Artifact) autoServiceContext {
 	baseRepoURL := cfg.OpenCenter.GitOps.BaseRepo.URL
 	if strings.TrimSpace(base.Source.Repo) != "" {
 		baseRepoURL = strings.TrimSpace(base.Source.Repo)
@@ -167,6 +182,13 @@ func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg 
 	}
 
 	generatedResourceFiles := append([]string{}, base.GeneratedResourceFiles...)
+	materialized := false
+	if artifacts != nil {
+		materialized = secretArtifactTargetMaterialized(cfg, serviceName, artifacts)
+	}
+	if materialized && !containsString(generatedResourceFiles, "secret.yaml") {
+		generatedResourceFiles = append(generatedResourceFiles, "secret.yaml")
+	}
 
 	return autoServiceContext{
 		ServiceName:               serviceName,
@@ -195,6 +217,29 @@ func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg 
 		Force:                     adoption.Force,
 		Suspend:                   adoption.Suspend,
 	}
+}
+
+func secretArtifactTargetMaterialized(cfg v2.Config, serviceName string, artifacts []secretartifacts.Artifact) bool {
+	overlay := filepath.Join(cfg.GitDir(), "applications", "overlays", cfg.ClusterName())
+	state, _, err := secretartifacts.LoadOwnershipState(overlay)
+	if err != nil {
+		return false
+	}
+	records := state.ByPath()
+	for _, artifact := range artifacts {
+		if artifact.TargetService != serviceName {
+			continue
+		}
+		record, ok := records[artifact.Path]
+		if !ok {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(overlay, filepath.FromSlash(artifact.Path)))
+		if readErr == nil && secretartifacts.HashBytes(data) == record.Hash {
+			return true
+		}
+	}
+	return false
 }
 
 // renderAutoServiceActions renders all files for an auto-generated service.

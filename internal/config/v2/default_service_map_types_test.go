@@ -113,6 +113,30 @@ func TestDefaultServiceMapEntriesEmbedBaseConfig(t *testing.T) {
 	}
 }
 
+// TestDefaultServiceMapBaseOnlyServices ensures services deployed entirely by the
+// shared base repository do not emit stale overlay configuration.
+func TestDefaultServiceMapBaseOnlyServices(t *testing.T) {
+	serviceMap := defaultServiceMap("cluster.example.com")
+
+	for _, name := range []string{"kyverno", "olm"} {
+		t.Run(name, func(t *testing.T) {
+			serviceCfg, ok := serviceMap[name].(*services.DefaultServiceConfig)
+			if !ok {
+				t.Fatalf("%q is not a DefaultServiceConfig", name)
+			}
+			if !serviceCfg.BaseOnly {
+				t.Errorf("%q BaseOnly = false, want true", name)
+			}
+			if serviceCfg.KustomizationContent != "" {
+				t.Errorf("%q has stale KustomizationContent", name)
+			}
+			if len(serviceCfg.GeneratedResourceFiles) != 0 {
+				t.Errorf("%q has stale GeneratedResourceFiles: %v", name, serviceCfg.GeneratedResourceFiles)
+			}
+		})
+	}
+}
+
 // concreteType returns the dereferenced struct type behind a service config.
 func concreteType(serviceCfg any) reflect.Type {
 	typ := reflect.TypeOf(serviceCfg)

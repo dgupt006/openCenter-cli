@@ -528,7 +528,6 @@ func TestCopyBaseRendersAllSourceAuthBlocksAndPreservesServiceRepo(t *testing.T)
 	}
 }
 
-
 func TestRenderInfrastructureClusterRendersBastionAddressFromConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -643,9 +642,9 @@ func TestRenderInfrastructureClusterKubeVipInterfaceEmptyByDefault(t *testing.T)
 
 func TestRenderInfrastructureClusterRendersKubesprayNetworkYaml(t *testing.T) {
 	tests := []struct {
-		name         string
-		provider     string
-		wantAnsHost  bool
+		name        string
+		provider    string
+		wantAnsHost bool
 	}{
 		{name: "baremetal", provider: "baremetal", wantAnsHost: true},
 		{name: "vmware", provider: "vmware", wantAnsHost: true},

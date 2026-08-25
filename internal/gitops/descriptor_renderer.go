@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,7 +15,9 @@ import (
 	"github.com/Masterminds/sprig/v3"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	descriptorcfg "github.com/opencenter-cloud/opencenter-cli/internal/services/descriptors"
+	"gopkg.in/yaml.v3"
 )
 
 type clusterAppAction struct {
@@ -353,21 +356,33 @@ func validateDescriptorCoverage(registry *descriptorcfg.Registry) error {
 }
 
 func planClusterAppActions(cfg v2.Config) ([]clusterAppAction, error) {
+	actions, _, err := planClusterAppActionsWithArtifacts(cfg)
+	return actions, err
+}
+
+func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []secretartifacts.Artifact, error) {
 	if err := validateOverlayUnitConfig(cfg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	registry, err := loadClusterDescriptorRegistry()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := validateDescriptorCoverage(registry); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	view, err := buildConfigView(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("plan secret artifacts: %w", err)
+	}
+	if err := secretartifacts.ValidateTargets(&cfg, artifacts); err != nil {
+		return nil, nil, err
 	}
 
 	diag := &RenderDiagnostics{
@@ -378,7 +393,7 @@ func planClusterAppActions(cfg v2.Config) ([]clusterAppAction, error) {
 	for _, descriptor := range registry.Descriptors() {
 		enabled, err := isDescriptorEnabled(cfg, view, descriptor)
 		if err != nil {
-			return nil, fmt.Errorf("descriptor %s: %w", descriptor.Name, err)
+			return nil, nil, fmt.Errorf("descriptor %s: %w", descriptor.Name, err)
 		}
 
 		diag.Descriptors = append(diag.Descriptors, DescriptorDecision{
@@ -392,7 +407,7 @@ func planClusterAppActions(cfg v2.Config) ([]clusterAppAction, error) {
 		}
 		expanded, err := expandDescriptorActions(descriptor, cfg, view)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
 	}
@@ -406,9 +421,9 @@ func planClusterAppActions(cfg v2.Config) ([]clusterAppAction, error) {
 	}
 
 	// Auto-generate actions for services without explicit descriptors.
-	autoActions, err := planAutoServiceActions(cfg, registry)
+	autoActions, err := planAutoServiceActionsWithArtifacts(cfg, registry, artifacts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	actions = append(actions, autoActions...)
 
@@ -421,7 +436,7 @@ func planClusterAppActions(cfg v2.Config) ([]clusterAppAction, error) {
 	}
 
 	lastRenderDiagnostics = diag
-	return actions, nil
+	return actions, artifacts, nil
 }
 
 // descriptorEnableReason returns a human-readable reason for a descriptor's
@@ -452,21 +467,30 @@ func descriptorEnableReason(d descriptorcfg.Descriptor, enabled bool) string {
 }
 
 func planSingleServiceActions(cfg v2.Config, serviceName string, isManaged bool) ([]clusterAppAction, error) {
+	actions, _, err := planSingleServiceActionsWithArtifacts(cfg, serviceName, isManaged)
+	return actions, err
+}
+
+func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, isManaged bool) ([]clusterAppAction, []secretartifacts.Artifact, error) {
 	if err := validateOverlayUnitConfig(cfg); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	artifacts, err := secretartifacts.Plan(&cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("plan secret artifacts: %w", err)
 	}
 
 	registry, err := loadClusterDescriptorRegistry()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := validateDescriptorCoverage(registry); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	view, err := buildConfigView(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var target descriptorcfg.Descriptor
@@ -493,19 +517,23 @@ func planSingleServiceActions(cfg v2.Config, serviceName string, isManaged bool)
 			if exists && !IsServiceDisabled(serviceCfg) {
 				base := extractBaseConfig(serviceCfg)
 				if base != nil {
-					ctx := buildAutoServiceContext(serviceName, base, cfg)
-					return renderAutoServiceActions(ctx, cfg)
+					ctx := buildAutoServiceContextWithArtifacts(serviceName, base, cfg, artifacts)
+					actions, renderErr := renderAutoServiceActions(ctx, cfg)
+					if renderErr != nil {
+						return nil, nil, renderErr
+					}
+					return appendCustomSeedAction(actions, ctx), artifacts, nil
 				}
 			}
 		}
-		return nil, fmt.Errorf("descriptor not found for service %q", serviceName)
+		return nil, nil, fmt.Errorf("descriptor not found for service %q", serviceName)
 	}
 
 	descriptorsToRender := []descriptorcfg.Descriptor{target}
 	for _, aggregateName := range target.AggregateTargets {
 		descriptor, ok := registry.Get(aggregateName)
 		if !ok {
-			return nil, fmt.Errorf("aggregate descriptor %q not found", aggregateName)
+			return nil, nil, fmt.Errorf("aggregate descriptor %q not found", aggregateName)
 		}
 		descriptorsToRender = append(descriptorsToRender, descriptor)
 	}
@@ -514,19 +542,19 @@ func planSingleServiceActions(cfg v2.Config, serviceName string, isManaged bool)
 	for _, descriptor := range descriptorsToRender {
 		enabled, err := isDescriptorEnabled(cfg, view, descriptor)
 		if err != nil {
-			return nil, fmt.Errorf("descriptor %s: %w", descriptor.Name, err)
+			return nil, nil, fmt.Errorf("descriptor %s: %w", descriptor.Name, err)
 		}
 		if !enabled {
 			continue
 		}
 		expanded, err := expandDescriptorActions(descriptor, cfg, view)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
 	}
 
-	return actions, nil
+	return actions, artifacts, nil
 }
 
 func writeClusterAppActions(actions []clusterAppAction, target string, cfg v2.Config, workspace *GitOpsWorkspace) error {
@@ -557,4 +585,95 @@ func writeClusterAppActions(actions []clusterAppAction, target string, cfg v2.Co
 		}
 	}
 	return nil
+}
+
+func validateMaterializedSecretMembership(cfg v2.Config, actions []clusterAppAction, artifacts []secretartifacts.Artifact, renderedOverlay string) error {
+	ownershipOverlay := filepath.Join(cfg.GitDir(), "applications", "overlays", cfg.ClusterName())
+	state, _, err := secretartifacts.LoadOwnershipState(ownershipOverlay)
+	if err != nil {
+		return err
+	}
+	records := state.ByPath()
+	for _, artifact := range artifacts {
+		record, ok := records[artifact.Path]
+		if !ok {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(ownershipOverlay, filepath.FromSlash(artifact.Path)))
+		if readErr != nil || secretartifacts.HashBytes(data) != record.Hash {
+			continue
+		}
+
+		output := filepath.ToSlash(filepath.Join(filepath.Dir(artifact.Path), "kustomization.yaml"))
+		found := false
+		for _, action := range actions {
+			if filepath.ToSlash(action.Output) == output {
+				found = true
+				break
+			}
+		}
+		if !found && artifact.TargetService != "cert-manager" {
+			return fmt.Errorf("secret artifact %q is materialized but service %q has no renderable overlay kustomization", artifact.Path, artifact.TargetService)
+		}
+
+		kustomizationPath := filepath.Join(renderedOverlay, filepath.FromSlash(output))
+		content, readErr := os.ReadFile(kustomizationPath)
+		if readErr != nil {
+			return fmt.Errorf("secret artifact %q is materialized but cannot read final kustomization for service %q: %w", artifact.Path, artifact.TargetService, readErr)
+		}
+		var kustomization struct {
+			Resources []string `yaml:"resources"`
+		}
+		if err := yaml.Unmarshal(content, &kustomization); err != nil {
+			return fmt.Errorf("secret artifact %q is materialized but final kustomization for service %q is invalid: %w", artifact.Path, artifact.TargetService, err)
+		}
+		included := false
+		for _, resource := range kustomization.Resources {
+			resource = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(resource)), "./")
+			if resource == "secret.yaml" {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return fmt.Errorf("secret artifact %q is materialized but final kustomization for service %q does not include secret.yaml in resources", artifact.Path, artifact.TargetService)
+		}
+	}
+	return nil
+}
+
+func validateSecretArtifactRenderability(cfg v2.Config, actions []clusterAppAction, artifacts []secretartifacts.Artifact) error {
+	for _, artifact := range artifacts {
+		if !artifactTargetEnabled(cfg, artifact.TargetService) {
+			continue
+		}
+		prefix := filepath.ToSlash(filepath.Dir(artifact.Path)) + "/"
+		found := false
+		for _, action := range actions {
+			if filepath.ToSlash(action.Output) == prefix+"kustomization.yaml" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// cert-manager's dynamic renderer materializes its overlay
+			// kustomization after descriptor expansion.
+			if artifact.TargetService == "cert-manager" {
+				continue
+			}
+			return fmt.Errorf("secret artifact %q targets service %q, but that service has no renderable overlay", artifact.Path, artifact.TargetService)
+		}
+	}
+	return nil
+}
+
+func artifactTargetEnabled(cfg v2.Config, target string) bool {
+	if svc, ok := cfg.OpenCenter.Services[target]; ok {
+		return !IsServiceDisabled(svc)
+	}
+	managed := managedServices(cfg)
+	if svc, ok := managed[target]; ok {
+		return !IsServiceDisabled(svc)
+	}
+	return true
 }
