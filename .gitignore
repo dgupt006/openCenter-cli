@@ -69,6 +69,8 @@ applications/overlays
 # Go test binaries
 *.test
 
+.sops.yaml
+
 # openCenter repo specific
 /bin/
 /tools/
@@ -91,3 +93,6 @@ tests/features/steps/tmp/
 .worktrees/
 
 *.test
+
+.kiro
+.opencode
