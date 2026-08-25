@@ -250,7 +250,6 @@ func TestNewV2DefaultUsesTokenBaseRepoByDefault(t *testing.T) {
 	}
 }
 
-
 func TestNewV2DefaultBastionAddressIsEmpty(t *testing.T) {
 	for _, provider := range []string{"openstack", "baremetal", "vmware", "kind"} {
 		provider := provider

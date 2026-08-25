@@ -575,18 +575,17 @@ func TestNetworkValidator_CompleteConfiguration(t *testing.T) {
 	}
 }
 
-
 func TestNetworkValidator_VIPInterface(t *testing.T) {
 	validator := NewNetworkValidator()
 	ctx := context.Background()
 
 	tests := []struct {
-		name           string
-		vrrpEnabled    bool
-		vipInterface   string
-		wantWarning    bool
-		warningField   string
-		description    string
+		name         string
+		vrrpEnabled  bool
+		vipInterface string
+		wantWarning  bool
+		warningField string
+		description  string
 	}{
 		{
 			name:         "VRRP enabled without vip_interface produces warning",

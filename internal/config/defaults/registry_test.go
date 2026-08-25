@@ -125,11 +125,11 @@ type mockProviderDefaults struct {
 	imageID string
 }
 
-func (m *mockProviderDefaults) GetImageID(_ string) string       { return m.imageID }
-func (m *mockProviderDefaults) GetAvailabilityZones() []string   { return []string{"az1"} }
-func (m *mockProviderDefaults) GetNTPServers() []string          { return []string{"ntp.example.com"} }
-func (m *mockProviderDefaults) GetDNSNameservers() []string      { return []string{"8.8.8.8"} }
-func (m *mockProviderDefaults) GetDefaultStorageClass() string   { return "standard" }
+func (m *mockProviderDefaults) GetImageID(_ string) string     { return m.imageID }
+func (m *mockProviderDefaults) GetAvailabilityZones() []string { return []string{"az1"} }
+func (m *mockProviderDefaults) GetNTPServers() []string        { return []string{"ntp.example.com"} }
+func (m *mockProviderDefaults) GetDNSNameservers() []string    { return []string{"8.8.8.8"} }
+func (m *mockProviderDefaults) GetDefaultStorageClass() string { return "standard" }
 func (m *mockProviderDefaults) GetDefaultFlavors() FlavorDefaults {
 	return FlavorDefaults{Bastion: "small", Master: "medium", Worker: "large", WorkerWindows: "xlarge"}
 }

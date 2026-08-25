@@ -299,7 +299,6 @@ func renderIssues(issues []ValidationIssue) string {
 	return b.String()
 }
 
-
 // --- Baremetal provider validation tests ---
 
 func TestValidateReadinessBaremetalRequiresMasterNodes(t *testing.T) {

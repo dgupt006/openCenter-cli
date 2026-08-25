@@ -287,7 +287,6 @@ func TestFormatResultJSON_IncludesOperatorReportFields(t *testing.T) {
 	}
 }
 
-
 func TestParseYAMLFieldError_ProviderAsSectionSuggestion(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -335,10 +334,10 @@ func TestParseYAMLFieldError_ProviderAsSectionSuggestion(t *testing.T) {
 
 func TestParseYAMLFieldError_DidYouMeanSuggestion(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          string
-		wantContains   string
-		description    string
+		name         string
+		input        string
+		wantContains string
+		description  string
 	}{
 		{
 			name:         "typo in NetworkingConfig: vip_interfce -> vip_interface",
