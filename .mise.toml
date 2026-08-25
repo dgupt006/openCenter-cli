@@ -410,6 +410,24 @@ go test ./internal/cloud/... -count=1
 # Run the Go race detector across the CI package set
 test-race = "go test ./internal/... ./cmd/... -count=1 -race"
 
+# Compile every Go package without producing repository-local binaries.
+test-build = "go build ./..."
+
+# Run the package suite used by the generator ownership and SOPS remediation.
+test-remediation = "go test ./internal/sops ./internal/secrets ./internal/secretartifacts ./internal/gitops ./cmd -count=1"
+
+# Stress the ownership transaction and rollback paths under the race detector.
+test-remediation-race = "go test -race ./internal/secrets -run 'TestSyncSecretsSerializesConcurrentTransactions|TestReconcileStateWriteFailureRollsBackAllMutationsAndRetry' -count=3"
+
+# Test the documentation generator, including tool-tagged code.
+test-docs = "go test -tags tools ./cmd/docs -count=1"
+
+# Require every generated default-overlay Kustomization to build successfully.
+test-kustomize = "go test ./internal/gitops -run '^TestGeneratedDefaultOverlayKustomizeFailureMatrix$' -count=1"
+
+# Reject whitespace errors in the working tree diff.
+test-diff = "git diff --check"
+
 # Run BDD tests via godog (non-@wip scenarios)
 godog = "go test ./tests/features/steps/... -v -- --godog.tags=~@wip --godog.paths=tests/features"
 
@@ -496,6 +514,22 @@ verify = [
   "mise run govulncheck"
 ]
 
+# Reproduce the complete validation matrix used by the remediation branch.
+test-remediation-all = [
+  "mise run test-build",
+  "mise run vet",
+  "mise run test",
+  "mise run test-remediation",
+  "mise run test-race",
+  "mise run test-remediation-race",
+  "mise run godog",
+  "mise run test-docs",
+  "mise run test-kustomize",
+  "mise run test-docs-idempotency",
+  "mise run test-docs-frontmatter-remediation",
+  "mise run test-diff"
+]
+
 # ---------------------------------------------------------------------------
 # Schema & validation
 # ---------------------------------------------------------------------------
@@ -572,6 +606,45 @@ schema-verify = [
 
 # Generate CLI documentation
 docs-gen = "go run cmd/docs/generate.go"
+
+# Verify that two consecutive documentation generations are byte-for-byte stable.
+test-docs-idempotency = '''
+#!/usr/bin/env bash
+set -e
+
+mise run docs-gen
+FIRST=$(git diff -- docs/reference | shasum -a 256 | awk '{print $1}')
+mise run docs-gen
+SECOND=$(git diff -- docs/reference | shasum -a 256 | awk '{print $1}')
+if [ "${FIRST}" != "${SECOND}" ]; then
+  echo "Documentation generation is not idempotent: ${FIRST} != ${SECOND}" >&2
+  exit 1
+fi
+echo "Documentation generation is idempotent: ${SECOND}"
+'''
+
+# Audit every reader-facing Markdown page. This remains strict and reports
+# unrelated legacy pages until their frontmatter is remediated.
+test-docs-frontmatter = "python3 hack/scripts/audit_doc_frontmatter.py --strict"
+
+# Audit the remediation corpus while preserving the documented legacy baseline.
+test-docs-frontmatter-remediation = '''
+#!/usr/bin/env bash
+set -e
+
+python3 hack/scripts/audit_doc_frontmatter.py --strict \
+  --ignore docs/architecture.md \
+  --ignore docs/dead-code-removal-report.md \
+  --ignore docs/deduplication-report.md \
+  --ignore docs/library-extraction-report.md \
+  --ignore docs/llm-code-map.md \
+  --ignore docs/operations/manage-worker-pools.md \
+  --ignore docs/refactor-audit-report.md \
+  --ignore docs/reference/services/README.md \
+  --ignore docs/render-remediation.md \
+  --ignore docs/work/openCenter-cli-cluster-deployment-plan.md \
+  --ignore docs/work/openCenter-documentation-discrepancies.md
+'''
 
 # Detect failing BDD scenarios and tag them with @wip
 tag-wip-failures = "python3 hack/tag_wip_failures.py"
