@@ -22,6 +22,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,7 +86,17 @@ func NewDefaultKeyRegistry(registryPath string, encryptor SOPSEncryptor, logger 
 }
 
 // RegisterKey adds a new key to the registry.
-// Returns an error if a key with the same cluster and type already exists with active status.
+//
+// Uniqueness is enforced per (cluster, key type, fingerprint) across all
+// statuses: the same key may not be registered twice, and a revoked or
+// archived fingerprint may not be silently reinstated.
+//
+// Multiple ACTIVE keys per cluster and type are valid and expected. SOPS
+// encrypts a file to many age recipients simultaneously, and dual-key rotation
+// (see DefaultKeyRotator.RotateAgeKey and GetRotationStatus) requires the old
+// and new keys to be active at the same time. Revocation likewise requires at
+// least two active recipients so that revoking one cannot lock the cluster out.
+//
 // Validates: Requirements 4.7, 9.2 - Record creation timestamp and expiration date.
 func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) error {
 	r.mu.Lock()
@@ -98,12 +110,13 @@ func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) er
 		return fmt.Errorf("failed to load registry: %w", err)
 	}
 
-	// Check for duplicate active keys
+	// Reject re-registering the same fingerprint, regardless of its status.
 	for _, existing := range data.Keys {
 		if existing.Cluster == entry.Cluster &&
 			existing.KeyType == entry.KeyType &&
-			existing.Status == KeyStatusActive {
-			return fmt.Errorf("active %s key already exists for cluster %s", entry.KeyType, entry.Cluster)
+			existing.Fingerprint == entry.Fingerprint {
+			return fmt.Errorf("%s key %s already exists for cluster %s with status %s",
+				entry.KeyType, entry.Fingerprint, entry.Cluster, existing.Status)
 		}
 	}
 
@@ -120,6 +133,12 @@ func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) er
 	// Set default status if not provided
 	if entry.Status == "" {
 		entry.Status = KeyStatusActive
+	}
+
+	if entry.Primary && entry.Status == KeyStatusActive {
+		if existing, ok := findActivePrimary(data.Keys, entry.Cluster, entry.KeyType); ok {
+			return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, existing.Fingerprint, entry.Cluster)
+		}
 	}
 
 	// Add the new key
@@ -140,8 +159,8 @@ func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) er
 }
 
 // GetKey retrieves key metadata by cluster and type.
-// Returns the active key for the specified cluster and type.
-// Returns ErrKeyNotFound if no matching active key exists.
+// It delegates to the active primary key when one exists, falling back to the earliest-registered active key when no primary is set (legacy registries).
+// Returns ErrKeyNotFound if no matching key exists.
 func (r *DefaultKeyRegistry) GetKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -153,17 +172,71 @@ func (r *DefaultKeyRegistry) GetKey(ctx context.Context, cluster string, keyType
 		return nil, fmt.Errorf("failed to load registry: %w", err)
 	}
 
-	// Find the active key for the cluster and type
-	for _, entry := range data.Keys {
-		if entry.Cluster == cluster &&
-			entry.KeyType == keyType &&
-			entry.Status == KeyStatusActive {
-			r.logger.Debug("Found key", "cluster", cluster, "type", keyType, "fingerprint", entry.Fingerprint)
-			return &entry, nil
+	return selectKey(data.Keys, cluster, keyType, false)
+}
+
+// GetPrimaryKey retrieves the active primary key for a cluster and type.
+// Returns ErrKeyNotFound if no active primary exists.
+func (r *DefaultKeyRegistry) GetPrimaryKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	data, err := r.loadRegistry(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load registry: %w", err)
+	}
+
+	return selectKey(data.Keys, cluster, keyType, true)
+}
+
+// ReplacePrimary atomically registers a new primary and clears the predecessor's primary role.
+func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	data, err := r.loadRegistry(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load registry: %w", err)
+	}
+
+	for _, existing := range data.Keys {
+		if existing.Cluster == newEntry.Cluster && existing.KeyType == newEntry.KeyType && existing.Fingerprint == newEntry.Fingerprint {
+			return fmt.Errorf("%s key %s already exists for cluster %s with status %s", newEntry.KeyType, newEntry.Fingerprint, newEntry.Cluster, existing.Status)
 		}
 	}
 
-	return nil, NewKeyNotFoundError(cluster, keyType, nil)
+	oldIndex := -1
+	for i := range data.Keys {
+		if data.Keys[i].Cluster == newEntry.Cluster && data.Keys[i].KeyType == newEntry.KeyType && data.Keys[i].Fingerprint == oldFingerprint {
+			oldIndex = i
+			break
+		}
+	}
+	if oldIndex == -1 {
+		return NewKeyNotFoundError(newEntry.Cluster, newEntry.KeyType, nil)
+	}
+
+	if existing, ok := findActivePrimary(data.Keys, newEntry.Cluster, newEntry.KeyType); ok && existing.Fingerprint != oldFingerprint {
+		return fmt.Errorf("active primary %s key %s already exists for cluster %s", newEntry.KeyType, existing.Fingerprint, newEntry.Cluster)
+	}
+
+	if newEntry.CreatedAt.IsZero() {
+		newEntry.CreatedAt = time.Now()
+	}
+	if newEntry.ExpiresAt.IsZero() {
+		newEntry.ExpiresAt = r.calculateExpiration(newEntry.CreatedAt, newEntry.KeyType, data.DefaultExpiration)
+	}
+	if newEntry.Status == "" {
+		newEntry.Status = KeyStatusActive
+	}
+	newEntry.Primary = true
+	data.Keys[oldIndex].Primary = false
+	data.Keys = append(data.Keys, newEntry)
+
+	if err := r.saveRegistry(ctx, data); err != nil {
+		return fmt.Errorf("failed to save registry: %w", err)
+	}
+	return nil
 }
 
 // UpdateKeyStatus updates the status of a key.
@@ -239,6 +312,13 @@ func (r *DefaultKeyRegistry) UpdateKey(ctx context.Context, entry KeyEntry) erro
 	}
 
 	data.Keys[matchIndex] = mergeKeyEntry(data.Keys[matchIndex], entry)
+	if data.Keys[matchIndex].Primary && data.Keys[matchIndex].Status == KeyStatusActive {
+		for i, existing := range data.Keys {
+			if i != matchIndex && existing.Cluster == entry.Cluster && existing.KeyType == entry.KeyType && existing.Status == KeyStatusActive && existing.Primary {
+				return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, existing.Fingerprint, entry.Cluster)
+			}
+		}
+	}
 
 	if err := r.saveRegistry(ctx, data); err != nil {
 		return fmt.Errorf("failed to save registry: %w", err)
@@ -415,6 +495,7 @@ func (r *DefaultKeyRegistry) loadRegistry(ctx context.Context) (*registryData, e
 		return nil, NewRegistryCorruptedError(r.registryPath, fmt.Errorf("unsupported registry version: %s", data.Version))
 	}
 
+	normalizeRegistryPrimaries(&data)
 	return &data, nil
 }
 
@@ -451,6 +532,90 @@ func (r *DefaultKeyRegistry) saveRegistry(ctx context.Context, data *registryDat
 	}
 
 	return nil
+}
+
+// selectKey applies primary selection semantics to registry entries.
+func selectKey(keys []KeyEntry, cluster string, keyType KeyType, primaryOnly bool) (*KeyEntry, error) {
+	var primaries []KeyEntry
+	for _, entry := range keys {
+		if entry.Cluster == cluster && entry.KeyType == keyType && entry.Status == KeyStatusActive && entry.Primary {
+			primaries = append(primaries, entry)
+		}
+	}
+	if len(primaries) > 1 {
+		fingerprints := make([]string, len(primaries))
+		for i, entry := range primaries {
+			fingerprints[i] = entry.Fingerprint
+		}
+		sort.Strings(fingerprints)
+		return nil, fmt.Errorf("multiple active primary %s keys for cluster %s: %s", keyType, cluster, strings.Join(fingerprints, ", "))
+	}
+	if len(primaries) == 1 {
+		entry := primaries[0]
+		return &entry, nil
+	}
+	if primaryOnly {
+		return nil, NewKeyNotFoundError(cluster, keyType, nil)
+	}
+	for _, entry := range keys {
+		if entry.Cluster == cluster && entry.KeyType == keyType && entry.Status == KeyStatusActive {
+			returnEntry := entry
+			return &returnEntry, nil
+		}
+	}
+	return nil, NewKeyNotFoundError(cluster, keyType, nil)
+}
+
+func findActivePrimary(keys []KeyEntry, cluster string, keyType KeyType) (KeyEntry, bool) {
+	for _, entry := range keys {
+		if entry.Cluster == cluster && entry.KeyType == keyType && entry.Status == KeyStatusActive && entry.Primary {
+			return entry, true
+		}
+	}
+	return KeyEntry{}, false
+}
+
+// normalizeRegistryPrimaries migrates unambiguous legacy active-key groups in memory.
+func normalizeRegistryPrimaries(data *registryData) {
+	groups := make(map[string][]int)
+	for i, entry := range data.Keys {
+		if entry.Status == KeyStatusActive {
+			group := entry.Cluster + "\x00" + string(entry.KeyType)
+			groups[group] = append(groups[group], i)
+		}
+	}
+
+	for _, indexes := range groups {
+		primaryCount := 0
+		for _, index := range indexes {
+			if data.Keys[index].Primary {
+				primaryCount++
+			}
+		}
+		if primaryCount > 0 {
+			continue
+		}
+		if len(indexes) == 1 {
+			data.Keys[indexes[0]].Primary = true
+			continue
+		}
+
+		activeFingerprints := make(map[string]struct{}, len(indexes))
+		for _, index := range indexes {
+			activeFingerprints[data.Keys[index].Fingerprint] = struct{}{}
+		}
+		candidate := -1
+		candidateCount := 0
+		for _, index := range indexes {
+			if _, ok := activeFingerprints[data.Keys[index].RotatedFrom]; ok {
+				candidate = index
+				candidateCount++
+			}
+		}
+		if candidateCount == 1 {
+			data.Keys[candidate].Primary = true
+		}
+	}
 }
 
 // calculateExpiration calculates the expiration date based on creation date and key type.
@@ -506,8 +671,20 @@ func mergeKeyEntry(existing, incoming KeyEntry) KeyEntry {
 	if incoming.UserEmail != "" {
 		existing.UserEmail = incoming.UserEmail
 	}
+	existing.Primary = incoming.Primary
 
 	return existing
+}
+
+func (r *DefaultKeyRegistry) rebuiltKeyExists(data *registryData, candidate KeyEntry) bool {
+	for _, existing := range data.Keys {
+		if existing.Cluster == candidate.Cluster &&
+			existing.KeyType == candidate.KeyType &&
+			existing.Fingerprint == candidate.Fingerprint {
+			return true
+		}
+	}
+	return false
 }
 
 // scanAgeKeys scans the Age keys directory and adds entries to the registry.
@@ -561,6 +738,10 @@ func (r *DefaultKeyRegistry) scanAgeKeys(dir string, data *registryData) error {
 			Status:      KeyStatusActive,
 		}
 
+		if r.rebuiltKeyExists(data, keyEntry) {
+			r.logger.Warn("Skipping duplicate Age key during registry rebuild", "cluster", cluster, "fingerprint", publicKey, "file", entry.Name())
+			continue
+		}
 		data.Keys = append(data.Keys, keyEntry)
 		r.logger.Debug("Added Age key from file", "cluster", cluster, "created_at", createdAt)
 	}
@@ -619,6 +800,10 @@ func (r *DefaultKeyRegistry) scanSSHKeys(dir string, data *registryData) error {
 			Status:      KeyStatusActive,
 		}
 
+		if r.rebuiltKeyExists(data, keyEntry) {
+			r.logger.Warn("Skipping duplicate SSH key during registry rebuild", "cluster", cluster, "fingerprint", publicKey, "file", entry.Name())
+			continue
+		}
 		data.Keys = append(data.Keys, keyEntry)
 		r.logger.Debug("Added SSH key from file", "cluster", cluster, "created_at", createdAt)
 	}

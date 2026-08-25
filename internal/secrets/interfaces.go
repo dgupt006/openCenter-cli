@@ -261,14 +261,29 @@ type SecretSource struct {
 // and lifecycle status.
 type KeyRegistry interface {
 	// RegisterKey adds a new key to the registry.
-	// Returns an error if a key with the same fingerprint already exists.
+	// Returns an error if a key with the same cluster, type, and fingerprint
+	// already exists in any status.
+	//
+	// Multiple active keys per cluster and type are valid: SOPS encrypts to
+	// many age recipients at once, and dual-key rotation requires the old and
+	// new keys to be active simultaneously.
 	RegisterKey(ctx context.Context, entry KeyEntry) error
 
 	// GetKey retrieves key metadata by cluster and type.
+	// It delegates to the active primary key when one exists, falling back to the earliest-registered active key when no primary is set (legacy registries).
 	// Returns ErrKeyNotFound if no matching key exists.
 	GetKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error)
 
+	// GetPrimaryKey retrieves the active primary key for a cluster and type.
+	// Returns ErrKeyNotFound if no active primary exists.
+	GetPrimaryKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error)
+
+	// ReplacePrimary atomically registers a new primary and clears the predecessor's primary role.
+	ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error
+
 	// UpdateKeyStatus updates the status of a key.
+	// It targets the earliest-registered active key for the cluster and type.
+	// Prefer UpdateKey when a specific fingerprint must be changed.
 	// Returns ErrKeyNotFound if no matching key exists.
 	UpdateKeyStatus(ctx context.Context, cluster string, keyType KeyType, status KeyStatus) error
 
@@ -329,6 +344,10 @@ type KeyEntry struct {
 
 	// UserEmail is the email of the user who owns this key (for multi-recipient).
 	UserEmail string `yaml:"user_email,omitempty" json:"user_email,omitempty"`
+
+	// Primary marks the cluster-managed key that rotation operates on.
+	// SOPS has no notion of a primary recipient; this distinguishes the key the CLI manages from additional user recipients that are equally active.
+	Primary bool `yaml:"primary,omitempty" json:"primary,omitempty"`
 }
 
 // ExpirationReport contains key expiration status.

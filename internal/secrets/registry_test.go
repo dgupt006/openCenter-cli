@@ -43,6 +43,15 @@ func newMockSOPSEncryptor() *mockSOPSEncryptor {
 	}
 }
 
+// cacheLocked stores content for filePath. It lazily initializes the cache so a
+// zero-value mockSOPSEncryptor is usable without newMockSOPSEncryptor.
+func (m *mockSOPSEncryptor) cacheLocked(filePath string, content []byte) {
+	if m.encryptedFiles == nil {
+		m.encryptedFiles = make(map[string][]byte)
+	}
+	m.encryptedFiles[filePath] = content
+}
+
 func (m *mockSOPSEncryptor) EncryptFile(ctx context.Context, filePath string) error {
 	if m.encryptError != nil {
 		return m.encryptError
@@ -58,7 +67,7 @@ func (m *mockSOPSEncryptor) EncryptFile(ctx context.Context, filePath string) er
 	// For testing, we just store the plaintext
 	// Always update the cache to handle file renames
 	m.mu.Lock()
-	m.encryptedFiles[filePath] = content
+	m.cacheLocked(filePath, content)
 	m.mu.Unlock()
 
 	return nil
@@ -74,7 +83,7 @@ func (m *mockSOPSEncryptor) DecryptFile(ctx context.Context, filePath string) ([
 	if err == nil {
 		// Update cache
 		m.mu.Lock()
-		m.encryptedFiles[filePath] = content
+		m.cacheLocked(filePath, content)
 		m.mu.Unlock()
 		return content, nil
 	}
@@ -159,13 +168,58 @@ func TestRegisterKey(t *testing.T) {
 		assert.Equal(t, expiresAt.Unix(), retrieved.ExpiresAt.Unix())
 	})
 
-	t.Run("register duplicate active key fails", func(t *testing.T) {
+	t.Run("register duplicate fingerprint fails", func(t *testing.T) {
 		entry := KeyEntry{
 			Cluster:     "test-cluster",
 			KeyType:     KeyTypeAge,
-			Fingerprint: "age1duplicate",
-			PublicKey:   "age1duplicate",
+			Fingerprint: "age1test123",
+			PublicKey:   "age1test123",
 		}
+
+		err := registry.RegisterKey(ctx, entry)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+	})
+
+	t.Run("register second active key for same cluster succeeds", func(t *testing.T) {
+		// SOPS encrypts to multiple age recipients at once, and dual-key
+		// rotation needs the old and new keys active at the same time.
+		entry := KeyEntry{
+			Cluster:     "test-cluster",
+			KeyType:     KeyTypeAge,
+			Fingerprint: "age1second",
+			PublicKey:   "age1second",
+		}
+
+		err := registry.RegisterKey(ctx, entry)
+		require.NoError(t, err)
+
+		keys, err := registry.ListKeys(ctx, "test-cluster")
+		require.NoError(t, err)
+
+		activeAge := 0
+		for _, key := range keys {
+			if key.KeyType == KeyTypeAge && key.Status == KeyStatusActive {
+				activeAge++
+			}
+		}
+		assert.Equal(t, 2, activeAge)
+
+		// GetKey stays deterministic: the earliest-registered active key.
+		retrieved, err := registry.GetKey(ctx, "test-cluster", KeyTypeAge)
+		require.NoError(t, err)
+		assert.Equal(t, "age1test123", retrieved.Fingerprint)
+	})
+
+	t.Run("register archived fingerprint again fails", func(t *testing.T) {
+		entry := KeyEntry{
+			Cluster:     "archive-cluster",
+			KeyType:     KeyTypeAge,
+			Fingerprint: "age1archived",
+			PublicKey:   "age1archived",
+		}
+		require.NoError(t, registry.RegisterKey(ctx, entry))
+		require.NoError(t, registry.UpdateKeyStatus(ctx, "archive-cluster", KeyTypeAge, KeyStatusArchived))
 
 		err := registry.RegisterKey(ctx, entry)
 		assert.Error(t, err)
