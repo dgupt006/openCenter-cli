@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -557,53 +556,5 @@ func writeClusterAppActions(actions []clusterAppAction, target string, cfg v2.Co
 			return err
 		}
 	}
-	return nil
-}
-
-func cleanupRendererOwnedOverlay(target string) error {
-	ownedPaths := []string{
-		filepath.Join(target, "services"),
-		filepath.Join(target, "managed-services"),
-		filepath.Join(target, "customer-managed"),
-		filepath.Join(target, "kustomization.yaml"),
-		filepath.Join(target, ".sops.yaml"),
-	}
-
-	for _, path := range ownedPaths {
-		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("cleanup renderer-owned path %s: %w", path, err)
-		}
-	}
-
-	return nil
-}
-
-func cleanupSingleServiceOutputs(target string, serviceName string, isManaged bool, actions []clusterAppAction) error {
-	dirPrefix := "services"
-	if isManaged {
-		dirPrefix = "managed-services"
-	}
-
-	targetDir := filepath.Join(target, dirPrefix, serviceName)
-	if err := os.RemoveAll(targetDir); err != nil {
-		return fmt.Errorf("cleanup service directory %s: %w", targetDir, err)
-	}
-
-	removedFiles := make(map[string]struct{})
-	for _, action := range actions {
-		outputPath := filepath.Clean(filepath.Join(target, action.Output))
-		rel := filepath.Clean(action.Output)
-		if strings.HasPrefix(rel, dirPrefix+string(filepath.Separator)+serviceName+string(filepath.Separator)) {
-			continue
-		}
-		if _, seen := removedFiles[outputPath]; seen {
-			continue
-		}
-		if err := os.RemoveAll(outputPath); err != nil {
-			return fmt.Errorf("cleanup aggregate output %s: %w", outputPath, err)
-		}
-		removedFiles[outputPath] = struct{}{}
-	}
-
 	return nil
 }

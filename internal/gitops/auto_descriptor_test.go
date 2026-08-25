@@ -40,12 +40,12 @@ func TestExtractBaseConfig(t *testing.T) {
 
 func TestBuildAutoServiceContext(t *testing.T) {
 	base := &services.BaseConfig{
-		Enabled:            true,
-		Namespace:          "metallb-system",
-		Edition:            "community",
-		EnterpriseRegistry: false,
-		CustomResources:    []string{"ipaddresspool.yaml", "l2advertisement.yaml"},
-		ExtraDependencies:  []string{"some-dep"},
+		Enabled:                true,
+		Namespace:              "metallb-system",
+		Edition:                "community",
+		EnterpriseRegistry:     false,
+		GeneratedResourceFiles: []string{"ipaddresspool.yaml", "l2advertisement.yaml"},
+		ExtraDependencies:      []string{"some-dep"},
 	}
 
 	cfg := newAutoTestConfig("test-cluster")
@@ -57,7 +57,7 @@ func TestBuildAutoServiceContext(t *testing.T) {
 	assert.Equal(t, "opencenter-metallb", ctx.SourceName)
 	assert.Equal(t, "applications/base/services/metallb/community", ctx.BasePath)
 	assert.Equal(t, "test-cluster", ctx.ClusterName)
-	assert.Equal(t, []string{"ipaddresspool.yaml", "l2advertisement.yaml"}, ctx.CustomResources)
+	assert.Equal(t, []string{"ipaddresspool.yaml", "l2advertisement.yaml"}, ctx.GeneratedResourceFiles)
 	assert.Equal(t, []string{"some-dep"}, ctx.ExtraDependencies)
 	assert.False(t, ctx.EnterpriseRegistry)
 }
@@ -184,19 +184,19 @@ func TestRenderAutoServiceActions_TwoStage(t *testing.T) {
 
 func TestRenderAutoServiceActions_SingleStage(t *testing.T) {
 	ctx := autoServiceContext{
-		ServiceName:       "gateway",
-		Namespace:         "gateway",
-		SourceName:        "opencenter-gateway",
-		BasePath:          "applications/base/services/gateway",
-		SingleStage:       true,
-		HasOverrideValues: false,
-		ClusterName:       "k8s-dev",
-		BaseRepoURL:       "ssh://git@github.com/rackerlabs/openCenter-gitops-base.git",
-		RepoBranch:        "main",
-		GitopsAuthMethod:  gitopsAuthMethodSSH,
-		FluxInterval:      "5m",
-		ExtraDependencies: []string{"gateway-api-base"},
-		CustomResources:   []string{"namespace.yaml", "gateway.yaml"},
+		ServiceName:            "gateway",
+		Namespace:              "gateway",
+		SourceName:             "opencenter-gateway",
+		BasePath:               "applications/base/services/gateway",
+		SingleStage:            true,
+		HasOverrideValues:      false,
+		ClusterName:            "k8s-dev",
+		BaseRepoURL:            "ssh://git@github.com/rackerlabs/openCenter-gitops-base.git",
+		RepoBranch:             "main",
+		GitopsAuthMethod:       gitopsAuthMethodSSH,
+		FluxInterval:           "5m",
+		ExtraDependencies:      []string{"gateway-api-base"},
+		GeneratedResourceFiles: []string{"namespace.yaml", "gateway.yaml"},
 	}
 
 	actions, err := renderAutoServiceActions(ctx, newAutoTestConfig(ctx.ClusterName))
@@ -253,18 +253,18 @@ func TestRenderAutoServiceActions_SharedSource(t *testing.T) {
 
 func TestRenderAutoServiceActions_EnterpriseRegistry(t *testing.T) {
 	ctx := autoServiceContext{
-		ServiceName:        "headlamp",
-		Namespace:          "headlamp",
-		SourceName:         "opencenter-headlamp",
-		BasePath:           "applications/base/services/headlamp/enterprise",
-		HasOverrideValues:  true,
-		EnterpriseRegistry: true,
-		CustomResources:    []string{"httproute.yaml"},
-		ClusterName:        "k8s-sandbox",
-		BaseRepoURL:        "https://github.com/rackerlabs/openCenter-gitops-base.git",
-		RepoBranch:         "main",
-		GitopsAuthMethod:   gitopsAuthMethodToken,
-		FluxInterval:       "15m",
+		ServiceName:            "headlamp",
+		Namespace:              "headlamp",
+		SourceName:             "opencenter-headlamp",
+		BasePath:               "applications/base/services/headlamp/enterprise",
+		HasOverrideValues:      true,
+		EnterpriseRegistry:     true,
+		GeneratedResourceFiles: []string{"httproute.yaml"},
+		ClusterName:            "k8s-sandbox",
+		BaseRepoURL:            "https://github.com/rackerlabs/openCenter-gitops-base.git",
+		RepoBranch:             "main",
+		GitopsAuthMethod:       gitopsAuthMethodToken,
+		FluxInterval:           "15m",
 	}
 
 	actions, err := renderAutoServiceActions(ctx, newAutoTestConfig(ctx.ClusterName))

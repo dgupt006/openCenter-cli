@@ -84,8 +84,9 @@ type BaseConfig struct {
 	// EnterpriseRegistry adds enterprise OCI registry credential resources.
 	EnterpriseRegistry bool `yaml:"enterprise_registry,omitempty" json:"enterprise_registry,omitempty" jsonschema:"description=Include enterprise registry credential resources"`
 
-	// CustomResources lists additional resource files in the service overlay kustomization.
-	CustomResources []string `yaml:"custom_resources,omitempty" json:"custom_resources,omitempty" jsonschema:"description=Additional resource files for the overlay kustomization.yaml"`
+	// GeneratedResourceFiles adds entries to the generated overlay kustomization
+	// resources list. It neither creates nor preserves the referenced files.
+	GeneratedResourceFiles []string `yaml:"custom_resources,omitempty" json:"custom_resources,omitempty" jsonschema:"description=Additional resource files for the overlay kustomization.yaml"`
 
 	// ExtraDependencies lists additional FluxCD Kustomization dependsOn entries for the base stage.
 	ExtraDependencies []string `yaml:"extra_dependencies,omitempty" json:"extra_dependencies,omitempty" jsonschema:"description=Additional dependsOn entries for the base Kustomization"`

@@ -158,11 +158,20 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 	}
 
 	// Generate GitOps manifests
-	manifestCount, err := s.generateGitOpsManifests(ctx, cfg, clusterPaths, opts.DryRun)
-	if err != nil {
-		return nil, fmt.Errorf("generating manifests: %w", err)
+	if opts.DryRun {
+		promotion, err := gitops.PlanClusterAppsPromotion(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("dry-run promotion refused: %w", err)
+		}
+		result.ManifestsCreated = len(promotion.Added) + len(promotion.Updated)
+		result.Warnings = append(result.Warnings, formatDryRunPromotion(promotion)...)
+	} else {
+		manifestCount, err := s.generateGitOpsManifests(ctx, cfg, clusterPaths, false)
+		if err != nil {
+			return nil, fmt.Errorf("generating manifests: %w", err)
+		}
+		result.ManifestsCreated = manifestCount
 	}
-	result.ManifestsCreated = manifestCount
 
 	// Validate generated manifests (non-blocking)
 	if err := s.validateManifests(clusterPaths); err != nil {
@@ -172,12 +181,38 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 	return result, nil
 }
 
+func formatDryRunPromotion(result *gitops.PromoteResult) []string {
+	lines := []string{"dry-run promotion plan:"}
+	categories := []struct {
+		name  string
+		paths []string
+	}{
+		{name: "added", paths: result.Added},
+		{name: "updated", paths: result.Updated},
+		{name: "unchanged", paths: result.Unchanged},
+		{name: "pruned", paths: result.Pruned},
+		{name: "seeded", paths: result.Seeded},
+	}
+	for _, category := range categories {
+		lines = append(lines, fmt.Sprintf("  %s: %d", category.name, len(category.paths)))
+		for _, path := range category.paths {
+			lines = append(lines, fmt.Sprintf("    %s: %s", category.name, path))
+		}
+	}
+	for _, warning := range result.Warnings {
+		lines = append(lines, fmt.Sprintf("promotion warning: %s", warning))
+	}
+	return lines
+}
+
 // generateGitOpsManifests generates GitOps manifests from configuration
 func (s *SetupService) generateGitOpsManifests(ctx context.Context, cfg v2.Config, clusterPaths *paths.ClusterPaths, dryRun bool) (int, error) {
 	if dryRun {
-		// In dry-run mode, just count what would be generated
-		// For now, return an estimate
-		return 50, nil
+		promotion, err := gitops.PlanClusterAppsPromotion(cfg)
+		if err != nil {
+			return 0, err
+		}
+		return len(promotion.Added) + len(promotion.Updated), nil
 	}
 
 	// Snapshot existing file modification times before generation so we can

@@ -14,11 +14,14 @@
 package v2
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/go-playground/validator/v10"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 )
 
 // Validator performs multi-layered validation of v2 configurations.
@@ -297,10 +300,111 @@ func (v *defaultValidator) ValidateDeployment(cfg *Config) error {
 // ValidateServices validates service dependencies and required secrets.
 // Requirements: 11.5
 func (v *defaultValidator) ValidateServices(cfg *Config) error {
-	// Placeholder secret validation is intentionally NOT run during the
-	// standard load pipeline. It is invoked explicitly by commands that
-	// gate deployment (validate, setup, bootstrap) via ValidateForDeployment.
-	return nil
+	if cfg == nil || !isServiceEnabled(cfg, "metallb") {
+		return nil
+	}
+
+	service, ok := cfg.OpenCenter.Services["metallb"].(*services.MetalLBConfig)
+	if !ok {
+		return fmt.Errorf("metallb service has unexpected configuration type %T", cfg.OpenCenter.Services["metallb"])
+	}
+	return validateMetalLBConfig(service)
+}
+
+func validateMetalLBConfig(config *services.MetalLBConfig) error {
+	if config == nil {
+		return fmt.Errorf("metallb configuration must not be nil")
+	}
+
+	var problems []string
+	poolNames := make(map[string]struct{}, len(config.IPAddressPools))
+	for i, pool := range config.IPAddressPools {
+		path := fmt.Sprintf("services.metallb.ip_address_pools[%d]", i)
+		if pool.Name == "" {
+			problems = append(problems, path+".name must not be empty")
+		} else if !isRFC1123DNSSubdomain(pool.Name) {
+			problems = append(problems, fmt.Sprintf("%s.name %q is not a valid RFC 1123 DNS subdomain", path, pool.Name))
+		} else if _, exists := poolNames[pool.Name]; exists {
+			problems = append(problems, fmt.Sprintf("%s.name %q is duplicated", path, pool.Name))
+		} else {
+			poolNames[pool.Name] = struct{}{}
+		}
+		if len(pool.Addresses) == 0 {
+			problems = append(problems, path+".addresses must contain at least one address")
+		}
+		for j, address := range pool.Addresses {
+			if !validMetalLBAddress(address) {
+				problems = append(problems, fmt.Sprintf("%s.addresses[%d] %q is not a valid CIDR or IP range", path, j, address))
+			}
+		}
+	}
+
+	advertisementNames := make(map[string]struct{}, len(config.L2Advertisements))
+	for i, advertisement := range config.L2Advertisements {
+		path := fmt.Sprintf("services.metallb.l2_advertisements[%d]", i)
+		if advertisement.Name == "" {
+			problems = append(problems, path+".name must not be empty")
+		} else if !isRFC1123DNSSubdomain(advertisement.Name) {
+			problems = append(problems, fmt.Sprintf("%s.name %q is not a valid RFC 1123 DNS subdomain", path, advertisement.Name))
+		} else if _, exists := advertisementNames[advertisement.Name]; exists {
+			problems = append(problems, fmt.Sprintf("%s.name %q is duplicated", path, advertisement.Name))
+		} else {
+			advertisementNames[advertisement.Name] = struct{}{}
+		}
+		seenInterfaces := make(map[string]struct{}, len(advertisement.Interfaces))
+		for j, iface := range advertisement.Interfaces {
+			if iface == "" {
+				problems = append(problems, fmt.Sprintf("%s.interfaces[%d] must not be empty", path, j))
+			} else if _, exists := seenInterfaces[iface]; exists {
+				problems = append(problems, fmt.Sprintf("%s.interfaces[%d] %q is duplicated", path, j, iface))
+			} else {
+				seenInterfaces[iface] = struct{}{}
+			}
+		}
+		for j, poolName := range advertisement.IPAddressPools {
+			if _, exists := poolNames[poolName]; !exists {
+				problems = append(problems, fmt.Sprintf("%s.ip_address_pools[%d] references unknown pool %q", path, j, poolName))
+			}
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("metallb validation failed:\n  - %s", strings.Join(problems, "\n  - "))
+}
+
+func isRFC1123DNSSubdomain(value string) bool {
+	if len(value) == 0 || len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validMetalLBAddress(address string) bool {
+	if _, _, err := net.ParseCIDR(address); err == nil {
+		return true
+	}
+	parts := strings.Split(address, "-")
+	if len(parts) != 2 {
+		return false
+	}
+	start, end := net.ParseIP(strings.TrimSpace(parts[0])), net.ParseIP(strings.TrimSpace(parts[1]))
+	if start == nil || end == nil || (start.To4() == nil) != (end.To4() == nil) {
+		return false
+	}
+	start16, end16 := start.To16(), end.To16()
+	return start16 != nil && end16 != nil && bytes.Compare(start16, end16) <= 0
 }
 
 // ValidateForDeployment performs all standard validation plus deployment-readiness

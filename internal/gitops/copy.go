@@ -479,11 +479,6 @@ func RenderClusterApps(cfg v2.Config) error {
 		return err
 	}
 
-	// Remove all renderer-owned paths before copying the freshly rendered overlay.
-	if err := cleanupRendererOwnedOverlay(target); err != nil {
-		return fmt.Errorf("failed to cleanup renderer-owned paths: %w", err)
-	}
-
 	// Create a temporary workspace for atomic operations
 	tempDir := os.TempDir()
 	manager := NewWorkspaceManager(tempDir)
@@ -501,7 +496,14 @@ func RenderClusterApps(cfg v2.Config) error {
 	// Copy from the workspace's applications overlay directory (where RenderClusterAppsAtomic
 	// actually writes files) to the final target, avoiding double-nesting of the overlay path.
 	workspaceAppsDir := filepath.Join(workspace.RootDir, "applications", "overlays", clusterName)
-	return copyWorkspaceToTarget(workspaceAppsDir, target)
+	result, err := promoteOverlay(workspaceAppsDir, target, clusterName, PromoteOptions{})
+	if err != nil {
+		return err
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+	return nil
 }
 
 // cleanupDisabledServices removes service directories that are not enabled in the configuration.
@@ -632,6 +634,35 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 	if err != nil {
 		return err
 	}
+	if !isManaged {
+		if serviceCfg, ok := cfg.OpenCenter.Services[serviceName]; ok {
+			base := extractBaseConfig(serviceCfg)
+			if base != nil {
+				for _, action := range actions {
+					if action.Owner == "auto-service-"+serviceName {
+						ctx := buildAutoServiceContext(serviceName, base, cfg)
+						actions = appendCustomSeedAction(actions, ctx)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	prefix := "services"
+	if isManaged {
+		prefix = "managed-services"
+	}
+	scopes := []string{filepath.ToSlash(filepath.Join(prefix, serviceName))}
+	for _, action := range actions {
+		rel, err := normalizeOwnershipPath(action.Output)
+		if err != nil {
+			return fmt.Errorf("invalid descriptor output %q: %w", action.Output, err)
+		}
+		if !strings.HasPrefix(rel, scopes[0]+"/") && rel != scopes[0] {
+			scopes = append(scopes, rel)
+		}
+	}
 
 	targetRoot, err := resolveClusterAppsTarget(workspace, cfg)
 	if err != nil {
@@ -649,10 +680,14 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 		}
 	}
 
-	if err := cleanupSingleServiceOutputs(target, serviceName, isManaged, actions); err != nil {
+	result, err := promoteOverlay(targetRoot, target, clusterName, PromoteOptions{Scope: scopes})
+	if err != nil {
 		return err
 	}
-	return copyWorkspaceToTarget(targetRoot, target)
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+	return nil
 }
 
 // IsServiceDisabled checks if a service configuration has Enabled set to false.

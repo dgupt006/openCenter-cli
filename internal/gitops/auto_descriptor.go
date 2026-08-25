@@ -16,6 +16,7 @@ package gitops
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -37,7 +38,7 @@ type autoServiceContext struct {
 	KustomizationName         string
 	HasOverrideValues         bool
 	EnterpriseRegistry        bool
-	CustomResources           []string
+	GeneratedResourceFiles    []string
 	ExtraDependencies         []string
 	OverrideDependsOn         []string
 	OverrideValues            string
@@ -77,7 +78,7 @@ func planAutoServiceActions(cfg v2.Config, registry *descriptorcfg.Registry) ([]
 		if err != nil {
 			return nil, fmt.Errorf("auto-render service %s: %w", serviceName, err)
 		}
-		actions = append(actions, svcActions...)
+		actions = append(actions, appendCustomSeedAction(svcActions, ctx)...)
 	}
 
 	return actions, nil
@@ -165,6 +166,8 @@ func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg 
 		}
 	}
 
+	generatedResourceFiles := append([]string{}, base.GeneratedResourceFiles...)
+
 	return autoServiceContext{
 		ServiceName:               serviceName,
 		Namespace:                 base.Namespace,
@@ -176,7 +179,7 @@ func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg 
 		KustomizationName:         kustomizationName(serviceName, base.KustomizationName),
 		HasOverrideValues:         base.GetHasOverrideValues(),
 		EnterpriseRegistry:        base.EnterpriseRegistry,
-		CustomResources:           base.CustomResources,
+		GeneratedResourceFiles:    generatedResourceFiles,
 		ExtraDependencies:         extraDeps,
 		OverrideDependsOn:         base.OverrideDependsOn,
 		OverrideValues:            base.OverrideValues,
@@ -236,7 +239,33 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 		return actions, nil
 	}
 
-	// 3. Service overlay kustomization.yaml
+	// Generated overlay kustomizations include the user-owned custom layer.
+	// BaseOnly services have no overlay, and verbatim KustomizationContent services
+	// must remain untouched.
+	resources := append([]string{}, ctx.GeneratedResourceFiles...)
+	if ctx.KustomizationContent == "" && !containsString(resources, CustomDirName+"/") {
+		resources = append(resources, CustomDirName+"/")
+	}
+	var overlayFiles map[string]string
+	if ctx.OverlayFilesRendererKey != "" {
+		renderer, err := getOverlayFilesRenderer(ctx.OverlayFilesRendererKey)
+		if err != nil {
+			return nil, fmt.Errorf("overlay-files: %w", err)
+		}
+		overlayFiles, err = renderer(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("overlay-files renderer %q: %w", ctx.OverlayFilesRendererKey, err)
+		}
+		for filename := range overlayFiles {
+			if !containsString(resources, filename) {
+				resources = append(resources, filename)
+			}
+		}
+	}
+	sort.Strings(resources)
+	ctx.GeneratedResourceFiles = resources
+
+	// 4. Service overlay kustomization.yaml
 	if ctx.KustomizationContent != "" {
 		actions = append(actions, clusterAppAction{
 			Owner:   "auto-service-" + ctx.ServiceName,
@@ -255,7 +284,7 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 		})
 	}
 
-	// 4. Override values
+	// 5. Override values
 	if ctx.HasOverrideValues {
 		overrideContent := "---\n...\n"
 		if ctx.OverrideValuesRendererKey != "" {
@@ -278,26 +307,52 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 		})
 	}
 
-	// 5. Dynamic overlay files (templated content like gateway resources, HTTPRoutes)
-	if ctx.OverlayFilesRendererKey != "" {
-		renderer, err := getOverlayFilesRenderer(ctx.OverlayFilesRendererKey)
-		if err != nil {
-			return nil, fmt.Errorf("overlay-files: %w", err)
-		}
-		files, err := renderer(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("overlay-files renderer %q: %w", ctx.OverlayFilesRendererKey, err)
-		}
-		for filename, fileContent := range files {
-			actions = append(actions, clusterAppAction{
-				Owner:   "auto-service-" + ctx.ServiceName,
-				Output:  fmt.Sprintf("services/%s/%s", ctx.ServiceName, filename),
-				Content: fileContent,
-			})
-		}
+	for _, filename := range sortedOverlayFileKeys(overlayFiles) {
+		actions = append(actions, clusterAppAction{
+			Owner:   "auto-service-" + ctx.ServiceName,
+			Output:  fmt.Sprintf("services/%s/%s", ctx.ServiceName, filename),
+			Content: overlayFiles[filename],
+		})
 	}
 
 	return actions, nil
+}
+
+func appendCustomSeedAction(actions []clusterAppAction, ctx autoServiceContext) []clusterAppAction {
+	if ctx.BaseOnly || ctx.KustomizationContent != "" {
+		return actions
+	}
+	return append(actions, clusterAppAction{
+		Owner:   "auto-service-" + ctx.ServiceName,
+		Output:  fmt.Sprintf("services/%s/%s/kustomization.yaml", ctx.ServiceName, CustomDirName),
+		Content: customKustomizationSeed,
+	})
+}
+
+const customKustomizationSeed = `# Files placed in this directory are owned by you, not by openCenter.
+# "opencenter cluster generate" will never modify or delete them.
+# Add files to this directory to the resources list below to have Kustomize apply them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []
+`
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedOverlayFileKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func kustomizationName(serviceName, override string) string {
@@ -510,9 +565,9 @@ secretGenerator:
     options:
       disableNameSuffixHash: true
 {{- end }}
-{{- if or .CustomResources .EnterpriseRegistry }}
+{{- if or .GeneratedResourceFiles .EnterpriseRegistry }}
 resources:
-{{- range .CustomResources }}
+{{- range .GeneratedResourceFiles }}
   - {{ . }}
 {{- end }}
 {{- if .EnterpriseRegistry }}
