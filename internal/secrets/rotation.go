@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/security"
-	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"gopkg.in/yaml.v3"
 )
 
@@ -89,7 +88,7 @@ func (r *DefaultKeyRotator) RotateAgeKey(ctx context.Context, opts RotateOptions
 	oldKey, err := r.registry.GetPrimaryKey(ctx, opts.Cluster, KeyTypeAge)
 	if err != nil {
 		if IsKeyNotFoundError(err) {
-			return nil, fmt.Errorf("no active primary Age key found for cluster %q; .sops.yaml and the key registry may have drifted, and a reconcile is needed: %w", opts.Cluster, err)
+			return nil, fmt.Errorf("no active primary Age key found for cluster %q; select one explicitly with 'opencenter secrets keys set-primary --cluster %s --type age --fingerprint <fingerprint>': %w", opts.Cluster, opts.Cluster, err)
 		}
 		return nil, fmt.Errorf("failed to get current Age primary key: %w", err)
 	}
@@ -137,6 +136,15 @@ func (r *DefaultKeyRotator) RotateAgeKey(ctx context.Context, opts RotateOptions
 		return result, nil
 	}
 
+	oldRecipient, err := canonicalAgeRecipient(*oldKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid current Age key: %w", err)
+	}
+	newRecipient, err := canonicalAgeRecipientValues(newPublicKey, newPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid generated Age key: %w", err)
+	}
+
 	// Create rollback manager for atomic operations
 	rollbackMgr := NewRollbackManager(r.logger)
 
@@ -174,7 +182,7 @@ func (r *DefaultKeyRotator) RotateAgeKey(ctx context.Context, opts RotateOptions
 	}
 
 	// Update .sops.yaml with every active recipient and the new key.
-	if err := r.updateSOPSConfigDualKey(ctx, opts.Cluster, oldKey.PublicKey, newPublicKey); err != nil {
+	if err := r.updateSOPSConfigDualKey(ctx, opts.Cluster, oldRecipient, newRecipient); err != nil {
 		rollbackErr := rollbackMgr.Rollback()
 		if rollbackErr != nil {
 			return nil, fmt.Errorf("failed to update .sops.yaml: %w (rollback error: %v)", err, rollbackErr)
@@ -183,7 +191,7 @@ func (r *DefaultKeyRotator) RotateAgeKey(ctx context.Context, opts RotateOptions
 	}
 
 	// Re-encrypt all manifests with the complete recipient set.
-	recipientKeys, err := r.activeRecipientSet(ctx, opts.Cluster, []string{oldKey.PublicKey, newPublicKey}, nil)
+	recipientKeys, err := r.activeRecipientSet(ctx, opts.Cluster, []string{oldRecipient, newRecipient}, nil)
 	if err != nil {
 		rollbackErr := rollbackMgr.Rollback()
 		if rollbackErr != nil {
@@ -270,7 +278,7 @@ func (r *DefaultKeyRotator) RotateSSHKey(ctx context.Context, opts RotateOptions
 	oldKey, err := r.registry.GetPrimaryKey(ctx, opts.Cluster, KeyTypeSSH)
 	if err != nil {
 		if IsKeyNotFoundError(err) {
-			return nil, fmt.Errorf("no active primary SSH key found for cluster %q; .sops.yaml and the key registry may have drifted, and a reconcile is needed: %w", opts.Cluster, err)
+			return nil, fmt.Errorf("no active primary SSH key found for cluster %q; select one explicitly with 'opencenter secrets keys set-primary --cluster %s --type ssh --fingerprint <fingerprint>': %w", opts.Cluster, opts.Cluster, err)
 		}
 		return nil, fmt.Errorf("failed to get current SSH primary key: %w", err)
 	}
@@ -321,20 +329,11 @@ func (r *DefaultKeyRotator) RotateSSHKey(ctx context.Context, opts RotateOptions
 		RotatedFrom: oldKey.Fingerprint,
 		Primary:     true,
 	}
-	if err := r.registry.ReplacePrimary(ctx, oldKey.Fingerprint, newKeyEntry); err != nil {
+	if err := r.registry.ReplacePrimaryAndArchive(ctx, oldKey.Fingerprint, newKeyEntry); err != nil {
 		if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
-			return nil, fmt.Errorf("failed to update SSH key registry: %w (rollback error: %v)", err, rollbackErr)
+			return nil, fmt.Errorf("failed to atomically replace SSH key registry and rollback filesystem failed (registry unchanged): %w (rollback error: %v)", err, rollbackErr)
 		}
-		return nil, fmt.Errorf("failed to update SSH key registry (changes rolled back): %w", err)
-	}
-
-	oldKey.Status = KeyStatusArchived
-	oldKey.Primary = false
-	if err := r.registry.UpdateKey(ctx, *oldKey); err != nil {
-		if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
-			return nil, fmt.Errorf("failed to archive old SSH key in registry: %w (rollback error: %v)", err, rollbackErr)
-		}
-		return nil, fmt.Errorf("failed to archive old SSH key in registry (changes rolled back): %w", err)
+		return nil, fmt.Errorf("failed to atomically replace SSH key registry (filesystem changes rolled back; registry unchanged): %w", err)
 	}
 
 	// Archiving copies a convenience backup only; registry and config are authoritative.
@@ -429,8 +428,18 @@ func (r *DefaultKeyRotator) CompleteRotation(ctx context.Context, cluster string
 		}
 	}
 
+	newRecipient, err := canonicalAgeRecipient(*status.NewKey)
+	if err != nil {
+		_ = rollbackMgr.Rollback()
+		return fmt.Errorf("invalid successor Age key: %w", err)
+	}
+	oldRecipient, err := canonicalAgeRecipient(*status.OldKey)
+	if err != nil {
+		_ = rollbackMgr.Rollback()
+		return fmt.Errorf("invalid predecessor Age key: %w", err)
+	}
 	// Update .sops.yaml while retaining unrelated active recipients.
-	if err := r.updateSOPSConfigSingleKey(ctx, cluster, status.NewKey.PublicKey, status.OldKey.PublicKey); err != nil {
+	if err := r.updateSOPSConfigSingleKey(ctx, cluster, newRecipient, oldRecipient); err != nil {
 		rollbackErr := rollbackMgr.Rollback()
 		if rollbackErr != nil {
 			return fmt.Errorf("failed to update .sops.yaml: %w (rollback error: %v)", err, rollbackErr)
@@ -438,7 +447,7 @@ func (r *DefaultKeyRotator) CompleteRotation(ctx context.Context, cluster string
 		return fmt.Errorf("failed to update .sops.yaml: %w", err)
 	}
 
-	recipientKeys, err := r.activeRecipientSet(ctx, cluster, []string{status.NewKey.PublicKey}, map[string]struct{}{status.OldKey.PublicKey: {}})
+	recipientKeys, err := r.activeRecipientSet(ctx, cluster, []string{newRecipient}, map[string]struct{}{oldRecipient: {}})
 	if err != nil {
 		rollbackErr := rollbackMgr.Rollback()
 		if rollbackErr != nil {
@@ -709,13 +718,11 @@ func (r *DefaultKeyRotator) activeRecipientSet(ctx context.Context, cluster stri
 		if key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
 			continue
 		}
-		publicKey := key.PublicKey
-		if publicKey == "" {
-			publicKey = key.Fingerprint
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return nil, fmt.Errorf("invalid active Age key: %w", err)
 		}
-		if publicKey != "" {
-			active[publicKey] = struct{}{}
-		}
+		active[recipient] = struct{}{}
 	}
 	for _, recipient := range additions {
 		if recipient != "" {
@@ -737,9 +744,9 @@ func (r *DefaultKeyRotator) activeRecipientSet(ctx context.Context, cluster stri
 		if key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
 			continue
 		}
-		recipient := key.PublicKey
-		if recipient == "" {
-			recipient = key.Fingerprint
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return nil, fmt.Errorf("invalid active Age key: %w", err)
 		}
 		if _, removed := removals[recipient]; removed {
 			continue
@@ -758,8 +765,17 @@ func appendUniqueRecipient(recipients []string, recipient string) []string {
 	return append(recipients, recipient)
 }
 
-// updateSOPSConfigDualKey updates .sops.yaml with all active recipients and the new key.
+// updateSOPSConfigDualKey adds the successor only to creation rules containing the old primary recipient.
 func (r *DefaultKeyRotator) updateSOPSConfigDualKey(ctx context.Context, cluster string, oldKey string, newKey string) error {
+	var err error
+	oldKey, err = canonicalAgeRecipientValues(oldKey, oldKey)
+	if err != nil {
+		return err
+	}
+	newKey, err = canonicalAgeRecipientValues(newKey, newKey)
+	if err != nil {
+		return err
+	}
 	r.logger.Debug("Updating .sops.yaml for dual-key mode", "cluster", cluster)
 	cfg, configPath, err := r.secretsManager.(*DefaultSecretsManager).loadClusterConfig(ctx, cluster)
 	if err != nil {
@@ -775,22 +791,19 @@ func (r *DefaultKeyRotator) updateSOPSConfigDualKey(ctx context.Context, cluster
 		return fmt.Errorf("failed to read .sops.yaml: %w", err)
 	}
 	updatedData, err := rewriteSOPSAgeValues(data, func(existing []string) ([]string, error) {
-		keys, err := r.activeRecipientSet(ctx, cluster, []string{oldKey, newKey}, nil)
-		if err != nil {
-			return nil, err
-		}
-		// Preserve the relative order of existing recipients while ensuring all
-		// active registry recipients and the new key are present.
-		ordered := make([]string, 0, len(keys))
+		oldPresent := false
 		for _, recipient := range existing {
-			for _, candidate := range keys {
-				if recipient == candidate {
-					ordered = appendUniqueRecipient(ordered, recipient)
-				}
+			if recipient == oldKey {
+				oldPresent = true
+				break
 			}
 		}
-		for _, recipient := range keys {
+		ordered := make([]string, 0, len(existing)+1)
+		for _, recipient := range existing {
 			ordered = appendUniqueRecipient(ordered, recipient)
+		}
+		if oldPresent {
+			ordered = appendUniqueRecipient(ordered, newKey)
 		}
 		return ordered, nil
 	})
@@ -808,6 +821,11 @@ func (r *DefaultKeyRotator) updateSOPSConfigDualKey(ctx context.Context, cluster
 // The optional retired argument preserves compatibility with direct callers; when omitted,
 // RotatedFrom on the new registry entry identifies the predecessor.
 func (r *DefaultKeyRotator) updateSOPSConfigSingleKey(ctx context.Context, cluster string, key string, retired ...string) error {
+	var err error
+	key, err = canonicalAgeRecipientValues(key, key)
+	if err != nil {
+		return err
+	}
 	r.logger.Debug("Updating .sops.yaml for single-key mode", "cluster", cluster)
 	cfg, configPath, err := r.secretsManager.(*DefaultSecretsManager).loadClusterConfig(ctx, cluster)
 	if err != nil {
@@ -831,34 +849,37 @@ func (r *DefaultKeyRotator) updateSOPSConfigSingleKey(ctx context.Context, clust
 		retiredKey = retired[0]
 	} else {
 		for _, entry := range keys {
-			if entry.KeyType == KeyTypeAge && entry.Status == KeyStatusActive && (entry.PublicKey == key || entry.Fingerprint == key) {
+			if entry.KeyType != KeyTypeAge || entry.Status != KeyStatusActive {
+				continue
+			}
+			recipient, recipientErr := canonicalAgeRecipient(entry)
+			if recipientErr != nil {
+				return recipientErr
+			}
+			if recipient == key {
 				retiredKey = entry.RotatedFrom
 				break
 			}
 		}
 	}
-	removals := map[string]struct{}{}
 	if retiredKey != "" {
-		removals[retiredKey] = struct{}{}
+		retiredKey, err = canonicalAgeRecipientValues(retiredKey, retiredKey)
+		if err != nil {
+			return err
+		}
 	}
 	updatedData, err := rewriteSOPSAgeValues(data, func(existing []string) ([]string, error) {
-		activeRecipients, err := r.activeRecipientSet(ctx, cluster, []string{key}, removals)
-		if err != nil {
-			return nil, err
-		}
-		ordered := make([]string, 0, len(activeRecipients))
+		retiredPresent := false
+		ordered := make([]string, 0, len(existing)+1)
 		for _, recipient := range existing {
-			if _, removed := removals[recipient]; removed {
+			if recipient == retiredKey {
+				retiredPresent = true
 				continue
 			}
-			for _, candidate := range activeRecipients {
-				if recipient == candidate {
-					ordered = appendUniqueRecipient(ordered, recipient)
-				}
-			}
-		}
-		for _, recipient := range activeRecipients {
 			ordered = appendUniqueRecipient(ordered, recipient)
+		}
+		if retiredPresent {
+			ordered = appendUniqueRecipient(ordered, key)
 		}
 		return ordered, nil
 	})
@@ -874,6 +895,9 @@ func (r *DefaultKeyRotator) updateSOPSConfigSingleKey(ctx context.Context, clust
 
 // reencryptManifests re-encrypts all manifests with the specified keys.
 func (r *DefaultKeyRotator) reencryptManifests(ctx context.Context, cluster string, keys []string) ([]string, error) {
+	// Recipients are selected by each post-mutation creation rule, not by a
+	// cluster-wide recipient set.
+	_ = keys
 	r.logger.Debug("Re-encrypting manifests", "cluster", cluster, "key_count", len(keys))
 
 	// Get the cluster config to find manifest files
@@ -918,39 +942,8 @@ func (r *DefaultKeyRotator) reencryptManifests(ctx context.Context, cluster stri
 			continue
 		}
 
-		// Create a temporary file for decryption.
-		// The temp name must keep a .yaml suffix: SOPS refuses to encrypt a file
-		// when a .sops.yaml is discoverable and no creation_rules path_regex
-		// matches it ("no matching creation rules found"), even when recipients
-		// are passed explicitly via --age. Rules are keyed on a .yaml suffix, so
-		// a bare ".tmp.decrypted" name never matches.
-		tmpDecrypted := manifestPath + ".tmp.decrypted.yaml"
-		defer os.Remove(tmpDecrypted)
-
-		// Decrypt the file
-		if err := encryptor.DecryptFile(ctx, manifestPath, tmpDecrypted); err != nil {
-			reencryptErrors = append(reencryptErrors, fmt.Errorf("failed to decrypt %s: %w", manifestPath, err))
-			continue
-		}
-
-		// Re-encrypt with the new keys.
-		// InPlace is required: without -i (and without --output) sops writes the
-		// ciphertext to stdout, which is discarded, so no encrypted file is ever
-		// produced.
-		encryptConfig := sops.EncryptionConfig{
-			AgeKeys: keys,
-			InPlace: true,
-		}
-
-		// Encrypt back to the original file
-		if err := encryptor.EncryptFile(ctx, tmpDecrypted, encryptConfig); err != nil {
-			reencryptErrors = append(reencryptErrors, fmt.Errorf("failed to re-encrypt %s: %w", manifestPath, err))
-			continue
-		}
-
-		// Move the encrypted file back
-		if err := os.Rename(tmpDecrypted, manifestPath); err != nil {
-			reencryptErrors = append(reencryptErrors, fmt.Errorf("failed to move re-encrypted file %s: %w", manifestPath, err))
+		if err := reencryptManifestUsingCreationRule(ctx, encryptor, manifestPath, filepath.Join(overlayPath, ".sops.yaml")); err != nil {
+			reencryptErrors = append(reencryptErrors, err)
 			continue
 		}
 

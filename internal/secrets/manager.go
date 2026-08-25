@@ -22,11 +22,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"gopkg.in/yaml.v3"
 )
@@ -35,10 +38,11 @@ import (
 // It provides secrets synchronization, drift detection, and validation
 // by coordinating between config files, SOPS encryption, and manifest generation.
 type DefaultSecretsManager struct {
-	configLoader *v2.ConfigIOHandler
-	sopsManager  *sops.DefaultSOPSManager
-	auditLogger  AuditLogger
-	logger       *slog.Logger
+	configLoader         *v2.ConfigIOHandler
+	sopsManager          *sops.DefaultSOPSManager
+	auditLogger          AuditLogger
+	logger               *slog.Logger
+	ownershipStateWriter func(string, secretartifacts.OwnershipState) error
 }
 
 // AuditLogger defines the interface for audit logging operations.
@@ -96,16 +100,11 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 		return nil, err
 	}
 
-	// Extract secrets from config
-	secretsMap, err := m.extractSecretsFromConfig(cfg)
+	// Build the neutral artifact plan. The logical service is retained for
+	// manifest identity while the target service controls the output route.
+	artifacts, err := secretartifacts.Plan(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract secrets from config: %w", err)
-	}
-
-	// Map secrets to service manifest paths
-	manifestPaths, err := m.mapSecretsToManifests(cfg, secretsMap, opts.Services)
-	if err != nil {
-		return nil, fmt.Errorf("failed to map secrets to manifests: %w", err)
+		return nil, fmt.Errorf("failed to plan secret artifacts: %w", err)
 	}
 
 	// Determine overlay directory path
@@ -117,7 +116,7 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 	m.logger.Debug("Sync configuration",
 		"config_path", configPath,
 		"overlay_path", overlayPath,
-		"services_count", len(manifestPaths))
+		"services_count", len(artifacts))
 
 	// Initialize result
 	result := &SyncResult{
@@ -133,36 +132,88 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 		return nil, err
 	}
 
-	// Process each service
-	for service, relativePath := range manifestPaths {
-		serviceSecrets := secretsMap[service]
-		fullPath := filepath.Join(overlayPath, relativePath)
-
-		m.logger.Debug("Processing service", "service", service, "path", fullPath)
-
-		// Generate or update manifest
-		changed, err := m.syncServiceManifest(ctx, service, serviceSecrets, fullPath, ageKey, opts.DryRun, opts.Force)
+	var syncLock *os.File
+	if !opts.DryRun {
+		syncLock, err = m.acquireSyncLock(ctx, overlayPath)
 		if err != nil {
-			result.Errors = append(result.Errors, SyncError{
-				FilePath: fullPath,
-				Service:  service,
-				Error:    err,
-			})
-			m.logger.Error("Failed to sync service manifest", "service", service, "error", err)
+			return nil, fmt.Errorf("acquire secrets sync lock: %w", err)
+		}
+		defer m.releaseSyncLock(syncLock)
+	}
+
+	previousPaths, stateErr := m.loadArtifactOwnershipState(overlayPath)
+	if stateErr != nil {
+		return nil, fmt.Errorf("load secret artifact ownership state: %w", stateErr)
+	}
+	if !opts.DryRun {
+		m.preflightStaleArtifactDeletions(overlayPath, previousPaths, artifacts, opts.Services, result)
+	}
+	successfulPaths := make(map[string]secretartifacts.OwnershipArtifact)
+	journal := &secretMutationJournal{}
+
+	// Process each planned physical artifact exactly once.
+	for _, artifact := range artifacts {
+		if !artifactMatchesFilter(artifact, opts.Services) {
 			continue
 		}
-
-		// Categorize result
-		if changed {
-			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				result.Created = append(result.Created, fullPath)
-			} else {
-				result.Updated = append(result.Updated, fullPath)
+		fullPath := filepath.Join(overlayPath, filepath.FromSlash(artifact.Path))
+		if _, exists := previousPaths[artifact.Path]; !exists {
+			if info, err := os.Lstat(fullPath); err == nil {
+				if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+					result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("existing unowned or unsafe secret artifact")})
+					continue
+				}
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("existing unowned secret artifact; refusing to adopt")})
+				continue
+			} else if err != nil && !os.IsNotExist(err) {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
+				continue
 			}
+		}
+
+		var before secretFileSnapshot
+		if !opts.DryRun {
+			var snapshotErr error
+			before, snapshotErr = snapshotSecretFile(fullPath)
+			if snapshotErr != nil {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: snapshotErr})
+				continue
+			}
+		}
+		serviceName := artifact.TargetService
+		for _, owner := range artifact.OwnerNames() {
+			if owner == "grafana" {
+				serviceName = "grafana"
+				break
+			}
+		}
+		outcome, err := m.syncServiceManifestOutcome(ctx, serviceName, artifact.Payload, fullPath, ageKey, opts.DryRun, opts.Force, previousPaths[artifact.Path])
+		if err != nil {
+			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
+			continue
+		}
+		if !opts.DryRun {
+			data, hashErr := os.ReadFile(fullPath)
+			if hashErr != nil {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: hashErr})
+				continue
+			}
+			record := secretartifacts.OwnershipArtifact{Path: artifact.Path, Owners: artifact.OwnerNames(), Hash: secretartifacts.HashBytes(data)}
+			successfulPaths[artifact.Path] = record
+			if outcome == syncCreated || outcome == syncUpdated {
+				journal.record(before, fullPath, record.Hash, false)
+			}
+		}
+		if outcome == syncCreated {
+			result.Created = append(result.Created, fullPath)
+		} else if outcome == syncUpdated {
+			result.Updated = append(result.Updated, fullPath)
 		} else {
 			result.Unchanged = append(result.Unchanged, fullPath)
 		}
 	}
+
+	m.reconcileArtifactStateWithRecordsAndJournal(overlayPath, previousPaths, artifacts, opts.Services, successfulPaths, result, opts.DryRun, journal)
 
 	m.logger.Info("Secrets sync completed",
 		"cluster", opts.Cluster,
@@ -251,8 +302,15 @@ func (m *DefaultSecretsManager) ValidateSecrets(ctx context.Context, opts Valida
 		if service == "" {
 			continue
 		}
-
-		foundServices[service] = true
+		logicalService := logicalServiceForTarget(service, cfg)
+		owners, targetSecrets := artifactTargetSecrets(service, cfg)
+		if len(owners) > 0 {
+			for _, owner := range owners {
+				foundServices[owner] = true
+			}
+		} else {
+			foundServices[logicalService] = true
+		}
 
 		// Check for unencrypted secrets
 		isEncrypted, err := m.isManifestEncrypted(manifestPath)
@@ -282,9 +340,13 @@ func (m *DefaultSecretsManager) ValidateSecrets(ctx context.Context, opts Valida
 		}
 
 		// Compare with config secrets
-		if configServiceSecrets, exists := configSecrets[service]; exists {
+		configServiceSecrets, exists := targetSecrets, len(targetSecrets) > 0
+		if len(owners) == 0 {
+			configServiceSecrets, exists = configSecrets[logicalService]
+		}
+		if exists {
 			// Check for drift
-			driftItems := m.compareSecrets(service, configServiceSecrets, manifestSecrets)
+			driftItems := m.compareSecrets(logicalService, configServiceSecrets, manifestSecrets)
 			if len(driftItems) > 0 {
 				result.DriftItems = append(result.DriftItems, driftItems...)
 				result.Valid = false
@@ -420,8 +482,15 @@ func (m *DefaultSecretsManager) DetectDrift(ctx context.Context, cluster string)
 		if service == "" {
 			continue
 		}
-
-		foundServices[service] = true
+		logicalService := logicalServiceForTarget(service, cfg)
+		owners, targetSecrets := artifactTargetSecrets(service, cfg)
+		if len(owners) > 0 {
+			for _, owner := range owners {
+				foundServices[owner] = true
+			}
+		} else {
+			foundServices[logicalService] = true
+		}
 
 		serviceDrift := ServiceDrift{
 			ServiceName:  service,
@@ -456,7 +525,11 @@ func (m *DefaultSecretsManager) DetectDrift(ctx context.Context, cluster string)
 		}
 
 		// Compare with config secrets
-		if configServiceSecrets, exists := configSecrets[service]; exists {
+		configServiceSecrets, exists := targetSecrets, len(targetSecrets) > 0
+		if len(owners) == 0 {
+			configServiceSecrets, exists = configSecrets[logicalService]
+		}
+		if exists {
 			// Detect drift in existing secrets
 			driftFields := m.detectDriftFields(configServiceSecrets, manifestSecrets)
 			if len(driftFields) > 0 {
@@ -661,55 +734,16 @@ func (m *DefaultSecretsManager) getConfigPath(ctx context.Context, cluster strin
 // extractSecretsFromConfig extracts all secrets from the config file.
 // It returns a map of service names to their secret values.
 func (m *DefaultSecretsManager) extractSecretsFromConfig(cfg *v2.Config) (map[string]map[string]interface{}, error) {
+	artifacts, err := secretartifacts.Plan(cfg)
+	if err != nil {
+		return nil, err
+	}
 	secretsMap := make(map[string]map[string]interface{})
-
-	serviceBlocks := []struct {
-		name    string
-		secrets any
-	}{
-		{name: "cert-manager", secrets: cfg.Secrets.CertManager},
-		{name: "loki", secrets: cfg.Secrets.Loki},
-		{name: "keycloak", secrets: cfg.Secrets.Keycloak},
-		{name: "headlamp", secrets: cfg.Secrets.Headlamp},
-		{name: "weave-gitops", secrets: cfg.Secrets.WeaveGitOps},
-		{name: "grafana", secrets: cfg.Secrets.Grafana},
-		{name: "tempo", secrets: cfg.Secrets.Tempo},
-		{name: "alert-proxy", secrets: cfg.Secrets.AlertProxy},
-		{name: "vsphere-csi", secrets: cfg.Secrets.VSphereCsi},
+	for _, artifact := range artifacts {
+		for _, owner := range artifact.OwnerNames() {
+			secretsMap[owner] = artifact.Payload
+		}
 	}
-
-	for _, block := range serviceBlocks {
-		filtered, err := normalizeServiceSecrets(block.secrets)
-		if err != nil {
-			return nil, fmt.Errorf("failed to normalize %s secrets: %w", block.name, err)
-		}
-		if len(filtered) == 0 {
-			continue
-		}
-
-		secretsMap[block.name] = filtered
-	}
-
-	for rawService, rawSecrets := range cfg.Secrets.ServiceSecrets {
-		filtered, err := normalizeServiceSecrets(rawSecrets)
-		if err != nil {
-			return nil, fmt.Errorf("failed to normalize %s service_secrets: %w", rawService, err)
-		}
-
-		if len(filtered) == 0 {
-			continue
-		}
-
-		serviceName := strings.ReplaceAll(rawService, "_", "-")
-		if existing, ok := secretsMap[serviceName]; ok {
-			for key, value := range filtered {
-				existing[key] = value
-			}
-			continue
-		}
-		secretsMap[serviceName] = filtered
-	}
-
 	return secretsMap, nil
 }
 
@@ -762,22 +796,12 @@ func (m *DefaultSecretsManager) mapSecretsToManifests(
 ) (map[string]string, error) {
 	manifestPaths := make(map[string]string)
 
-	// Create a filter set for quick lookup
-	filterSet := make(map[string]bool)
-	for _, service := range serviceFilter {
-		filterSet[service] = true
-	}
-
-	// Map each service to its manifest path
 	for service := range secretsMap {
-		// Skip if service filter is provided and service is not in filter
-		if len(serviceFilter) > 0 && !filterSet[service] {
+		// Filters may name either the logical source or its target route.
+		if len(serviceFilter) > 0 && !serviceMatchesFilter(service, serviceFilter) {
 			continue
 		}
-
-		// Determine manifest path based on service
-		manifestPath := m.getManifestPath(service, cfg)
-		manifestPaths[service] = manifestPath
+		manifestPaths[service] = m.getManifestPath(service, cfg)
 	}
 
 	return manifestPaths, nil
@@ -786,8 +810,466 @@ func (m *DefaultSecretsManager) mapSecretsToManifests(
 // getManifestPath returns the expected manifest path for a service.
 // The path is relative to the overlay directory.
 func (m *DefaultSecretsManager) getManifestPath(service string, cfg *v2.Config) string {
-	// Standard path pattern: services/<service>/secret.yaml
-	return filepath.Join("services", service, "secret.yaml")
+	if artifacts, err := secretartifacts.Plan(cfg); err == nil {
+		for _, artifact := range artifacts {
+			for _, owner := range artifact.OwnerNames() {
+				if owner == service {
+					return filepath.FromSlash(artifact.Path)
+				}
+			}
+		}
+	}
+	target := service
+	if service == "grafana" {
+		target = "kube-prometheus-stack"
+	}
+	return filepath.Join("services", target, "secret.yaml")
+}
+
+func serviceMatchesFilter(service string, filters []string) bool {
+	target := service
+	if service == "grafana" {
+		target = "kube-prometheus-stack"
+	}
+	for _, raw := range filters {
+		filter := strings.ReplaceAll(strings.TrimSpace(raw), "_", "-")
+		if filter == service || filter == target || (target == "kube-prometheus-stack" && filter == "grafana") {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactTargetSecrets(target string, cfg *v2.Config) ([]string, map[string]interface{}) {
+	artifacts, err := secretartifacts.Plan(cfg)
+	if err != nil {
+		return nil, nil
+	}
+	for _, artifact := range artifacts {
+		if artifact.TargetService == target {
+			return artifact.OwnerNames(), artifact.Payload
+		}
+	}
+	return nil, nil
+}
+
+func logicalServiceForTarget(target string, cfg *v2.Config) string {
+	owners, _ := artifactTargetSecrets(target, cfg)
+	if len(owners) > 0 {
+		return owners[0]
+	}
+	return target
+}
+
+func artifactMatchesFilter(artifact secretartifacts.Artifact, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	return serviceMatchesFilter(artifact.LogicalService, filters) || serviceMatchesFilter(artifact.TargetService, filters)
+}
+
+const artifactStateFilename = secretartifacts.OwnershipStateFilename
+
+const syncLockFilename = ".opencenter-secrets.lock"
+
+type artifactState = secretartifacts.OwnershipState
+
+func (m *DefaultSecretsManager) acquireSyncLock(ctx context.Context, overlayPath string) (*os.File, error) {
+	if err := os.MkdirAll(overlayPath, 0o700); err != nil {
+		return nil, fmt.Errorf("create overlay directory: %w", err)
+	}
+	lockPath := filepath.Join(overlayPath, syncLockFilename)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open sync lock: %w", err)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			return file, nil
+		} else if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			_ = file.Close()
+			return nil, fmt.Errorf("lock sync transaction: %w", err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *DefaultSecretsManager) releaseSyncLock(file *os.File) {
+	if file == nil {
+		return
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
+}
+
+func (m *DefaultSecretsManager) loadArtifactOwnershipState(overlayPath string) (map[string]secretartifacts.OwnershipArtifact, error) {
+	state, _, err := secretartifacts.LoadOwnershipState(overlayPath)
+	if err != nil {
+		return nil, err
+	}
+	return state.ByPath(), nil
+}
+
+// loadArtifactState is retained for package-local legacy callers.
+func (m *DefaultSecretsManager) loadArtifactState(overlayPath string) (map[string]bool, error) {
+	records, err := m.loadArtifactOwnershipState(overlayPath)
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]bool, len(records))
+	for path := range records {
+		paths[path] = true
+	}
+	return paths, nil
+}
+
+func safeOwnedArtifactPath(relative string) bool { return secretartifacts.SafeArtifactPath(relative) }
+
+func statePathMatchesFilter(relative string, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	return len(parts) == 3 && serviceMatchesFilter(parts[1], filters)
+}
+
+type secretFileSnapshot struct {
+	path   string
+	exists bool
+	data   []byte
+	mode   os.FileMode
+}
+
+type secretFileMutation struct {
+	before         secretFileSnapshot
+	target         string
+	expectedHash   string
+	expectedAbsent bool
+}
+
+type secretMutationJournal struct {
+	mutations []secretFileMutation
+}
+
+func snapshotSecretFile(path string) (secretFileSnapshot, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return secretFileSnapshot{path: path}, nil
+	}
+	if err != nil {
+		return secretFileSnapshot{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return secretFileSnapshot{}, fmt.Errorf("unsafe secret artifact target %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return secretFileSnapshot{}, err
+	}
+	return secretFileSnapshot{path: path, exists: true, data: data, mode: info.Mode().Perm()}, nil
+}
+
+func (j *secretMutationJournal) record(before secretFileSnapshot, target, expectedHash string, expectedAbsent bool) {
+	j.mutations = append(j.mutations, secretFileMutation{before: before, target: target, expectedHash: expectedHash, expectedAbsent: expectedAbsent})
+}
+
+func (j *secretMutationJournal) rollback(result *SyncResult) []string {
+	rolledBack := make([]string, 0, len(j.mutations))
+	for i := len(j.mutations) - 1; i >= 0; i-- {
+		mutation := j.mutations[i]
+		if err := rollbackSecretMutation(mutation); err != nil {
+			result.Errors = append(result.Errors, SyncError{FilePath: mutation.target, Error: fmt.Errorf("rollback secret artifact: %w", err)})
+			continue
+		}
+		rolledBack = append(rolledBack, mutation.target)
+	}
+	return rolledBack
+}
+
+func rollbackSecretMutation(mutation secretFileMutation) error {
+	info, err := os.Lstat(mutation.target)
+	if mutation.before.exists {
+		if err != nil {
+			if os.IsNotExist(err) && mutation.expectedAbsent {
+				return restoreSecretSnapshot(mutation.before)
+			}
+			if os.IsNotExist(err) {
+				return fmt.Errorf("target disappeared concurrently")
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to clobber changed target")
+		}
+		data, err := os.ReadFile(mutation.target)
+		if err != nil {
+			return err
+		}
+		if mutation.expectedAbsent {
+			return fmt.Errorf("target reappeared concurrently")
+		}
+		if secretartifacts.HashBytes(data) != mutation.expectedHash {
+			return fmt.Errorf("target changed concurrently; expected post-mutation hash %s", mutation.expectedHash)
+		}
+		return restoreSecretSnapshot(mutation.before)
+	}
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to remove changed target")
+		}
+		data, readErr := os.ReadFile(mutation.target)
+		if readErr != nil {
+			return readErr
+		}
+		if secretartifacts.HashBytes(data) != mutation.expectedHash {
+			return fmt.Errorf("target changed concurrently; expected post-mutation hash %s", mutation.expectedHash)
+		}
+		if removeErr := os.Remove(mutation.target); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func restoreSecretSnapshot(snapshot secretFileSnapshot) error {
+	if !snapshot.exists {
+		return nil
+	}
+	if info, err := os.Lstat(snapshot.path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to overwrite changed target")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	dir := filepath.Dir(snapshot.path)
+	tmp, err := os.CreateTemp(dir, ".secret-rollback-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(snapshot.mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(snapshot.data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(snapshot.path); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return fmt.Errorf("refusing to overwrite changed target")
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(tmpPath, snapshot.path)
+}
+
+func (m *DefaultSecretsManager) writeOwnershipState(overlayPath string, state secretartifacts.OwnershipState) error {
+	if m.ownershipStateWriter != nil {
+		return m.ownershipStateWriter(overlayPath, state)
+	}
+	return secretartifacts.WriteOwnershipStateAtomic(overlayPath, state)
+}
+
+func (m *DefaultSecretsManager) preflightStaleArtifactDeletions(overlayPath string, previous map[string]secretartifacts.OwnershipArtifact, artifacts []secretartifacts.Artifact, filters []string, result *SyncResult) {
+	planned := make(map[string]bool)
+	for _, artifact := range artifacts {
+		if artifactMatchesFilter(artifact, filters) {
+			planned[artifact.Path] = true
+		}
+	}
+	for relative, record := range previous {
+		if planned[relative] || !statePathMatchesFilter(relative, filters) {
+			continue
+		}
+		fullPath := filepath.Join(overlayPath, filepath.FromSlash(relative))
+		if err := verifyOwnedPath(overlayPath, fullPath, record.Hash); err != nil {
+			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: strings.Split(relative, "/")[1], Error: fmt.Errorf("stale secret artifact is not safely deletable: %w", err)})
+		}
+	}
+}
+
+func (m *DefaultSecretsManager) reconcileArtifactStateWithRecordsAndJournal(overlayPath string, previous map[string]secretartifacts.OwnershipArtifact, artifacts []secretartifacts.Artifact, filters []string, successful map[string]secretartifacts.OwnershipArtifact, result *SyncResult, dryRun bool, journal *secretMutationJournal) {
+	if dryRun {
+		return
+	}
+	hadPreexistingErrors := len(result.Errors) > 0
+	planned := make(map[string]secretartifacts.Artifact)
+	for _, artifact := range artifacts {
+		if artifactMatchesFilter(artifact, filters) {
+			planned[artifact.Path] = artifact
+		}
+	}
+	owned := make(map[string]secretartifacts.OwnershipArtifact, len(previous)+len(successful))
+	for path, record := range previous {
+		owned[path] = record
+	}
+	for path, record := range successful {
+		owned[path] = record
+	}
+
+	// A sibling error makes pruning unsafe: commit successful writes, but retain
+	// every stale record so a retry can safely reconcile it.
+	if !hadPreexistingErrors {
+		stale := make([]struct {
+			relative string
+			record   secretartifacts.OwnershipArtifact
+			snapshot secretFileSnapshot
+		}, 0)
+		preflightFailed := false
+		for relative, record := range previous {
+			if _, keep := planned[relative]; keep || !statePathMatchesFilter(relative, filters) {
+				continue
+			}
+			fullPath := filepath.Join(overlayPath, filepath.FromSlash(relative))
+			if err := verifyOwnedPath(overlayPath, fullPath, record.Hash); err != nil {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: strings.Split(relative, "/")[1], Error: fmt.Errorf("stale secret artifact is not safely deletable: %w", err)})
+				preflightFailed = true
+				continue
+			}
+			snapshot, err := snapshotSecretFile(fullPath)
+			if err != nil {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: strings.Split(relative, "/")[1], Error: fmt.Errorf("snapshot stale secret artifact: %w", err)})
+				preflightFailed = true
+				continue
+			}
+			stale = append(stale, struct {
+				relative string
+				record   secretartifacts.OwnershipArtifact
+				snapshot secretFileSnapshot
+			}{relative, record, snapshot})
+		}
+		if !preflightFailed {
+			pruneJournal := &secretMutationJournal{}
+			pruneFailed := false
+			for _, item := range stale {
+				if err := verifyOwnedPath(overlayPath, item.snapshot.path, item.record.Hash); err != nil {
+					result.Errors = append(result.Errors, SyncError{FilePath: item.snapshot.path, Service: strings.Split(item.relative, "/")[1], Error: fmt.Errorf("stale secret artifact changed before deletion: %w", err)})
+					pruneFailed = true
+					break
+				}
+				if err := os.Remove(item.snapshot.path); err != nil {
+					result.Errors = append(result.Errors, SyncError{FilePath: item.snapshot.path, Service: strings.Split(item.relative, "/")[1], Error: fmt.Errorf("remove stale secret artifact: %w", err)})
+					pruneFailed = true
+					break
+				}
+				pruneJournal.record(item.snapshot, item.snapshot.path, "", true)
+			}
+			if pruneFailed {
+				pruneJournal.rollback(result)
+			} else {
+				for i, item := range stale {
+					delete(owned, item.relative)
+					journal.mutations = append(journal.mutations, pruneJournal.mutations[i])
+				}
+			}
+		}
+	}
+
+	state := secretartifacts.OwnershipState{Version: secretartifacts.OwnershipStateVersion}
+	for _, record := range owned {
+		state.Artifacts = append(state.Artifacts, record)
+	}
+	if err := m.writeOwnershipState(overlayPath, state); err != nil {
+		result.Errors = append(result.Errors, SyncError{FilePath: filepath.Join(overlayPath, artifactStateFilename), Error: err})
+		rolledBack := journal.rollback(result)
+		rolledBackSet := make(map[string]struct{}, len(rolledBack))
+		for _, target := range rolledBack {
+			rolledBackSet[target] = struct{}{}
+		}
+		result.Created = removeRolledBackTargets(result.Created, rolledBackSet)
+		result.Updated = removeRolledBackTargets(result.Updated, rolledBackSet)
+	}
+}
+
+func removeRolledBackTargets(paths []string, rolledBack map[string]struct{}) []string {
+	remaining := paths[:0]
+	for _, path := range paths {
+		if _, ok := rolledBack[path]; !ok {
+			remaining = append(remaining, path)
+		}
+	}
+	return remaining
+}
+
+func (m *DefaultSecretsManager) reconcileArtifactStateWithRecords(overlayPath string, previous map[string]secretartifacts.OwnershipArtifact, artifacts []secretartifacts.Artifact, filters []string, successful map[string]secretartifacts.OwnershipArtifact, result *SyncResult, dryRun bool) {
+	m.reconcileArtifactStateWithRecordsAndJournal(overlayPath, previous, artifacts, filters, successful, result, dryRun, &secretMutationJournal{})
+}
+
+// reconcileArtifactState is a compatibility helper for older package tests.
+// Production synchronization uses reconcileArtifactStateWithRecords.
+func (m *DefaultSecretsManager) reconcileArtifactState(overlayPath string, previous map[string]bool, artifacts []secretartifacts.Artifact, filters []string, successful map[string]bool, result *SyncResult, dryRun bool) {
+	if dryRun || len(result.Errors) > 0 {
+		return
+	}
+	planned := make(map[string]bool)
+	for _, artifact := range artifacts {
+		if artifactMatchesFilter(artifact, filters) {
+			planned[artifact.Path] = true
+		}
+	}
+	for relative := range previous {
+		if planned[relative] || !statePathMatchesFilter(relative, filters) {
+			continue
+		}
+		fullPath := filepath.Join(overlayPath, filepath.FromSlash(relative))
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Error: err})
+		}
+	}
+}
+func verifyOwnedPath(root, fullPath, expectedHash string) error {
+	if rel, err := filepath.Rel(root, fullPath); err != nil || !secretartifacts.SafeArtifactPath(filepath.ToSlash(rel)) {
+		return fmt.Errorf("path escapes overlay")
+	}
+	for current := filepath.Dir(fullPath); current != filepath.Clean(root); current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink ancestor %s", current)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if filepath.Dir(current) == current {
+			break
+		}
+	}
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symlink target")
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return err
+	}
+	if expectedHash == "" || secretartifacts.HashBytes(data) != expectedHash {
+		return fmt.Errorf("content hash changed")
+	}
+	return nil
 }
 
 // getOverlayPath determines the overlay directory path for the cluster.
@@ -895,35 +1377,58 @@ func (m *DefaultSecretsManager) getAgeKeyPath(cfg *v2.Config) (string, error) {
 // findManifestFiles scans the overlay directory for secret manifest files.
 // Returns a list of absolute paths to manifest files.
 func (m *DefaultSecretsManager) findManifestFiles(overlayPath string) ([]string, error) {
-	var manifestFiles []string
-
-	// Check if overlay directory exists
-	if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
-		return manifestFiles, nil // Return empty list if directory doesn't exist
-	}
-
-	// Walk the services directory looking for secret.yaml files
-	servicesPath := filepath.Join(overlayPath, "services")
-	if _, err := os.Stat(servicesPath); os.IsNotExist(err) {
-		return manifestFiles, nil // Return empty list if services directory doesn't exist
-	}
-
-	err := filepath.Walk(servicesPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip directories with errors
-		}
-
-		if !info.IsDir() && info.Name() == "secret.yaml" {
-			manifestFiles = append(manifestFiles, path)
-		}
-
-		return nil
-	})
-
+	overlayInfo, err := os.Lstat(overlayPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk services directory: %w", err)
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to stat overlay directory %q: %w", overlayPath, err)
+	}
+	if overlayInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symlinked overlay directory %q", overlayPath)
+	}
+	if !overlayInfo.IsDir() {
+		return nil, fmt.Errorf("overlay path is not a directory: %q", overlayPath)
 	}
 
+	var manifestFiles []string
+	for _, rootName := range []string{"services", "managed-services"} {
+		rootPath := filepath.Join(overlayPath, rootName)
+		rootInfo, err := os.Lstat(rootPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to stat manifest root %q: %w", rootPath, err)
+		}
+		if rootInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("refusing symlinked manifest root %q", rootPath)
+		}
+		if !rootInfo.IsDir() {
+			return nil, fmt.Errorf("manifest root is not a directory: %q", rootPath)
+		}
+
+		err = filepath.Walk(rootPath, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if info == nil {
+				return fmt.Errorf("missing file information for %q", path)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("refusing symlinked path %q", path)
+			}
+			if !info.IsDir() && info.Name() == "secret.yaml" {
+				manifestFiles = append(manifestFiles, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to walk manifest root %q: %w", rootPath, err)
+		}
+	}
+
+	sort.Strings(manifestFiles)
 	return manifestFiles, nil
 }
 
@@ -1100,8 +1605,51 @@ func (m *DefaultSecretsManager) hashValue(value interface{}) string {
 	return hash
 }
 
+type syncOutcome int
+
+const (
+	syncUnchanged syncOutcome = iota
+	syncCreated
+	syncUpdated
+)
+
+func (m *DefaultSecretsManager) syncServiceManifestOutcome(ctx context.Context, service string, secrets map[string]interface{}, manifestPath, ageKey string, dryRun, force bool, record secretartifacts.OwnershipArtifact) (syncOutcome, error) {
+	info, err := os.Lstat(manifestPath)
+	existed := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return syncUnchanged, err
+	}
+	if existed {
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			return syncUnchanged, fmt.Errorf("refusing symlink or directory target")
+		}
+		if record.Hash == "" {
+			return syncUnchanged, fmt.Errorf("existing secret artifact has no ownership hash")
+		}
+		if err := verifyOwnedPath(filepath.Dir(filepath.Dir(filepath.Dir(manifestPath))), manifestPath, record.Hash); err != nil {
+			return syncUnchanged, err
+		}
+	}
+	changed, err := m.syncServiceManifest(ctx, service, secrets, manifestPath, ageKey, dryRun, force)
+	if err != nil {
+		return syncUnchanged, err
+	}
+	if !changed {
+		return syncUnchanged, nil
+	}
+	if dryRun {
+		if existed {
+			return syncUpdated, nil
+		}
+		return syncCreated, nil
+	}
+	if existed {
+		return syncUpdated, nil
+	}
+	return syncCreated, nil
+}
+
 // syncServiceManifest generates or updates a service's secret manifest.
-// Returns true if the manifest was changed, false if unchanged.
 func (m *DefaultSecretsManager) syncServiceManifest(
 	ctx context.Context,
 	service string,
@@ -1190,8 +1738,24 @@ func (m *DefaultSecretsManager) writeEncryptedManifest(
 	// Generate new manifest
 	newManifest := m.generateSecretManifest(service, secrets, existingManifest)
 
-	// Create directory if it doesn't exist
 	dir := filepath.Dir(manifestPath)
+	// Verify every existing ancestor and the final target before creating anything.
+	root := filepath.Dir(filepath.Dir(dir))
+	for current := dir; ; current = filepath.Dir(current) {
+		if info, statErr := os.Lstat(current); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return false, fmt.Errorf("refusing to write through symlink %s", current)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return false, statErr
+		}
+		if current == root || filepath.Dir(current) == current {
+			break
+		}
+	}
+	if info, statErr := os.Lstat(manifestPath); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("refusing to overwrite symlink %s", manifestPath)
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return false, statErr
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return false, fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -1231,15 +1795,15 @@ func (m *DefaultSecretsManager) writeEncryptedManifest(
 		return false, fmt.Errorf("failed to encrypt manifest: %w", err)
 	}
 
-	// Read encrypted content
-	encryptedData, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to read encrypted file: %w", err)
+	// The encrypted temporary file is already in the verified destination parent;
+	// atomically rename it into place rather than writing through the target.
+	if info, statErr := os.Lstat(manifestPath); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("refusing to overwrite symlink %s", manifestPath)
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return false, statErr
 	}
-
-	// Write encrypted content to final location
-	if err := os.WriteFile(manifestPath, encryptedData, 0644); err != nil {
-		return false, fmt.Errorf("failed to write manifest: %w", err)
+	if err := os.Rename(tmpPath, manifestPath); err != nil {
+		return false, fmt.Errorf("failed to replace manifest: %w", err)
 	}
 
 	m.logger.Info("Manifest updated", "service", service, "path", manifestPath)

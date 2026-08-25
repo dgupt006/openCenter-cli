@@ -18,23 +18,27 @@ package secrets
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockSOPSEncryptor is a mock implementation of SOPSEncryptor for testing.
 type mockSOPSEncryptor struct {
-	mu             sync.Mutex
-	encryptedFiles map[string][]byte
-	encryptError   error
-	decryptError   error
+	mu                   sync.Mutex
+	encryptedFiles       map[string][]byte
+	encryptionRecipients []string
+	encryptError         error
+	decryptError         error
 }
 
 func newMockSOPSEncryptor() *mockSOPSEncryptor {
@@ -52,7 +56,7 @@ func (m *mockSOPSEncryptor) cacheLocked(filePath string, content []byte) {
 	m.encryptedFiles[filePath] = content
 }
 
-func (m *mockSOPSEncryptor) EncryptFile(ctx context.Context, filePath string) error {
+func (m *mockSOPSEncryptor) EncryptFile(ctx context.Context, filePath string, config sops.EncryptionConfig) error {
 	if m.encryptError != nil {
 		return m.encryptError
 	}
@@ -64,18 +68,46 @@ func (m *mockSOPSEncryptor) EncryptFile(ctx context.Context, filePath string) er
 	}
 
 	// Store encrypted content (in real SOPS, this would be encrypted)
-	// For testing, we just store the plaintext
-	// Always update the cache to handle file renames
+	// For testing, we just store the plaintext and expose metadata separately.
+	// Always update the cache to handle file renames. Recipient state is kept
+	// on the mock rather than keyed by filePath because the registry encrypts a
+	// temporary file before renaming it to its final path.
 	m.mu.Lock()
 	m.cacheLocked(filePath, content)
+	m.encryptionRecipients = append([]string(nil), config.AgeKeys...)
 	m.mu.Unlock()
 
 	return nil
 }
 
+func (m *mockSOPSEncryptor) GetEncryptedContent(filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		m.mu.Lock()
+		cached, ok := m.encryptedFiles[filePath]
+		m.mu.Unlock()
+		if !ok {
+			return "", err
+		}
+		content = cached
+	}
+
+	m.mu.Lock()
+	recipients := append([]string(nil), m.encryptionRecipients...)
+	m.mu.Unlock()
+	if len(recipients) == 0 {
+		return string(content), nil
+	}
+
+	var metadata strings.Builder
+	metadata.WriteString("sops:\n  age:\n")
+	for _, recipient := range recipients {
+		fmt.Fprintf(&metadata, "    - recipient: %q\n", recipient)
+	}
+	return metadata.String(), nil
+}
 func (m *mockSOPSEncryptor) DecryptFile(ctx context.Context, filePath string) ([]byte, error) {
 	if m.decryptError != nil {
-		return nil, m.decryptError
 	}
 
 	// Always try reading from disk first to handle file renames
@@ -303,6 +335,15 @@ func TestUpdateKeyStatus(t *testing.T) {
 	err := registry.RegisterKey(ctx, entry)
 	require.NoError(t, err)
 
+	// Keep an independent active Age recipient so lifecycle tests can verify
+	// that archived/revoked entries are removed from the encryption envelope.
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster:     "envelope-keeper",
+		KeyType:     KeyTypeAge,
+		Fingerprint: "age1keeper",
+		PublicKey:   "age1keeper",
+	}))
+
 	t.Run("update to archived", func(t *testing.T) {
 		err := registry.UpdateKeyStatus(ctx, "test-cluster", KeyTypeAge, KeyStatusArchived)
 		require.NoError(t, err)
@@ -360,6 +401,12 @@ func TestUpdateKey(t *testing.T) {
 		Status:      KeyStatusActive,
 		UserEmail:   "alice@example.com",
 	}
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster:     "envelope-keeper",
+		KeyType:     KeyTypeAge,
+		Fingerprint: "age1keeper",
+		PublicKey:   "age1keeper",
+	}))
 	err := registry.RegisterKey(ctx, entry)
 	require.NoError(t, err)
 
@@ -574,9 +621,21 @@ func TestRebuildFromFiles(t *testing.T) {
 		assert.Equal(t, KeyStatusActive, sshKey.Status)
 	})
 
-	t.Run("rebuild with non-existent directory", func(t *testing.T) {
-		err := registry.RebuildFromFiles(ctx, filepath.Join(tempDir, "non-existent"))
-		require.NoError(t, err) // Should not error, just create empty registry
+	t.Run("rebuild with non-existent directory preserves the existing registry", func(t *testing.T) {
+		before, err := os.ReadFile(registry.registryPath)
+		require.NoError(t, err)
+
+		err = registry.RebuildFromFiles(ctx, filepath.Join(tempDir, "non-existent"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no active Age recipients")
+
+		after, err := os.ReadFile(registry.registryPath)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+
+		encryptor.mu.Lock()
+		assert.Equal(t, []string{"age1test123"}, encryptor.encryptionRecipients)
+		encryptor.mu.Unlock()
 	})
 
 	t.Run("rebuild with multiple keys per cluster type", func(t *testing.T) {
@@ -721,4 +780,126 @@ func TestRegistryThreadSafety(t *testing.T) {
 			<-done
 		}
 	})
+}
+
+func TestDefaultKeyRegistryConcurrentInstances(t *testing.T) {
+	dir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	first := NewDefaultKeyRegistry(dir, newMockSOPSEncryptor(), logger)
+	second := NewDefaultKeyRegistry(dir, newMockSOPSEncryptor(), logger)
+	ctx := context.Background()
+	errs := make(chan error, 2)
+	go func() {
+		errs <- first.RegisterKey(ctx, KeyEntry{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-one", PublicKey: "age-one"})
+	}()
+	go func() {
+		errs <- second.RegisterKey(ctx, KeyEntry{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-two", PublicKey: "age-two"})
+	}()
+	for i := 0; i < 2; i++ {
+		require.NoError(t, <-errs)
+	}
+	keys, err := first.ListKeys(ctx, "cluster")
+	require.NoError(t, err)
+	require.Len(t, keys, 2)
+}
+
+func TestRegistryUsesOnlyActiveAgeRecipients(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	encryptor := newMockSOPSEncryptor()
+	registry := NewDefaultKeyRegistry(dir, encryptor, slog.Default())
+
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-old", PublicKey: "age-old"}))
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-new", PublicKey: "age-new"}))
+	encryptor.mu.Lock()
+	recipients := append([]string(nil), encryptor.encryptionRecipients...)
+	encryptor.mu.Unlock()
+	assert.Equal(t, []string{"age-old", "age-new"}, recipients)
+
+	require.NoError(t, registry.UpdateKey(ctx, KeyEntry{
+		Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-old", Status: KeyStatusArchived,
+	}))
+	encryptor.mu.Lock()
+	recipients = append([]string(nil), encryptor.encryptionRecipients...)
+	encryptor.mu.Unlock()
+	assert.Equal(t, []string{"age-new"}, recipients)
+
+	keys, err := registry.ListKeys(ctx, "cluster")
+	require.NoError(t, err)
+	for _, key := range keys {
+		if key.Status != KeyStatusActive {
+			assert.NotContains(t, recipients, key.PublicKey)
+		}
+	}
+}
+
+func TestUpdateKeysIsAllOrNothing(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	registry := NewDefaultKeyRegistry(dir, newMockSOPSEncryptor(), slog.Default())
+	for _, fingerprint := range []string{"age-a", "age-b"} {
+		require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+			Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: fingerprint, PublicKey: fingerprint,
+		}))
+	}
+	before, err := os.ReadFile(registry.registryPath)
+	require.NoError(t, err)
+
+	err = registry.UpdateKeys(ctx, []KeyEntry{
+		{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "age-a", Status: KeyStatusRevoked},
+		{Cluster: "cluster", KeyType: KeyTypeAge, Fingerprint: "missing", Status: KeyStatusRevoked},
+	})
+	require.Error(t, err)
+	after, err := os.ReadFile(registry.registryPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+
+	keys, err := registry.ListKeys(ctx, "cluster")
+	require.NoError(t, err)
+	for _, key := range keys {
+		assert.Equal(t, KeyStatusActive, key.Status)
+	}
+}
+
+func TestRegistryPrimaryReplacementTransactions(t *testing.T) {
+	ctx := context.Background()
+	registry := NewDefaultKeyRegistry(t.TempDir(), newMockSOPSEncryptor(), slog.Default())
+
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: "age-cluster", KeyType: KeyTypeAge, Fingerprint: "age-old", PublicKey: "age-old", Primary: true,
+	}))
+	require.NoError(t, registry.ReplacePrimary(ctx, "age-old", KeyEntry{
+		Cluster: "age-cluster", KeyType: KeyTypeAge, Fingerprint: "age-new", PublicKey: "age-new",
+	}))
+	ageKeys, err := registry.ListKeys(ctx, "age-cluster")
+	require.NoError(t, err)
+	for _, key := range ageKeys {
+		if key.Fingerprint == "age-old" {
+			assert.Equal(t, KeyStatusActive, key.Status)
+			assert.False(t, key.Primary)
+		}
+		if key.Fingerprint == "age-new" {
+			assert.Equal(t, KeyStatusActive, key.Status)
+			assert.True(t, key.Primary)
+		}
+	}
+
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: "ssh-cluster", KeyType: KeyTypeSSH, Fingerprint: "ssh-old", PublicKey: "ssh-old", Primary: true,
+	}))
+	require.NoError(t, registry.ReplacePrimaryAndArchive(ctx, "ssh-old", KeyEntry{
+		Cluster: "ssh-cluster", KeyType: KeyTypeSSH, Fingerprint: "ssh-new", PublicKey: "ssh-new",
+	}))
+	sshKeys, err := registry.ListKeys(ctx, "ssh-cluster")
+	require.NoError(t, err)
+	for _, key := range sshKeys {
+		if key.Fingerprint == "ssh-old" {
+			assert.Equal(t, KeyStatusArchived, key.Status)
+			assert.False(t, key.Primary)
+		}
+		if key.Fingerprint == "ssh-new" {
+			assert.Equal(t, KeyStatusActive, key.Status)
+			assert.True(t, key.Primary)
+		}
+	}
 }

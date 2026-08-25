@@ -18,10 +18,14 @@ package secrets
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -287,4 +291,289 @@ func TestHasSecretsChangedEdgeCases(t *testing.T) {
 		// Should be false because both convert to "123" as strings
 		assert.False(t, changed)
 	})
+}
+
+func TestReconcileArtifactStateRejectsUnsafeOwnedPaths(t *testing.T) {
+	manager, tmpDir, cleanup := setupTestManager(t)
+	defer cleanup()
+	overlay := filepath.Join(tmpDir, "overlay")
+	require.NoError(t, os.MkdirAll(filepath.Join(overlay, "services", "old"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(overlay, "services", "old", "secret.yaml"), []byte("owned"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(overlay, "services", "user"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(overlay, "services", "user", "secret.yaml"), []byte("user"), 0o600))
+	state := artifactState{Paths: []string{"services/old/secret.yaml", "../outside/secret.yaml"}}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(overlay, artifactStateFilename), data, 0o600))
+
+	_, err = manager.loadArtifactState(overlay)
+	require.ErrorContains(t, err, "invalid path")
+	assert.FileExists(t, filepath.Join(overlay, "services", "old", "secret.yaml"))
+	assert.FileExists(t, filepath.Join(overlay, "services", "user", "secret.yaml"))
+}
+
+func TestReconcileArtifactStateFilteredSyncPreservesOtherService(t *testing.T) {
+	manager, tmpDir, cleanup := setupTestManager(t)
+	defer cleanup()
+	overlay := filepath.Join(tmpDir, "overlay")
+	for _, service := range []string{"one", "two"} {
+		path := filepath.Join(overlay, "services", service, "secret.yaml")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(service), 0o600))
+	}
+	result := &SyncResult{}
+	manager.reconcileArtifactState(overlay, map[string]bool{
+		"services/one/secret.yaml": true,
+		"services/two/secret.yaml": true,
+	}, nil, []string{"one"}, map[string]bool{}, result, false)
+	require.Empty(t, result.Errors)
+	assert.NoFileExists(t, filepath.Join(overlay, "services", "one", "secret.yaml"))
+	assert.FileExists(t, filepath.Join(overlay, "services", "two", "secret.yaml"))
+}
+
+func TestReconcileSuccessfulChangesRetainsStaleRecordsAfterSiblingError(t *testing.T) {
+	manager, tmpDir, cleanup := setupTestManager(t)
+	defer cleanup()
+	overlay := filepath.Join(tmpDir, "overlay")
+	stalePath := filepath.Join(overlay, "services", "stale", "secret.yaml")
+	createdPath := filepath.Join(overlay, "services", "created", "secret.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stalePath), 0o755))
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o640))
+	staleRecord := secretartifacts.OwnershipArtifact{Path: "services/stale/secret.yaml", Owners: []string{"stale"}, Hash: secretartifacts.HashBytes([]byte("stale"))}
+	createdRecord := secretartifacts.OwnershipArtifact{Path: "services/created/secret.yaml", Owners: []string{"created"}, Hash: secretartifacts.HashBytes([]byte("created"))}
+	require.NoError(t, os.MkdirAll(filepath.Dir(createdPath), 0o755))
+	require.NoError(t, os.WriteFile(createdPath, []byte("created"), 0o600))
+	manager.ownershipStateWriter = testOwnershipStateWriter
+	journal := &secretMutationJournal{}
+	journal.record(secretFileSnapshot{path: createdPath}, createdPath, createdRecord.Hash, false)
+	result := &SyncResult{Errors: []SyncError{{FilePath: "sibling", Error: errors.New("sibling failed")}}}
+	manager.reconcileArtifactStateWithRecordsAndJournal(
+		overlay,
+		map[string]secretartifacts.OwnershipArtifact{staleRecord.Path: staleRecord},
+		[]secretartifacts.Artifact{{Path: createdRecord.Path, LogicalService: "created", TargetService: "created"}},
+		nil,
+		map[string]secretartifacts.OwnershipArtifact{createdRecord.Path: createdRecord},
+		result,
+		false,
+		journal,
+	)
+	require.Len(t, result.Errors, 1)
+	assert.FileExists(t, stalePath)
+	assert.FileExists(t, createdPath)
+	state, _, err := secretartifacts.LoadOwnershipState(overlay)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{staleRecord.Path, createdRecord.Path}, ownershipPaths(state))
+
+	previous := state.ByPath()
+	retry := &SyncResult{}
+	manager.reconcileArtifactStateWithRecordsAndJournal(overlay, previous, []secretartifacts.Artifact{{Path: createdRecord.Path, LogicalService: "created", TargetService: "created"}}, nil, nil, retry, false, &secretMutationJournal{})
+	require.Empty(t, retry.Errors)
+	assert.NoFileExists(t, stalePath)
+	assert.FileExists(t, createdPath)
+}
+
+func TestReconcileStateWriteFailureRollsBackAllMutationsAndRetry(t *testing.T) {
+	manager, tmpDir, cleanup := setupTestManager(t)
+	defer cleanup()
+	overlay := filepath.Join(tmpDir, "overlay")
+	createdPath := filepath.Join(overlay, "services", "created", "secret.yaml")
+	updatedPath := filepath.Join(overlay, "services", "updated", "secret.yaml")
+	stalePath := filepath.Join(overlay, "services", "stale", "secret.yaml")
+	for _, path := range []string{createdPath, updatedPath, stalePath} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	}
+	require.NoError(t, os.WriteFile(updatedPath, []byte("old updated"), 0o640))
+	require.NoError(t, os.WriteFile(stalePath, []byte("old stale"), 0o600))
+	updatedRecord := secretartifacts.OwnershipArtifact{Path: "services/updated/secret.yaml", Owners: []string{"updated"}, Hash: secretartifacts.HashBytes([]byte("new updated"))}
+	staleRecord := secretartifacts.OwnershipArtifact{Path: "services/stale/secret.yaml", Owners: []string{"stale"}, Hash: secretartifacts.HashBytes([]byte("old stale"))}
+	createdRecord := secretartifacts.OwnershipArtifact{Path: "services/created/secret.yaml", Owners: []string{"created"}, Hash: secretartifacts.HashBytes([]byte("new created"))}
+	previous := map[string]secretartifacts.OwnershipArtifact{updatedRecord.Path: {Path: updatedRecord.Path, Owners: updatedRecord.Owners, Hash: secretartifacts.HashBytes([]byte("old updated"))}, staleRecord.Path: staleRecord}
+	oldState := secretartifacts.OwnershipState{Version: secretartifacts.OwnershipStateVersion}
+	for _, record := range previous {
+		oldState.Artifacts = append(oldState.Artifacts, record)
+	}
+	require.NoError(t, testOwnershipStateWriter(overlay, oldState))
+	oldStateBytes, err := os.ReadFile(filepath.Join(overlay, artifactStateFilename))
+	require.NoError(t, err)
+
+	journal := &secretMutationJournal{}
+	createdBefore, err := snapshotSecretFile(createdPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(createdPath, []byte("new created"), 0o600))
+	journal.record(createdBefore, createdPath, createdRecord.Hash, false)
+	updatedBefore, err := snapshotSecretFile(updatedPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(updatedPath, []byte("new updated"), 0o644))
+	journal.record(updatedBefore, updatedPath, updatedRecord.Hash, false)
+
+	result := &SyncResult{
+		Created:   []string{createdPath},
+		Updated:   []string{updatedPath},
+		Unchanged: []string{"unchanged"},
+	}
+	manager.ownershipStateWriter = func(string, secretartifacts.OwnershipState) error { return errors.New("state write failed") }
+	manager.reconcileArtifactStateWithRecordsAndJournal(
+		overlay,
+		previous,
+		[]secretartifacts.Artifact{{Path: createdRecord.Path}, {Path: updatedRecord.Path}},
+		nil,
+		map[string]secretartifacts.OwnershipArtifact{createdRecord.Path: createdRecord, updatedRecord.Path: updatedRecord},
+		result,
+		false,
+		journal,
+	)
+	require.NotEmpty(t, result.Errors)
+	assert.Empty(t, result.Created)
+	assert.Empty(t, result.Updated)
+	assert.Equal(t, []string{"unchanged"}, result.Unchanged)
+	assert.NoFileExists(t, createdPath)
+	updatedData, err := os.ReadFile(updatedPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("old updated"), updatedData)
+	updatedInfo, err := os.Stat(updatedPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), updatedInfo.Mode().Perm())
+	staleData, err := os.ReadFile(stalePath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("old stale"), staleData)
+	stateBytes, err := os.ReadFile(filepath.Join(overlay, artifactStateFilename))
+	require.NoError(t, err)
+	assert.Equal(t, oldStateBytes, stateBytes)
+
+	// A retry can write the artifacts again, prune the stale artifact, and commit state.
+	require.NoError(t, os.WriteFile(createdPath, []byte("new created"), 0o600))
+	require.NoError(t, os.WriteFile(updatedPath, []byte("new updated"), 0o644))
+	retryJournal := &secretMutationJournal{}
+	retryCreatedBefore := secretFileSnapshot{path: createdPath}
+	retryJournal.record(retryCreatedBefore, createdPath, createdRecord.Hash, false)
+	retryUpdatedBefore, err := snapshotSecretFile(updatedPath)
+	require.NoError(t, err)
+	retryJournal.record(retryUpdatedBefore, updatedPath, updatedRecord.Hash, false)
+	manager.ownershipStateWriter = testOwnershipStateWriter
+	retry := &SyncResult{}
+	manager.reconcileArtifactStateWithRecordsAndJournal(overlay, previous, []secretartifacts.Artifact{{Path: createdRecord.Path}, {Path: updatedRecord.Path}}, nil, map[string]secretartifacts.OwnershipArtifact{createdRecord.Path: createdRecord, updatedRecord.Path: updatedRecord}, retry, false, retryJournal)
+	require.Empty(t, retry.Errors)
+	assert.NoFileExists(t, stalePath)
+	state, _, err := secretartifacts.LoadOwnershipState(overlay)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{createdRecord.Path, updatedRecord.Path}, ownershipPaths(state))
+}
+
+func TestSyncSecretsSerializesConcurrentTransactions(t *testing.T) {
+	manager, tmpDir, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	cluster := "concurrent-sync"
+	repoDir := filepath.Join(tmpDir, "repo")
+	keyPath := filepath.Join(tmpDir, ".config", "sops", "age", "test-key.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0o755))
+	require.NoError(t, os.WriteFile(keyPath, []byte("# public key: age1test-key\n"), 0o600))
+	configData := `schema_version: "2.0"
+opencenter:
+  cluster:
+    cluster_name: ` + cluster + `
+  gitops:
+    git_dir: ` + repoDir + `
+secrets:
+  sops_age_key_file: ` + keyPath + `
+  cert_manager:
+    aws_access_key: cert-manager
+  keycloak:
+    client_secret: keycloak
+`
+	writeManagerTestConfig(t, cluster, configData)
+	overlay := filepath.Join(repoDir, "applications", "overlays", cluster)
+	paths := map[string]string{
+		"services/cert-manager/secret.yaml": "cert-manager manifest",
+		"services/keycloak/secret.yaml":     "keycloak manifest",
+	}
+	state := artifactState{Version: secretartifacts.OwnershipStateVersion}
+	for relative, contents := range paths {
+		fullPath := filepath.Join(overlay, filepath.FromSlash(relative))
+		require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(contents), 0o600))
+		state.Artifacts = append(state.Artifacts, secretartifacts.OwnershipArtifact{
+			Path: relative,
+			Hash: secretartifacts.HashBytes([]byte(contents)),
+		})
+	}
+	require.NoError(t, testOwnershipStateWriter(overlay, state))
+
+	managerB := NewDefaultSecretsManager(manager.configLoader, manager.sopsManager, nil, manager.logger)
+	enteredA := make(chan struct{})
+	releaseA := make(chan struct{})
+	enteredB := make(chan struct{})
+	manager.ownershipStateWriter = func(root string, state secretartifacts.OwnershipState) error {
+		close(enteredA)
+		<-releaseA
+		return testOwnershipStateWriter(root, state)
+	}
+	managerB.ownershipStateWriter = func(root string, state secretartifacts.OwnershipState) error {
+		close(enteredB)
+		return testOwnershipStateWriter(root, state)
+	}
+
+	type syncOutcome struct {
+		result *SyncResult
+		err    error
+	}
+	aDone := make(chan syncOutcome, 1)
+	go func() {
+		result, err := manager.SyncSecrets(context.Background(), SyncOptions{Cluster: cluster, Services: []string{"cert-manager"}})
+		aDone <- syncOutcome{result: result, err: err}
+	}()
+	select {
+	case <-enteredA:
+	case outcome := <-aDone:
+		require.NoError(t, outcome.err)
+		t.Fatal("manager A completed before reaching the ownership-state writer")
+	case <-time.After(time.Second):
+		t.Fatal("manager A did not reach the ownership-state writer")
+	}
+
+	bDone := make(chan syncOutcome, 1)
+	go func() {
+		result, err := managerB.SyncSecrets(context.Background(), SyncOptions{Cluster: cluster, Services: []string{"keycloak"}})
+		bDone <- syncOutcome{result: result, err: err}
+	}()
+	select {
+	case <-enteredB:
+		t.Fatal("manager B reached the ownership-state writer while manager A held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseA)
+	outcomeA := <-aDone
+	outcomeB := <-bDone
+	require.NoError(t, outcomeA.err)
+	require.NoError(t, outcomeB.err)
+	require.Empty(t, outcomeA.result.Errors)
+	require.Empty(t, outcomeB.result.Errors)
+
+	finalState, _, err := secretartifacts.LoadOwnershipState(overlay)
+	require.NoError(t, err)
+	finalByPath := finalState.ByPath()
+	for relative := range paths {
+		record, ok := finalByPath[relative]
+		require.True(t, ok, "missing final ownership record for %s", relative)
+		data, err := os.ReadFile(filepath.Join(overlay, filepath.FromSlash(relative)))
+		require.NoError(t, err)
+		assert.Equal(t, secretartifacts.HashBytes(data), record.Hash)
+	}
+}
+
+func ownershipPaths(state secretartifacts.OwnershipState) []string {
+	paths := make([]string, 0, len(state.Artifacts))
+	for _, artifact := range state.Artifacts {
+		paths = append(paths, artifact.Path)
+	}
+	return paths
+}
+
+func testOwnershipStateWriter(root string, state secretartifacts.OwnershipState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, artifactStateFilename), append(data, '\n'), 0o600)
 }

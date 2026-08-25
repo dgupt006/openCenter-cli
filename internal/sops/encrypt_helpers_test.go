@@ -29,3 +29,20 @@ func TestNeedsExplicitYAMLType(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildEncryptionArgsFilenameOverrideBeforePath(t *testing.T) {
+	args := buildEncryptionArgs("/tmp/manifest.tmp.yaml", EncryptionConfig{
+		ConfigFile:       "/overlay/.sops.yaml",
+		FilenameOverride: "/overlay/services/api/secret.yaml",
+		InPlace:          true,
+	}, nil, nil)
+	want := []string{"-e", "--config", "/overlay/.sops.yaml", "--filename-override", "/overlay/services/api/secret.yaml", "-i", "/tmp/manifest.tmp.yaml"}
+	if len(args) != len(want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("args = %#v, want %#v", args, want)
+		}
+	}
+}

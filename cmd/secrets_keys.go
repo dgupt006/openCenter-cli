@@ -34,6 +34,7 @@ for standalone clusters and GitOps deployments.`,
 	cmd.AddCommand(newSecretsKeysCheckCmd())
 	cmd.AddCommand(newSecretsKeysRevokeCmd())
 	cmd.AddCommand(newSecretsKeysReconcileCmd())
+	cmd.AddCommand(newSecretsKeysSetPrimaryCmd())
 
 	return cmd
 }

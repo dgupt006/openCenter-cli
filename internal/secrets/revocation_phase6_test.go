@@ -163,7 +163,7 @@ func TestPhase6EmergencyRevokeBypassesPrimaryGuard(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	cluster := "phase6-emergency"
-	overlayPath := writePhase6Fixture(t, tmpDir, cluster, "age1compromised", "")
+	overlayPath := writePhase6Fixture(t, tmpDir, cluster, "age1compromised,age1replacement", "")
 	registerPhase6Key(t, ctx, registry, cluster, "age1compromised", true)
 	rotator := &phase6EmergencyRotator{MockKeyRotator: &MockKeyRotator{}, registry: registry}
 	revoker := NewDefaultKeyRevoker(registry, rotator, manager, nil, nil)

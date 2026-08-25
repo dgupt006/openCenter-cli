@@ -53,10 +53,11 @@ type Encryptor interface {
 
 // EncryptionConfig represents SOPS encryption configuration
 type EncryptionConfig struct {
-	AgeKeys    []string
-	PGPKeys    []string
-	ConfigFile string
-	InPlace    bool
-	DryRun     bool
-	Verbose    bool
+	AgeKeys          []string
+	PGPKeys          []string
+	ConfigFile       string
+	FilenameOverride string
+	InPlace          bool
+	DryRun           bool
+	Verbose          bool
 }

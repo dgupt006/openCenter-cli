@@ -214,3 +214,24 @@ func TestRevokeAfterApplyPreservesPreviouslyUnregisteredRecipient(t *testing.T) 
 	assert.NotContains(t, string(data), "age1target")
 	assert.Contains(t, string(data), "age1unregistered")
 }
+
+func TestReconcileApplySelectsSoleActiveAgeKey(t *testing.T) {
+	reconciler, registry, _, _, cleanup := setupReconcileTest(t, "reconcile-singular", "age1sole")
+	defer cleanup()
+	report, err := reconciler.Reconcile(context.Background(), "reconcile-singular", true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"age1sole"}, report.Imported)
+	primary, err := registry.GetPrimaryKey(context.Background(), "reconcile-singular", KeyTypeAge)
+	require.NoError(t, err)
+	assert.Equal(t, "age1sole", primary.Fingerprint)
+}
+
+func TestReconcileApplyLeavesAmbiguousAgeKeysUnselected(t *testing.T) {
+	reconciler, registry, _, _, cleanup := setupReconcileTest(t, "reconcile-ambiguous", "age1one,age1two")
+	defer cleanup()
+	report, err := reconciler.Reconcile(context.Background(), "reconcile-ambiguous", true)
+	require.NoError(t, err)
+	require.Len(t, report.Imported, 2)
+	_, err = registry.GetPrimaryKey(context.Background(), "reconcile-ambiguous", KeyTypeAge)
+	require.Error(t, err)
+}

@@ -278,13 +278,25 @@ type KeyRegistry interface {
 	// Returns ErrKeyNotFound if no active primary exists.
 	GetPrimaryKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error)
 
+	// SetPrimaryKey explicitly selects an existing active key as the primary.
+	// It clears primary flags from every other key in the same cluster/type group.
+	SetPrimaryKey(ctx context.Context, cluster string, keyType KeyType, fingerprint string) error
+
 	// ReplacePrimary atomically registers a new primary and clears the predecessor's primary role.
+	// The predecessor remains active so Age rotations retain dual-key decryption.
 	ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error
 
-	// UpdateKeyStatus updates the status of a key.
-	// It targets the earliest-registered active key for the cluster and type.
-	// Prefer UpdateKey when a specific fingerprint must be changed.
-	// Returns ErrKeyNotFound if no matching key exists.
+	// ReplacePrimaryAndArchive atomically registers a new primary and archives
+	// the predecessor in the same locked load/mutate/save transaction.
+	ReplacePrimaryAndArchive(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error
+
+	// UpdateKeys applies multiple existing key updates in one locked,
+	// all-or-nothing load/mutate/save transaction.
+	UpdateKeys(ctx context.Context, entries []KeyEntry) error
+
+	// UpdateKeyStatus updates the status of a key when exactly one active key
+	// matches the cluster and type. If multiple active keys match, it returns
+	// an ambiguity error; prefer UpdateKey when a specific fingerprint must be changed.
 	UpdateKeyStatus(ctx context.Context, cluster string, keyType KeyType, status KeyStatus) error
 
 	// UpdateKey updates an existing key entry, preserving metadata fields that callers modify.

@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -123,13 +122,9 @@ func (r *DefaultKeyReconciler) Reconcile(ctx context.Context, cluster string, ap
 		if key.Fingerprint != "" {
 			fingerprintCounts[key.Fingerprint]++
 		}
-		recipient := key.PublicKey
-		if recipient == "" {
-			recipient = key.Fingerprint
-		}
-		recipient = strings.TrimSpace(recipient)
-		if recipient == "" {
-			continue
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return report, fmt.Errorf("invalid Age key in registry: %w", err)
 		}
 		if key.Status == KeyStatusActive {
 			activeRecipients[recipient] = struct{}{}
@@ -164,12 +159,9 @@ func (r *DefaultKeyReconciler) Reconcile(ctx context.Context, cluster string, ap
 		if key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
 			continue
 		}
-		recipient := strings.TrimSpace(key.PublicKey)
-		if recipient == "" {
-			recipient = strings.TrimSpace(key.Fingerprint)
-		}
-		if recipient == "" {
-			continue
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return report, fmt.Errorf("invalid active Age key in registry: %w", err)
 		}
 		if _, ok := sopsSet[recipient]; !ok && !reconcileContainsString(report.OnlyInRegistry, recipient) {
 			report.OnlyInRegistry = append(report.OnlyInRegistry, recipient)
@@ -178,8 +170,7 @@ func (r *DefaultKeyReconciler) Reconcile(ctx context.Context, cluster string, ap
 
 	if apply {
 		// Reconciliation deliberately imports only missing registry metadata. It
-		// does not delete registry entries or rewrite .sops.yaml, because either
-		// action could remove a recipient that still protects encrypted data.
+		// does not delete registry entries or rewrite .sops.yaml.
 		for _, recipient := range report.OnlyInSOPSConfig {
 			if err := r.registry.RegisterKey(ctx, KeyEntry{
 				Cluster:     cluster,
@@ -192,6 +183,30 @@ func (r *DefaultKeyReconciler) Reconcile(ctx context.Context, cluster string, ap
 				return report, fmt.Errorf("failed to import SOPS recipient %s: %w", recipient, err)
 			}
 			report.Imported = append(report.Imported, recipient)
+		}
+		if len(report.Imported) > 0 {
+			keys, err = r.registry.ListKeys(ctx, cluster)
+			if err != nil {
+				return report, fmt.Errorf("failed to reload keys after imports: %w", err)
+			}
+		}
+		activeCount := 0
+		primaryCount := 0
+		var soleCandidate KeyEntry
+		for _, key := range keys {
+			if key.Cluster != cluster || key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
+				continue
+			}
+			activeCount++
+			if key.Primary {
+				primaryCount++
+			}
+			soleCandidate = key
+		}
+		if activeCount == 1 && primaryCount == 0 {
+			if err := r.registry.SetPrimaryKey(ctx, cluster, KeyTypeAge, soleCandidate.Fingerprint); err != nil {
+				return report, fmt.Errorf("failed to select sole active Age key as primary: %w", err)
+			}
 		}
 	}
 

@@ -63,6 +63,7 @@ func TestRotateAgeKeyDualKeyConfiguration(t *testing.T) {
 			PublicKey:   "age1oldkey123",
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
+			Primary:     true,
 		})
 		require.NoError(t, err)
 
@@ -289,7 +290,7 @@ secrets:
 		require.NoError(t, err)
 
 		// Update to single-key mode
-		err = rotator.updateSOPSConfigSingleKey(ctx, cluster, "age1newkey456")
+		err = rotator.updateSOPSConfigSingleKey(ctx, cluster, "age1newkey456", "age1oldkey123")
 		require.NoError(t, err)
 
 		// Verify .sops.yaml was updated with only the new key
@@ -338,6 +339,7 @@ func TestRotateAgeKeyRollback(t *testing.T) {
 			PublicKey:   "age1initial",
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
+			Primary:     true,
 		})
 		require.NoError(t, err)
 
@@ -623,7 +625,8 @@ creation_rules:
 	revokedKeys := []KeyEntry{{
 		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: userKey, PublicKey: userKey,
 	}}
-	remainingKeys := revoker.remainingAuthorizedRecipients(cluster, allKeys, revokedKeys)
+	remainingKeys, err := revoker.remainingAuthorizedRecipients(cluster, allKeys, revokedKeys)
+	require.NoError(t, err)
 	remaining, err := revoker.removeKeysFromSOPSConfig(ctx, cluster, revokedKeys, allKeys, remainingKeys)
 	require.NoError(t, err)
 	assert.Equal(t, []string{oldKey, newKey}, remaining)
@@ -632,7 +635,7 @@ creation_rules:
 	assert.Contains(t, string(data), "top_level_preserved: yes")
 	assert.Contains(t, string(data), "pgp: 0123456789ABCDEF")
 	assert.Contains(t, string(data), "pgp: FEDCBA9876543210")
-	assert.Contains(t, string(data), newKey+","+oldKey)
+	assert.Contains(t, string(data), newKey)
 	assert.NotContains(t, string(data), userKey)
 }
 

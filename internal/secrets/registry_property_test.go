@@ -153,8 +153,26 @@ func TestProperty_KeyRegistryCompleteness(t *testing.T) {
 				return false
 			}
 
+			// Keep an independent active Age recipient so archiving the old
+			// key can still persist the registry without an archived fallback.
+			keeper := KeyEntry{
+				Cluster:     cluster,
+				KeyType:     KeyTypeAge,
+				Fingerprint: "keeper-" + cluster,
+				PublicKey:   "keeper-" + cluster,
+			}
+			if keeper.Fingerprint == fingerprint1 || keeper.Fingerprint == fingerprint2 {
+				return true
+			}
+			if err := registry.RegisterKey(ctx, keeper); err != nil {
+				t.Logf("Failed to register keeper key: %v", err)
+				return false
+			}
+
 			// Simulate rotation: archive old key
-			err = registry.UpdateKeyStatus(ctx, cluster, KeyTypeAge, KeyStatusArchived)
+			err = registry.UpdateKey(ctx, KeyEntry{
+				Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: fingerprint1, Status: KeyStatusArchived,
+			})
 			if err != nil {
 				t.Logf("Failed to archive old key: %v", err)
 				return false
@@ -167,6 +185,7 @@ func TestProperty_KeyRegistryCompleteness(t *testing.T) {
 				Fingerprint: fingerprint2,
 				PublicKey:   publicKey2,
 				RotatedFrom: fingerprint1,
+				Primary:     true,
 			}
 			err = registry.RegisterKey(ctx, entry2)
 			if err != nil {

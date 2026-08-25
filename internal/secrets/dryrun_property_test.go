@@ -710,6 +710,7 @@ func setupDryRunRotationTest(t *testing.T, tmpDir string, clusterName string, se
 		Fingerprint: publicKey,
 		PublicKey:   publicKey,
 		Status:      KeyStatusActive,
+		Primary:     true,
 	}
 	if err := registry.RegisterKey(ctx, keyEntry); err != nil {
 		return nil, fmt.Errorf("failed to register key: %w", err)

@@ -25,8 +25,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,18 +53,22 @@ type DefaultKeyRegistry struct {
 
 // SOPSEncryptor defines the interface for SOPS encryption/decryption operations.
 type SOPSEncryptor interface {
-	// EncryptFile encrypts a file using SOPS
-	EncryptFile(ctx context.Context, filePath string) error
+	// EncryptFile encrypts a file using explicit SOPS configuration.
+	EncryptFile(ctx context.Context, filePath string, config sops.EncryptionConfig) error
 
 	// DecryptFile decrypts a SOPS-encrypted file and returns the content
 	DecryptFile(ctx context.Context, filePath string) ([]byte, error)
+
+	// GetEncryptedContent returns the ciphertext and SOPS metadata.
+	GetEncryptedContent(filePath string) (string, error)
 }
 
 // registryData represents the structure of the key registry file.
 type registryData struct {
-	Version           string                  `yaml:"version"`
-	DefaultExpiration defaultExpirationPolicy `yaml:"default_expiration"`
-	Keys              []KeyEntry              `yaml:"keys"`
+	Version              string                  `yaml:"version"`
+	DefaultExpiration    defaultExpirationPolicy `yaml:"default_expiration"`
+	Keys                 []KeyEntry              `yaml:"keys"`
+	encryptionRecipients []string
 }
 
 // defaultExpirationPolicy defines default expiration periods for different key types.
@@ -101,6 +107,11 @@ func NewDefaultKeyRegistry(registryPath string, encryptor SOPSEncryptor, logger 
 func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
 
 	r.logger.Info("Registering key", "cluster", entry.Cluster, "type", entry.KeyType, "fingerprint", entry.Fingerprint)
 
@@ -135,9 +146,14 @@ func (r *DefaultKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) er
 		entry.Status = KeyStatusActive
 	}
 
-	if entry.Primary && entry.Status == KeyStatusActive {
-		if existing, ok := findActivePrimary(data.Keys, entry.Cluster, entry.KeyType); ok {
-			return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, existing.Fingerprint, entry.Cluster)
+	if entry.Primary && entry.Status != KeyStatusActive {
+		return fmt.Errorf("cannot register inactive %s key %s as primary", entry.KeyType, entry.Fingerprint)
+	}
+	if entry.Primary {
+		for _, existing := range data.Keys {
+			if existing.Cluster == entry.Cluster && existing.KeyType == entry.KeyType && existing.Status == KeyStatusActive && existing.Primary {
+				return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, existing.Fingerprint, entry.Cluster)
+			}
 		}
 	}
 
@@ -189,10 +205,75 @@ func (r *DefaultKeyRegistry) GetPrimaryKey(ctx context.Context, cluster string, 
 	return selectKey(data.Keys, cluster, keyType, true)
 }
 
-// ReplacePrimary atomically registers a new primary and clears the predecessor's primary role.
-func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error {
+// SetPrimaryKey selects an exact existing active key and repairs the complete primary group in one transaction.
+func (r *DefaultKeyRegistry) SetPrimaryKey(ctx context.Context, cluster string, keyType KeyType, fingerprint string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
+
+	data, err := r.loadRegistry(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load registry: %w", err)
+	}
+	candidate := -1
+	for i := range data.Keys {
+		entry := data.Keys[i]
+		if entry.Cluster == cluster && entry.KeyType == keyType && entry.Fingerprint == fingerprint {
+			if entry.Status != KeyStatusActive {
+				return fmt.Errorf("cannot set inactive %s key %s as primary", keyType, fingerprint)
+			}
+			candidate = i
+			break
+		}
+	}
+	if candidate == -1 {
+		return NewKeyNotFoundError(cluster, keyType, nil)
+	}
+	changed := false
+	for i := range data.Keys {
+		if data.Keys[i].Cluster != cluster || data.Keys[i].KeyType != keyType {
+			continue
+		}
+		want := i == candidate
+		if data.Keys[i].Primary != want {
+			data.Keys[i].Primary = want
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.saveRegistry(ctx, data); err != nil {
+		return fmt.Errorf("failed to save registry: %w", err)
+	}
+	return nil
+}
+
+// ReplacePrimary atomically registers a new primary and clears the predecessor's primary role.
+// The predecessor remains active so Age rotations retain dual-key decryption.
+func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error {
+	return r.replacePrimary(ctx, oldFingerprint, newEntry, false)
+}
+
+// ReplacePrimaryAndArchive atomically registers a new primary and archives
+// the predecessor. It is used for immediate SSH replacement, where retaining
+// the old key as an active recipient would be incorrect.
+func (r *DefaultKeyRegistry) ReplacePrimaryAndArchive(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error {
+	return r.replacePrimary(ctx, oldFingerprint, newEntry, true)
+}
+
+func (r *DefaultKeyRegistry) replacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry, archiveOld bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
 
 	data, err := r.loadRegistry(ctx)
 	if err != nil {
@@ -216,8 +297,15 @@ func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint 
 		return NewKeyNotFoundError(newEntry.Cluster, newEntry.KeyType, nil)
 	}
 
-	if existing, ok := findActivePrimary(data.Keys, newEntry.Cluster, newEntry.KeyType); ok && existing.Fingerprint != oldFingerprint {
-		return fmt.Errorf("active primary %s key %s already exists for cluster %s", newEntry.KeyType, existing.Fingerprint, newEntry.Cluster)
+	old := data.Keys[oldIndex]
+	if old.Status != KeyStatusActive || !old.Primary {
+		return fmt.Errorf("old %s key %s is not the current active primary for cluster %s", newEntry.KeyType, oldFingerprint, newEntry.Cluster)
+	}
+	if newEntry.Status == "" {
+		newEntry.Status = KeyStatusActive
+	}
+	if newEntry.Status != KeyStatusActive {
+		return fmt.Errorf("replacement %s key %s must be active", newEntry.KeyType, newEntry.Fingerprint)
 	}
 
 	if newEntry.CreatedAt.IsZero() {
@@ -226,11 +314,16 @@ func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint 
 	if newEntry.ExpiresAt.IsZero() {
 		newEntry.ExpiresAt = r.calculateExpiration(newEntry.CreatedAt, newEntry.KeyType, data.DefaultExpiration)
 	}
-	if newEntry.Status == "" {
-		newEntry.Status = KeyStatusActive
-	}
 	newEntry.Primary = true
-	data.Keys[oldIndex].Primary = false
+	for i := range data.Keys {
+		if data.Keys[i].Cluster == newEntry.Cluster && data.Keys[i].KeyType == newEntry.KeyType {
+			data.Keys[i].Primary = false
+		}
+	}
+	if archiveOld {
+		data.Keys[oldIndex].Status = KeyStatusArchived
+		data.Keys[oldIndex].Primary = false
+	}
 	data.Keys = append(data.Keys, newEntry)
 
 	if err := r.saveRegistry(ctx, data); err != nil {
@@ -244,6 +337,11 @@ func (r *DefaultKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint 
 func (r *DefaultKeyRegistry) UpdateKeyStatus(ctx context.Context, cluster string, keyType KeyType, status KeyStatus) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
 
 	r.logger.Info("Updating key status", "cluster", cluster, "type", keyType, "status", status)
 
@@ -252,26 +350,27 @@ func (r *DefaultKeyRegistry) UpdateKeyStatus(ctx context.Context, cluster string
 		return fmt.Errorf("failed to load registry: %w", err)
 	}
 
-	// Find and update the key
-	found := false
+	// The legacy API has no fingerprint argument. It is safe only for an
+	// unambiguous active group; callers must use UpdateKey for multiple keys.
+	matches := make([]int, 0, 1)
 	for i := range data.Keys {
-		if data.Keys[i].Cluster == cluster &&
-			data.Keys[i].KeyType == keyType &&
-			data.Keys[i].Status == KeyStatusActive {
-			data.Keys[i].Status = status
-
-			// Set revocation timestamp if revoking
-			if status == KeyStatusRevoked && data.Keys[i].RevokedAt.IsZero() {
-				data.Keys[i].RevokedAt = time.Now()
-			}
-
-			found = true
-			break
+		if data.Keys[i].Cluster == cluster && data.Keys[i].KeyType == keyType && data.Keys[i].Status == KeyStatusActive {
+			matches = append(matches, i)
 		}
 	}
-
-	if !found {
+	if len(matches) == 0 {
 		return NewKeyNotFoundError(cluster, keyType, nil)
+	}
+	if len(matches) > 1 {
+		return fmt.Errorf("multiple active %s keys exist for cluster %s; use fingerprint-targeted UpdateKey", keyType, cluster)
+	}
+	index := matches[0]
+	data.Keys[index].Status = status
+	if status != KeyStatusActive {
+		data.Keys[index].Primary = false
+	}
+	if status == KeyStatusRevoked && data.Keys[index].RevokedAt.IsZero() {
+		data.Keys[index].RevokedAt = time.Now()
 	}
 
 	// Save the registry
@@ -288,6 +387,11 @@ func (r *DefaultKeyRegistry) UpdateKeyStatus(ctx context.Context, cluster string
 func (r *DefaultKeyRegistry) UpdateKey(ctx context.Context, entry KeyEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
 
 	r.logger.Info("Updating key entry", "cluster", entry.Cluster, "type", entry.KeyType, "fingerprint", entry.Fingerprint)
 
@@ -311,7 +415,14 @@ func (r *DefaultKeyRegistry) UpdateKey(ctx context.Context, entry KeyEntry) erro
 		return NewKeyNotFoundError(entry.Cluster, entry.KeyType, nil)
 	}
 
-	data.Keys[matchIndex] = mergeKeyEntry(data.Keys[matchIndex], entry)
+	updated := mergeKeyEntry(data.Keys[matchIndex], entry)
+	if updated.Primary && updated.Status != KeyStatusActive {
+		if entry.Primary {
+			return fmt.Errorf("cannot set inactive %s key %s as primary", entry.KeyType, entry.Fingerprint)
+		}
+		updated.Primary = false
+	}
+	data.Keys[matchIndex] = updated
 	if data.Keys[matchIndex].Primary && data.Keys[matchIndex].Status == KeyStatusActive {
 		for i, existing := range data.Keys {
 			if i != matchIndex && existing.Cluster == entry.Cluster && existing.KeyType == entry.KeyType && existing.Status == KeyStatusActive && existing.Primary {
@@ -325,6 +436,78 @@ func (r *DefaultKeyRegistry) UpdateKey(ctx context.Context, entry KeyEntry) erro
 	}
 
 	r.logger.Info("Successfully updated key entry", "cluster", entry.Cluster, "type", entry.KeyType, "fingerprint", entry.Fingerprint)
+	return nil
+}
+
+// UpdateKeys applies multiple existing key updates in one locked transaction.
+// All entries are validated and applied in memory before a single registry save,
+// so a failed match or validation leaves the persisted registry unchanged.
+func (r *DefaultKeyRegistry) UpdateKeys(ctx context.Context, entries []KeyEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
+
+	if len(entries) == 0 {
+		return nil
+	}
+	data, err := r.loadRegistry(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load registry: %w", err)
+	}
+
+	updated := append([]KeyEntry(nil), data.Keys...)
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		identity := entry.Cluster + "\x00" + string(entry.KeyType) + "\x00" + entry.Fingerprint
+		if _, duplicate := seen[identity]; duplicate {
+			return fmt.Errorf("duplicate key update for %s key %s in cluster %s", entry.KeyType, entry.Fingerprint, entry.Cluster)
+		}
+		seen[identity] = struct{}{}
+
+		matchIndex := -1
+		for i := range updated {
+			if updated[i].Cluster != entry.Cluster || updated[i].KeyType != entry.KeyType {
+				continue
+			}
+			if entry.Fingerprint == "" || updated[i].Fingerprint == entry.Fingerprint {
+				matchIndex = i
+				break
+			}
+		}
+		if matchIndex == -1 {
+			return NewKeyNotFoundError(entry.Cluster, entry.KeyType, nil)
+		}
+
+		candidate := mergeKeyEntry(updated[matchIndex], entry)
+		if candidate.Primary && candidate.Status != KeyStatusActive {
+			return fmt.Errorf("cannot set inactive %s key %s as primary", candidate.KeyType, candidate.Fingerprint)
+		}
+		if candidate.Status == KeyStatusRevoked && candidate.RevokedAt.IsZero() {
+			candidate.RevokedAt = time.Now()
+		}
+		updated[matchIndex] = candidate
+	}
+
+	for i, entry := range updated {
+		if entry.Status != KeyStatusActive || !entry.Primary {
+			continue
+		}
+		for j := i + 1; j < len(updated); j++ {
+			other := updated[j]
+			if other.Cluster == entry.Cluster && other.KeyType == entry.KeyType && other.Status == KeyStatusActive && other.Primary {
+				return fmt.Errorf("active primary %s keys already exist for cluster %s", entry.KeyType, entry.Cluster)
+			}
+		}
+	}
+
+	data.Keys = updated
+	if err := r.saveRegistry(ctx, data); err != nil {
+		return fmt.Errorf("failed to save registry: %w", err)
+	}
 	return nil
 }
 
@@ -422,6 +605,11 @@ func (r *DefaultKeyRegistry) CheckExpiration(ctx context.Context, warnDays int) 
 func (r *DefaultKeyRegistry) RebuildFromFiles(ctx context.Context, keysDir string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registryLock, err := r.acquireRegistryLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.releaseRegistryLock(registryLock)
 
 	r.logger.Info("Rebuilding registry from key files", "keys_dir", keysDir)
 
@@ -462,7 +650,45 @@ func (r *DefaultKeyRegistry) RebuildFromFiles(ctx context.Context, keysDir strin
 
 // Private helper methods
 
-// loadRegistry loads and decrypts the registry file.
+// acquireRegistryLock obtains an adjacent OS-level lock while a mutating
+// operation performs its complete load/mutate/save transaction.
+func (r *DefaultKeyRegistry) acquireRegistryLock(ctx context.Context) (*os.File, error) {
+	dir := filepath.Dir(r.registryPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create registry directory: %w", err)
+	}
+	lockPath := r.registryPath + ".lock"
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open registry lock: %w", err)
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return file, nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			file.Close()
+			return nil, fmt.Errorf("failed to lock registry: %w", err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (r *DefaultKeyRegistry) releaseRegistryLock(file *os.File) {
+	if file == nil {
+		return
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
+}
 func (r *DefaultKeyRegistry) loadRegistry(ctx context.Context) (*registryData, error) {
 	// Check if registry file exists
 	if _, err := os.Stat(r.registryPath); os.IsNotExist(err) {
@@ -476,6 +702,20 @@ func (r *DefaultKeyRegistry) loadRegistry(ctx context.Context) (*registryData, e
 			},
 			Keys: []KeyEntry{},
 		}, nil
+	}
+
+	// Recover the exact recipients that currently protect the registry. This
+	// keeps later saves independent of the caller's cwd or .sops.yaml.
+	encryptedContent, err := r.encryptor.GetEncryptedContent(r.registryPath)
+	if err != nil {
+		return nil, NewRegistryCorruptedError(r.registryPath, fmt.Errorf("failed to read encrypted registry: %w", err))
+	}
+	var recipients []string
+	if strings.Contains(encryptedContent, "sops:") {
+		recipients, err = extractSOPSAgeRecipients([]byte(encryptedContent))
+		if err != nil {
+			return nil, NewRegistryCorruptedError(r.registryPath, fmt.Errorf("failed to read SOPS recipients: %w", err))
+		}
 	}
 
 	// Decrypt the registry file
@@ -494,8 +734,8 @@ func (r *DefaultKeyRegistry) loadRegistry(ctx context.Context) (*registryData, e
 	if data.Version != "1.0" {
 		return nil, NewRegistryCorruptedError(r.registryPath, fmt.Errorf("unsupported registry version: %s", data.Version))
 	}
+	data.encryptionRecipients = recipients
 
-	normalizeRegistryPrimaries(&data)
 	return &data, nil
 }
 
@@ -513,15 +753,40 @@ func (r *DefaultKeyRegistry) saveRegistry(ctx context.Context, data *registryDat
 		return fmt.Errorf("failed to marshal registry: %w", err)
 	}
 
-	// Write to temporary file first
-	tempPath := r.registryPath + ".tmp"
-	if err := os.WriteFile(tempPath, content, 0o600); err != nil {
+	// Write to a unique temporary file first.
+	tempFile, err := os.CreateTemp(dir, "."+filepath.Base(r.registryPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary registry: %w", err)
+	}
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
+	if err := tempFile.Chmod(0o600); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("failed to set temporary registry permissions: %w", err)
+	}
+	if _, err := tempFile.Write(content); err != nil {
+		tempFile.Close()
 		return fmt.Errorf("failed to write temporary registry: %w", err)
 	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary registry: %w", err)
+	}
 
-	// Encrypt the file
-	if err := r.encryptor.EncryptFile(ctx, tempPath); err != nil {
-		os.Remove(tempPath)
+	// Always derive recipients from the post-mutation registry state. Envelope
+	// recipients may include revoked or archived keys and must never be carried
+	// forward. An empty active set is rejected before the old registry is
+	// replaced, which is especially important during rebuilds.
+	recipients, err := activeAgeRecipients(data.Keys)
+	if err != nil {
+		return err
+	}
+	if len(recipients) == 0 {
+		return fmt.Errorf("cannot encrypt registry: no active Age recipients")
+	}
+	if err := r.encryptor.EncryptFile(ctx, tempPath, sops.EncryptionConfig{
+		AgeKeys: recipients,
+		InPlace: true,
+	}); err != nil {
 		return fmt.Errorf("failed to encrypt registry: %w", err)
 	}
 
@@ -534,7 +799,112 @@ func (r *DefaultKeyRegistry) saveRegistry(ctx context.Context, data *registryDat
 	return nil
 }
 
-// selectKey applies primary selection semantics to registry entries.
+func extractSOPSAgeRecipients(data []byte) ([]string, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) == 0 {
+		return nil, nil
+	}
+	root := document.Content[0]
+	var sopsNode *yaml.Node
+	if root.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("SOPS document is not a mapping")
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "sops" {
+			sopsNode = root.Content[i+1]
+			break
+		}
+	}
+	if sopsNode == nil || sopsNode.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("SOPS metadata is missing")
+	}
+	var ageNode *yaml.Node
+	for i := 0; i+1 < len(sopsNode.Content); i += 2 {
+		if sopsNode.Content[i].Value == "age" {
+			ageNode = sopsNode.Content[i+1]
+			break
+		}
+	}
+	if ageNode == nil || ageNode.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("SOPS age metadata is missing")
+	}
+	result := make([]string, 0, len(ageNode.Content))
+	seen := make(map[string]struct{})
+	for _, item := range ageNode.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		for i := 0; i+1 < len(item.Content); i += 2 {
+			if item.Content[i].Value != "recipient" {
+				continue
+			}
+			recipient := strings.TrimSpace(item.Content[i+1].Value)
+			if recipient == "" {
+				return nil, fmt.Errorf("SOPS age recipient is empty")
+			}
+			if _, ok := seen[recipient]; !ok {
+				seen[recipient] = struct{}{}
+				result = append(result, recipient)
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("SOPS age metadata has no recipients")
+	}
+	return result, nil
+}
+
+func canonicalAgeRecipient(entry KeyEntry) (string, error) {
+	recipient := strings.TrimSpace(entry.PublicKey)
+	if recipient == "" {
+		recipient = strings.TrimSpace(entry.Fingerprint)
+	}
+	if recipient == "" {
+		return "", fmt.Errorf("Age key %q has no public key or fingerprint", entry.Fingerprint)
+	}
+	return recipient, nil
+}
+
+func activeAgeRecipients(keys []KeyEntry) ([]string, error) {
+	result := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, key := range keys {
+		if key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
+			continue
+		}
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[recipient]; !ok {
+			seen[recipient] = struct{}{}
+			result = append(result, recipient)
+		}
+	}
+	return result, nil
+}
+
+func archivedAgeRecipients(keys []KeyEntry) ([]string, error) {
+	result := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, key := range keys {
+		if key.KeyType != KeyTypeAge || key.Status != KeyStatusArchived {
+			continue
+		}
+		recipient, err := canonicalAgeRecipient(key)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[recipient]; !ok {
+			seen[recipient] = struct{}{}
+			result = append(result, recipient)
+		}
+	}
+	return result, nil
+}
 func selectKey(keys []KeyEntry, cluster string, keyType KeyType, primaryOnly bool) (*KeyEntry, error) {
 	var primaries []KeyEntry
 	for _, entry := range keys {
@@ -575,48 +945,9 @@ func findActivePrimary(keys []KeyEntry, cluster string, keyType KeyType) (KeyEnt
 	return KeyEntry{}, false
 }
 
-// normalizeRegistryPrimaries migrates unambiguous legacy active-key groups in memory.
-func normalizeRegistryPrimaries(data *registryData) {
-	groups := make(map[string][]int)
-	for i, entry := range data.Keys {
-		if entry.Status == KeyStatusActive {
-			group := entry.Cluster + "\x00" + string(entry.KeyType)
-			groups[group] = append(groups[group], i)
-		}
-	}
-
-	for _, indexes := range groups {
-		primaryCount := 0
-		for _, index := range indexes {
-			if data.Keys[index].Primary {
-				primaryCount++
-			}
-		}
-		if primaryCount > 0 {
-			continue
-		}
-		if len(indexes) == 1 {
-			data.Keys[indexes[0]].Primary = true
-			continue
-		}
-
-		activeFingerprints := make(map[string]struct{}, len(indexes))
-		for _, index := range indexes {
-			activeFingerprints[data.Keys[index].Fingerprint] = struct{}{}
-		}
-		candidate := -1
-		candidateCount := 0
-		for _, index := range indexes {
-			if _, ok := activeFingerprints[data.Keys[index].RotatedFrom]; ok {
-				candidate = index
-				candidateCount++
-			}
-		}
-		if candidateCount == 1 {
-			data.Keys[candidate].Primary = true
-		}
-	}
-}
+// normalizeRegistryPrimaries is retained for compatibility with legacy callers.
+// Primary selection is explicit; loading a registry must never infer a winner.
+func normalizeRegistryPrimaries(data *registryData) {}
 
 // calculateExpiration calculates the expiration date based on creation date and key type.
 func (r *DefaultKeyRegistry) calculateExpiration(createdAt time.Time, keyType KeyType, policy defaultExpirationPolicy) time.Time {
@@ -715,7 +1046,11 @@ func (r *DefaultKeyRegistry) scanAgeKeys(dir string, data *registryData) error {
 			continue
 		}
 
-		publicKey := string(pubKeyData)
+		publicKey := strings.TrimSpace(string(pubKeyData))
+		if publicKey == "" {
+			r.logger.Warn("Skipping empty Age public key", "file", entry.Name())
+			continue
+		}
 
 		// Get file info for creation time
 		info, err := entry.Info()
@@ -777,7 +1112,11 @@ func (r *DefaultKeyRegistry) scanSSHKeys(dir string, data *registryData) error {
 			continue
 		}
 
-		publicKey := string(pubKeyData)
+		publicKey := strings.TrimSpace(string(pubKeyData))
+		if publicKey == "" {
+			r.logger.Warn("Skipping empty SSH public key", "file", entry.Name())
+			continue
+		}
 
 		// Get file info for creation time
 		info, err := entry.Info()
@@ -809,4 +1148,8 @@ func (r *DefaultKeyRegistry) scanSSHKeys(dir string, data *registryData) error {
 	}
 
 	return nil
+}
+
+func canonicalAgeRecipientValues(publicKey, fingerprint string) (string, error) {
+	return canonicalAgeRecipient(KeyEntry{PublicKey: publicKey, Fingerprint: fingerprint})
 }

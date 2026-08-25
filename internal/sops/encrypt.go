@@ -104,44 +104,7 @@ func (e *DefaultEncryptor) EncryptFile(ctx context.Context, filePath string, con
 	}
 
 	// Build SOPS command
-	args := []string{"-e"}
-
-	// If the file extension is not recognized by SOPS as YAML (e.g. .yaml.enc),
-	// explicitly tell SOPS to treat it as YAML.
-	if needsExplicitYAMLType(filePath) {
-		args = append(args, "--input-type", "yaml", "--output-type", "yaml")
-	}
-
-	// Add encryption keys
-	if len(config.AgeKeys) > 0 {
-		args = append(args, "--age", strings.Join(config.AgeKeys, ","))
-	}
-	if len(config.PGPKeys) > 0 {
-		args = append(args, "--pgp", strings.Join(config.PGPKeys, ","))
-	}
-
-	// Use default keys if none specified
-	if len(config.AgeKeys) == 0 && len(config.PGPKeys) == 0 {
-		if len(e.ageKeys) > 0 {
-			args = append(args, "--age", strings.Join(e.ageKeys, ","))
-		}
-		if len(e.pgpKeys) > 0 {
-			args = append(args, "--pgp", strings.Join(e.pgpKeys, ","))
-		}
-	}
-
-	// Add config file if specified
-	if config.ConfigFile != "" {
-		args = append(args, "--config", config.ConfigFile)
-	}
-
-	// Add in-place flag
-	if config.InPlace {
-		args = append(args, "-i")
-	}
-
-	// Add file path
-	args = append(args, filePath)
+	args := buildEncryptionArgs(filePath, config, e.ageKeys, e.pgpKeys)
 
 	// Execute SOPS command
 	cmd, err := e.prepareSOPSCommand(ctx, args...)
@@ -580,7 +543,33 @@ func (e *DefaultEncryptor) DecryptFilesParallel(ctx context.Context, filePaths [
 
 // Helper functions
 
-// needsExplicitYAMLType returns true when the file extension is not one that
+func buildEncryptionArgs(filePath string, config EncryptionConfig, defaultAgeKeys, defaultPGPKeys []string) []string {
+	args := []string{"-e"}
+	if needsExplicitYAMLType(filePath) {
+		args = append(args, "--input-type", "yaml", "--output-type", "yaml")
+	}
+	ageKeys, pgpKeys := config.AgeKeys, config.PGPKeys
+	if len(ageKeys) == 0 && len(pgpKeys) == 0 {
+		ageKeys, pgpKeys = defaultAgeKeys, defaultPGPKeys
+	}
+	if len(ageKeys) > 0 {
+		args = append(args, "--age", strings.Join(ageKeys, ","))
+	}
+	if len(pgpKeys) > 0 {
+		args = append(args, "--pgp", strings.Join(pgpKeys, ","))
+	}
+	if config.ConfigFile != "" {
+		args = append(args, "--config", config.ConfigFile)
+	}
+	if config.FilenameOverride != "" {
+		args = append(args, "--filename-override", config.FilenameOverride)
+	}
+	if config.InPlace {
+		args = append(args, "-i")
+	}
+	return append(args, filePath)
+}
+
 // SOPS auto-detects as YAML (e.g. .yaml.enc, .yml.enc). In those cases the
 // caller must pass --input-type yaml --output-type yaml to the sops binary.
 func needsExplicitYAMLType(filePath string) bool {

@@ -22,7 +22,7 @@ func findSubcommand(cmd interface{ Commands() []*cobra.Command }, name string) *
 func TestSecretsKeysGACommandsExist(t *testing.T) {
 	cmd := NewSecretsKeysCmd()
 
-	for _, name := range []string{"generate", "rotate", "backup", "validate", "check", "revoke"} {
+	for _, name := range []string{"generate", "rotate", "backup", "validate", "check", "revoke", "reconcile", "set-primary"} {
 		if findSubcommand(cmd, name) == nil {
 			t.Fatalf("expected secrets keys %s command to exist", name)
 		}

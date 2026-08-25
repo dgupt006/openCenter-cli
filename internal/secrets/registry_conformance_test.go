@@ -55,6 +55,7 @@ func runKeyRegistryConformance(t *testing.T, name string, newRegistry func(t *te
 		registry := newRegistry(t)
 		entry := KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeAge, Fingerprint: "age-a"}
 		require.NoError(t, registry.RegisterKey(ctx, entry))
+		require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "envelope-keeper", KeyType: KeyTypeAge, Fingerprint: "age-keeper", PublicKey: "age-keeper"}))
 		entry.Status = KeyStatusArchived
 		require.NoError(t, registry.UpdateKey(ctx, entry))
 		entry.Status = KeyStatusActive
@@ -76,6 +77,38 @@ func runKeyRegistryConformance(t *testing.T, name string, newRegistry func(t *te
 			}
 		}
 		assert.Equal(t, 2, activeAge)
+	})
+
+	t.Run(name+"/explicit_primary_and_lifecycle_invariants", func(t *testing.T) {
+		registry := newRegistry(t)
+		require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeAge, Fingerprint: "age-a"}))
+		require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeAge, Fingerprint: "age-b"}))
+		_, err := registry.GetPrimaryKey(ctx, "cluster-a", KeyTypeAge)
+		require.Error(t, err)
+		require.NoError(t, registry.SetPrimaryKey(ctx, "cluster-a", KeyTypeAge, "age-b"))
+		require.NoError(t, registry.SetPrimaryKey(ctx, "cluster-a", KeyTypeAge, "age-b"))
+		primary, err := registry.GetPrimaryKey(ctx, "cluster-a", KeyTypeAge)
+		require.NoError(t, err)
+		assert.Equal(t, "age-b", primary.Fingerprint)
+		keys, err := registry.ListKeys(ctx, "cluster-a")
+		require.NoError(t, err)
+		for _, key := range keys {
+			if key.KeyType == KeyTypeAge {
+				assert.True(t, key.Primary == (key.Fingerprint == "age-b"))
+			}
+		}
+		require.NoError(t, registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeSSH, Fingerprint: "ssh-a"}))
+		_, err = registry.GetPrimaryKey(ctx, "cluster-a", KeyTypeSSH)
+		assert.Error(t, err)
+		err = registry.RegisterKey(ctx, KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeAge, Fingerprint: "age-inactive", Status: KeyStatusArchived, Primary: true})
+		assert.Error(t, err)
+		err = registry.UpdateKeyStatus(ctx, "cluster-a", KeyTypeAge, KeyStatusArchived)
+		assert.Error(t, err)
+		newEntry := KeyEntry{Cluster: "cluster-a", KeyType: KeyTypeAge, Fingerprint: "age-c", Status: KeyStatusActive}
+		require.NoError(t, registry.ReplacePrimary(ctx, "age-b", newEntry))
+		primary, err = registry.GetPrimaryKey(ctx, "cluster-a", KeyTypeAge)
+		require.NoError(t, err)
+		assert.Equal(t, "age-c", primary.Fingerprint)
 	})
 
 	t.Run(name+"/unknown_cluster_is_not_found", func(t *testing.T) {

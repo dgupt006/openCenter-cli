@@ -2,9 +2,14 @@ package secrets
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,7 +26,6 @@ func rewriteSOPSAgeValues(data []byte, update func([]string) ([]string, error)) 
 
 	rules := findSOPSCreationRules(document.Content[0])
 	var ageNodes []*yaml.Node
-	var existing []string
 	for _, rule := range rules {
 		if rule.Kind != yaml.MappingNode {
 			continue
@@ -34,25 +38,21 @@ func rewriteSOPSAgeValues(data []byte, update func([]string) ([]string, error)) 
 			if value.Kind != yaml.ScalarNode {
 				return nil, fmt.Errorf("creation rule age value is not a scalar")
 			}
+			existing := splitSOPSRecipients(value.Value)
+			recipients, err := update(existing)
+			if err != nil {
+				return nil, err
+			}
+			if len(recipients) == 0 {
+				return nil, fmt.Errorf("computed SOPS age recipient set is empty")
+			}
+			value.Value = strings.Join(recipients, ",")
 			ageNodes = append(ageNodes, value)
-			existing = append(existing, splitSOPSRecipients(value.Value)...)
 			break
 		}
 	}
 	if len(ageNodes) == 0 {
 		return data, nil
-	}
-
-	recipients, err := update(existing)
-	if err != nil {
-		return nil, err
-	}
-	if len(recipients) == 0 {
-		return nil, fmt.Errorf("computed SOPS age recipient set is empty")
-	}
-	value := strings.Join(recipients, ",")
-	for _, ageNode := range ageNodes {
-		ageNode.Value = value
 	}
 
 	return marshalSOPSDocument(&document)
@@ -97,4 +97,91 @@ func splitSOPSRecipients(value string) []string {
 		}
 	}
 	return recipients
+}
+
+// reencryptManifestUsingCreationRule decrypts a manifest and lets the
+// post-mutation .sops.yaml creation rule choose its recipients. The temporary
+// path is never used for rule matching; SOPS receives the original manifest
+// path through --filename-override.
+func reencryptManifestUsingCreationRule(ctx context.Context, encryptor sops.Encryptor, manifestPath, configPath string) error {
+	if err := validateSOPSRuleMatch(configPath, manifestPath); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(filepath.Dir(manifestPath), "."+filepath.Base(manifestPath)+".decrypted-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary manifest: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary manifest: %w", err)
+	}
+	if err := encryptor.DecryptFile(ctx, manifestPath, tmpPath); err != nil {
+		return fmt.Errorf("failed to decrypt %s: %w", manifestPath, err)
+	}
+	if err := encryptor.EncryptFile(ctx, tmpPath, sops.EncryptionConfig{
+		ConfigFile:       configPath,
+		FilenameOverride: manifestPath,
+		InPlace:          true,
+	}); err != nil {
+		return fmt.Errorf("failed to re-encrypt %s: %w", manifestPath, err)
+	}
+	if err := os.Rename(tmpPath, manifestPath); err != nil {
+		return fmt.Errorf("failed to replace %s: %w", manifestPath, err)
+	}
+	return nil
+}
+
+func validateSOPSRuleMatch(configPath, manifestPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read SOPS config %s: %w", configPath, err)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return fmt.Errorf("failed to parse SOPS config %s: %w", configPath, err)
+	}
+	if len(document.Content) == 0 {
+		return fmt.Errorf("SOPS config %s has no creation rules", configPath)
+	}
+	manifestCandidates := []string{manifestPath}
+	if relative, err := filepath.Rel(filepath.Dir(configPath), manifestPath); err == nil {
+		manifestCandidates = append(manifestCandidates, filepath.ToSlash(relative))
+	}
+	for _, rule := range findSOPSCreationRules(document.Content[0]) {
+		if rule.Kind != yaml.MappingNode {
+			continue
+		}
+		pathRegex := ""
+		age := ""
+		for i := 0; i+1 < len(rule.Content); i += 2 {
+			switch rule.Content[i].Value {
+			case "path_regex":
+				pathRegex = rule.Content[i+1].Value
+			case "age":
+				age = rule.Content[i+1].Value
+			}
+		}
+		if strings.TrimSpace(age) == "" {
+			continue
+		}
+		matched := pathRegex == ""
+		if pathRegex != "" {
+			expression, err := regexp.Compile(pathRegex)
+			if err != nil {
+				return fmt.Errorf("invalid SOPS creation rule path_regex %q: %w", pathRegex, err)
+			}
+			matched = false
+			for _, candidate := range manifestCandidates {
+				if expression.MatchString(candidate) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			return nil
+		}
+	}
+	return fmt.Errorf("no SOPS creation rule with Age recipients matches manifest %s", manifestPath)
 }

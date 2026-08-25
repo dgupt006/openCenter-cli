@@ -32,20 +32,22 @@ type sopsEncryptorAdapter struct {
 	manager *sops.DefaultSOPSManager
 }
 
-func (s *sopsEncryptorAdapter) EncryptFile(ctx context.Context, filePath string) error {
+func (s *sopsEncryptorAdapter) EncryptFile(ctx context.Context, filePath string, config sops.EncryptionConfig) error {
 	encryptor := s.manager.GetEncryptor()
 	if encryptor == nil {
 		return fmt.Errorf("encryptor not available")
 	}
 
-	// Use empty config to use .sops.yaml configuration
-	config := sops.EncryptionConfig{
-		InPlace: true,
-	}
-
 	return encryptor.EncryptFile(ctx, filePath, config)
 }
 
+func (s *sopsEncryptorAdapter) GetEncryptedContent(filePath string) (string, error) {
+	encryptor := s.manager.GetEncryptor()
+	if encryptor == nil {
+		return "", fmt.Errorf("encryptor not available")
+	}
+	return encryptor.GetEncryptedContent(filePath)
+}
 func (s *sopsEncryptorAdapter) DecryptFile(ctx context.Context, filePath string) ([]byte, error) {
 	encryptor := s.manager.GetEncryptor()
 	if encryptor == nil {
