@@ -115,6 +115,52 @@ func TestGenerateServiceMapIncludesRegisteredServicesAndAllowsCustomServices(t *
 	}
 }
 
+func TestGenerateOmitsRemovedServiceRenderMetadata(t *testing.T) {
+	schema := generatedSchemaMap(t)
+	for _, key := range []string{
+		"edition",
+		"source_name",
+		"single_stage",
+		"has_override_values",
+		"enterprise_registry",
+		"custom_resources",
+		"extra_dependencies",
+		"conditional_dependencies",
+		"base_only",
+		"kustomization_name",
+		"override_depends_on",
+		"override_values",
+		"override_values_renderer",
+		"kustomization_content",
+		"overlay_files_renderer",
+	} {
+		if schemaContainsKeyForTest(schema, key) {
+			t.Fatalf("generated schema contains removed service metadata key %q", key)
+		}
+	}
+}
+
+func schemaContainsKeyForTest(node any, key string) bool {
+	switch value := node.(type) {
+	case map[string]any:
+		if _, ok := value[key]; ok {
+			return true
+		}
+		for _, child := range value {
+			if schemaContainsKeyForTest(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if schemaContainsKeyForTest(child, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestCheckFileDetectsCurrentAndStaleSchema(t *testing.T) {
 	current, err := Generate(Options{})
 	if err != nil {

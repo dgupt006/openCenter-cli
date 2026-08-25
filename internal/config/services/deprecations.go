@@ -28,11 +28,34 @@ type DeprecatedConfigKey struct {
 	Guidance string
 }
 
+// deprecatedConfigKeys is the authoritative specification for legacy service
+// render metadata. Consumers must use this registry rather than maintaining a
+// second list of keys to warn about or remove.
 var deprecatedConfigKeys = []DeprecatedConfigKey{
+	{
+		Key:      "edition",
+		Reason:   "it selects an internal base-repository variant",
+		Guidance: "let the service descriptor select the supported base path",
+	},
+	{
+		Key:      "enterprise_registry",
+		Reason:   "it selects internal enterprise registry resources",
+		Guidance: "use supported service configuration for registry credentials",
+	},
 	{
 		Key:      "custom_resources",
 		Reason:   "it only adds filenames to the generated kustomization; it does not create or preserve those files",
 		Guidance: "put user-owned manifests in the service's custom/ directory instead",
+	},
+	{
+		Key:      "extra_dependencies",
+		Reason:   "it changes the internal dependency graph of generated Flux Kustomizations",
+		Guidance: "let the service descriptor select generated dependencies",
+	},
+	{
+		Key:      "conditional_dependencies",
+		Reason:   "it changes the internal conditional dependency graph of generated Flux Kustomizations",
+		Guidance: "let the service descriptor select generated dependencies",
 	},
 	{
 		Key:      "kustomization_content",
@@ -43,6 +66,11 @@ var deprecatedConfigKeys = []DeprecatedConfigKey{
 		Key:      "overlay_files_renderer",
 		Reason:   "it selects an internal renderer implementation for generated overlay files",
 		Guidance: "use supported typed service configuration or put user-owned manifests in the service's custom/ directory instead",
+	},
+	{
+		Key:      "override_values",
+		Reason:   "it provides internal generated Helm override content",
+		Guidance: "set supported service values through the service configuration instead",
 	},
 	{
 		Key:      "override_values_renderer",
@@ -124,7 +152,7 @@ func DeprecatedConfigWarnings(data []byte) []DeprecatedConfigWarning {
 	}
 
 	var warnings []DeprecatedConfigWarning
-	for _, section := range []string{"services", "managed_services"} {
+	for _, section := range []string{"services", "managed_services", "managed-service"} {
 		sectionNode := mappingValue(opencenter, section)
 		if sectionNode == nil || sectionNode.Kind != yaml.MappingNode {
 			continue
@@ -157,14 +185,20 @@ func DeprecatedConfigWarnings(data []byte) []DeprecatedConfigWarning {
 	return warnings
 }
 
-// WarnDeprecatedConfigKeys writes warnings for deprecated keys explicitly
+// WarnDeprecatedConfigWarnings writes warnings for deprecated keys explicitly
 // present in raw user configuration. Warning output never affects loading.
-func WarnDeprecatedConfigKeys(data []byte) {
-	for _, warning := range DeprecatedConfigWarnings(data) {
-		fmt.Fprintf(os.Stderr, "warning: %s is deprecated and will be removed in the next major schema version\n", warning.Path)
+func WarnDeprecatedConfigWarnings(warnings []DeprecatedConfigWarning) {
+	for _, warning := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s is deprecated, ignored, and rendering is internally owned\n", warning.Path)
 		fmt.Fprintf(os.Stderr, "  reason: %s\n", warning.Entry.Reason)
 		fmt.Fprintf(os.Stderr, "  guidance: %s\n", warning.Entry.Guidance)
 	}
+}
+
+// WarnDeprecatedConfigKeys writes warnings for deprecated keys explicitly
+// present in raw user configuration. Warning output never affects loading.
+func WarnDeprecatedConfigKeys(data []byte) {
+	WarnDeprecatedConfigWarnings(DeprecatedConfigWarnings(data))
 }
 
 func unwrapDocumentNode(node *yaml.Node) *yaml.Node {

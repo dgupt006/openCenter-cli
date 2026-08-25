@@ -30,6 +30,7 @@ import (
 	"syscall"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 	"github.com/spf13/cobra"
@@ -979,6 +980,10 @@ func rewriteLegacyClusterConfig(from, to string, mode os.FileMode) error {
 	rewritten, err := yaml.Marshal(configMap)
 	if err != nil {
 		return fmt.Errorf("marshaling migrated config %s: %w", to, err)
+	}
+	rewritten, err = v2.SanitizePublicYAML(rewritten)
+	if err != nil {
+		return fmt.Errorf("sanitizing migrated config %s: %w", to, err)
 	}
 	if err := os.WriteFile(to, rewritten, mode); err != nil {
 		return fmt.Errorf("writing migrated config %s: %w", to, err)

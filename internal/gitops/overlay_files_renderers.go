@@ -21,11 +21,6 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
-func init() {
-	RegisterOverlayFilesRenderer("gateway", gatewayOverlayFilesRenderer)
-	RegisterOverlayFilesRenderer("longhorn", longhornOverlayFilesRenderer)
-}
-
 func gatewayOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 	files := map[string]string{}
 

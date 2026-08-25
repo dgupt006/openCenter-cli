@@ -1,7 +1,6 @@
 package v2
 
 import (
-	"encoding/json"
 	"strings"
 )
 
@@ -230,7 +229,7 @@ func (c Config) KindDisableDefaultCNI() bool {
 	return c.OpenCenter.Infrastructure.Kind != nil && c.OpenCenter.Infrastructure.Kind.DisableDefaultCNI
 }
 
-// ToJSON marshals the configuration to indented JSON.
+// ToJSON marshals the public configuration to indented JSON.
 func (c Config) ToJSON() ([]byte, error) {
-	return json.MarshalIndent(c, "", "  ")
+	return MarshalPublicConfigJSON(&c)
 }

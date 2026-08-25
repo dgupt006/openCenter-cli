@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/security"
 	"gopkg.in/yaml.v3"
 )
@@ -998,6 +999,10 @@ func (r *DefaultKeyRotator) updateConfigSSHKey(ctx context.Context, cluster stri
 	updatedData, err := yaml.Marshal(&cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config file: %w", err)
+	}
+	updatedData, err = v2.SanitizePublicYAML(updatedData)
+	if err != nil {
+		return fmt.Errorf("failed to sanitize config file: %w", err)
 	}
 
 	if err := os.WriteFile(configPath, updatedData, 0o600); err != nil {

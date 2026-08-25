@@ -21,20 +21,6 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
-func init() {
-	RegisterOverrideValuesRenderer("openstack-ccm", templateRenderer(openstackCCMTemplate))
-	RegisterOverrideValuesRenderer("openstack-csi", templateRenderer(openstackCSITemplate))
-	RegisterOverrideValuesRenderer("vsphere-csi", templateRenderer(vsphereCsiTemplate))
-	RegisterOverrideValuesRenderer("velero", templateRenderer(veleroTemplate))
-	RegisterOverrideValuesRenderer("loki", templateRenderer(lokiTemplate))
-	RegisterOverrideValuesRenderer("tempo", templateRenderer(tempoTemplate))
-	RegisterOverrideValuesRenderer("mimir", templateRenderer(mimirTemplate))
-	RegisterOverrideValuesRenderer("opentelemetry-kube-stack", staticRenderer(otelTemplate))
-	RegisterOverrideValuesRenderer("headlamp", templateRenderer(headlampTemplate))
-	RegisterOverrideValuesRenderer("harbor", templateRenderer(harborTemplate))
-	RegisterOverrideValuesRenderer("kube-prometheus-stack", templateRenderer(kubePrometheusStackTemplate))
-}
-
 // templateRenderer creates a renderer that executes a Go template against the config.
 func templateRenderer(tmpl string) OverrideValuesRenderer {
 	return func(cfg v2.Config) (string, error) {

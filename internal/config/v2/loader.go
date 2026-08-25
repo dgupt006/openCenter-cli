@@ -14,14 +14,10 @@
 package v2
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
-	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 )
@@ -124,33 +120,7 @@ func (cl *ConfigLoader) LoadFromBytes(data []byte) (*Config, error) {
 // parseYAML parses YAML data into a Config struct.
 // Requirements: 16.1, 16.7
 func (cl *ConfigLoader) parseYAML(data []byte) (*Config, error) {
-	var cfg Config
-
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-
-	// Parse YAML with detailed error reporting
-	if err := decoder.Decode(&cfg); err != nil {
-		// Check if it's a YAML syntax error with line/column info
-		if yamlErr, ok := err.(*yaml.TypeError); ok {
-			return nil, &YAMLTypeErrors{Errors: yamlErr.Errors}
-		}
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	// Scan the original document before defaults are applied. Deprecated keys
-	// remain accepted for compatibility; warnings must never make loading fail.
-	services.WarnDeprecatedConfigKeys(data)
-
-	// Verify schema version
-	if cfg.SchemaVersion != "2.0" {
-		if cfg.SchemaVersion == "" {
-			return nil, fmt.Errorf("invalid schema version: expected '2.0'")
-		}
-		return nil, fmt.Errorf("invalid schema version: expected '2.0', got '%s'", cfg.SchemaVersion)
-	}
-
-	return &cfg, nil
+	return DecodePublicConfig(data)
 }
 
 // normalize performs type coercion and field canonicalization.
@@ -275,7 +245,7 @@ func (cl *ConfigLoader) GetAppliedDefaults() map[string]defaults.DefaultSource {
 // Requirements: 16.2
 func (cl *ConfigLoader) SaveToFile(cfg *Config, filePath string) error {
 	// Marshal to YAML
-	data, err := yaml.Marshal(cfg)
+	data, err := MarshalPublicConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal configuration: %w", err)
 	}
@@ -301,7 +271,7 @@ func ensureDocumentStart(data []byte) []byte {
 // Requirements: 15.7, 15.8
 func (cl *ConfigLoader) ExportEffectiveConfig(cfg *Config) ([]byte, error) {
 	// Marshal to YAML
-	data, err := yaml.Marshal(cfg)
+	data, err := MarshalPublicConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal configuration: %w", err)
 	}

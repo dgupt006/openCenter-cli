@@ -138,8 +138,13 @@ func patchYAMLBytesFromFile(path string, updates []FieldInferenceResult) ([]byte
 }
 
 func patchYAMLBytes(path string, original []byte, updates []FieldInferenceResult) ([]byte, string, error) {
+	sanitized, err := v2.SanitizePublicYAML(original)
+	if err != nil {
+		return nil, "", fmt.Errorf("sanitize yaml document: %w", err)
+	}
+
 	var document yaml.Node
-	if err := yaml.Unmarshal(original, &document); err != nil {
+	if err := yaml.Unmarshal(sanitized, &document); err != nil {
 		return nil, "", fmt.Errorf("decode yaml document: %w", err)
 	}
 
@@ -172,7 +177,7 @@ func cloneConfig(cfg *v2.Config) (*v2.Config, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration cannot be nil")
 	}
-	data, err := yaml.Marshal(cfg)
+	data, err := v2.MarshalPublicConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config clone: %w", err)
 	}
@@ -200,7 +205,7 @@ func pruneDisabledServices(cfg *v2.Config) {
 }
 
 func marshalConfig(cfg *v2.Config) ([]byte, error) {
-	data, err := yaml.Marshal(cfg)
+	data, err := v2.MarshalPublicConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config: %w", err)
 	}

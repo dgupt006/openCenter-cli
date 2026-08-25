@@ -107,6 +107,44 @@ func inferDescriptorRender(path string, override *bool) bool {
 	return strings.HasSuffix(path, ".tpl") || strings.HasSuffix(path, ".tmpl") || strings.HasSuffix(path, ".jtpl")
 }
 
+// validateClusterAppActions validates every output path before any action can
+// write. Outputs must already use the normalized ownership-path form so the
+// planner and writer cannot disagree about the destination.
+func validateClusterAppActions(actions []clusterAppAction, renderRoot string) error {
+	for index, action := range actions {
+		output := action.Output
+		if strings.TrimSpace(output) == "" {
+			return fmt.Errorf("action %d owned by %q has an empty output path", index, action.Owner)
+		}
+		if strings.ContainsRune(output, '\x00') || strings.Contains(output, "\\") {
+			return fmt.Errorf("action %d owned by %q has invalid output path %q: path separators must be forward slashes", index, action.Owner, output)
+		}
+		if filepath.IsAbs(output) {
+			return fmt.Errorf("action %d owned by %q has invalid output path %q: absolute paths are not allowed", index, action.Owner, output)
+		}
+
+		normalized, err := normalizeOwnershipPath(output)
+		if err != nil {
+			return fmt.Errorf("action %d owned by %q has invalid output path %q: %w", index, action.Owner, output, err)
+		}
+		if normalized == "." || normalized != output {
+			return fmt.Errorf("action %d owned by %q has invalid output path %q: it must be a normalized relative ownership path", index, action.Owner, output)
+		}
+
+		if renderRoot != "" {
+			full := filepath.Join(renderRoot, filepath.FromSlash(output))
+			contained, err := safeRelativePath(renderRoot, full)
+			if err != nil {
+				return fmt.Errorf("action %d owned by %q has output path %q outside render root %q: %w", index, action.Owner, output, renderRoot, err)
+			}
+			if contained != output {
+				return fmt.Errorf("action %d owned by %q has output path %q outside render root %q", index, action.Owner, output, renderRoot)
+			}
+		}
+	}
+	return nil
+}
+
 func buildConfigView(cfg v2.Config) (map[string]any, error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -372,6 +410,10 @@ func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []se
 	if err := validateDescriptorCoverage(registry); err != nil {
 		return nil, nil, err
 	}
+	catalog := newBuiltInRenderCatalog()
+	if err := catalog.ValidateConfigOwnership(cfg, registry); err != nil {
+		return nil, nil, err
+	}
 
 	view, err := buildConfigView(cfg)
 	if err != nil {
@@ -410,6 +452,11 @@ func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []se
 			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
+		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor)
+		if err != nil {
+			return nil, nil, err
+		}
+		actions = append(actions, dynamicActions...)
 	}
 
 	for _, action := range actions {
@@ -426,6 +473,9 @@ func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []se
 		return nil, nil, err
 	}
 	actions = append(actions, autoActions...)
+	if err := validateClusterAppActions(actions, ""); err != nil {
+		return nil, nil, fmt.Errorf("planned GitOps action output validation failed: %w", err)
+	}
 
 	for _, action := range autoActions {
 		diag.Actions = append(diag.Actions, ActionDiagnostic{
@@ -487,6 +537,10 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 	if err := validateDescriptorCoverage(registry); err != nil {
 		return nil, nil, err
 	}
+	catalog := newBuiltInRenderCatalog()
+	if err := catalog.ValidateAgainstDescriptors(registry); err != nil {
+		return nil, nil, err
+	}
 
 	view, err := buildConfigView(cfg)
 	if err != nil {
@@ -511,22 +565,30 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 		}
 	}
 	if !found {
-		// Fall back to auto-descriptor for services without explicit descriptors.
-		if !isManaged {
-			serviceCfg, exists := cfg.OpenCenter.Services[serviceName]
-			if exists && !IsServiceDisabled(serviceCfg) {
-				base := extractBaseConfig(serviceCfg)
-				if base != nil {
-					ctx := buildAutoServiceContextWithArtifacts(serviceName, base, cfg, artifacts)
-					actions, renderErr := renderAutoServiceActions(ctx, cfg)
-					if renderErr != nil {
-						return nil, nil, renderErr
-					}
-					return appendCustomSeedAction(actions, ctx), artifacts, nil
-				}
-			}
+		if isManaged {
+			return nil, nil, fmt.Errorf("descriptor not found for managed service %q", serviceName)
 		}
-		return nil, nil, fmt.Errorf("descriptor not found for service %q", serviceName)
+		if _, owned := catalog.Lookup(serviceName); !owned {
+			return nil, nil, fmt.Errorf("service %q has neither an explicit descriptor nor a built-in render catalog entry", serviceName)
+		}
+		serviceCfg, exists := cfg.OpenCenter.Services[serviceName]
+		if !exists || IsServiceDisabled(serviceCfg) || IsServiceExternal(serviceCfg) {
+			return nil, nil, fmt.Errorf("catalog-owned service %q is disabled, absent, or externally managed", serviceName)
+		}
+		base := extractBaseConfig(serviceCfg)
+		if base == nil {
+			return nil, nil, fmt.Errorf("catalog-owned service %q does not expose declarative service configuration", serviceName)
+		}
+		ctx := buildAutoServiceContextWithArtifacts(serviceName, base, cfg, artifacts)
+		actions, renderErr := renderAutoServiceActions(ctx, cfg)
+		if renderErr != nil {
+			return nil, nil, renderErr
+		}
+		actions = appendCustomSeedAction(actions, ctx)
+		if err := validateClusterAppActions(actions, ""); err != nil {
+			return nil, nil, fmt.Errorf("planned GitOps action output validation failed: %w", err)
+		}
+		return actions, artifacts, nil
 	}
 
 	descriptorsToRender := []descriptorcfg.Descriptor{target}
@@ -552,12 +614,23 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
+		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor)
+		if err != nil {
+			return nil, nil, err
+		}
+		actions = append(actions, dynamicActions...)
+	}
+	if err := validateClusterAppActions(actions, ""); err != nil {
+		return nil, nil, fmt.Errorf("planned GitOps action output validation failed: %w", err)
 	}
 
 	return actions, artifacts, nil
 }
 
 func writeClusterAppActions(actions []clusterAppAction, target string, cfg v2.Config, workspace *GitOpsWorkspace) error {
+	if err := validateClusterAppActions(actions, target); err != nil {
+		return err
+	}
 	for _, action := range actions {
 		dst := filepath.Join(target, action.Output)
 
@@ -612,7 +685,7 @@ func validateMaterializedSecretMembership(cfg v2.Config, actions []clusterAppAct
 				break
 			}
 		}
-		if !found && artifact.TargetService != "cert-manager" {
+		if !found {
 			return fmt.Errorf("secret artifact %q is materialized but service %q has no renderable overlay kustomization", artifact.Path, artifact.TargetService)
 		}
 
@@ -656,11 +729,6 @@ func validateSecretArtifactRenderability(cfg v2.Config, actions []clusterAppActi
 			}
 		}
 		if !found {
-			// cert-manager's dynamic renderer materializes its overlay
-			// kustomization after descriptor expansion.
-			if artifact.TargetService == "cert-manager" {
-				continue
-			}
 			return fmt.Errorf("secret artifact %q targets service %q, but that service has no renderable overlay", artifact.Path, artifact.TargetService)
 		}
 	}

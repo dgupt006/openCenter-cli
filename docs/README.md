@@ -38,6 +38,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [validate-configuration](operations/validate-configuration.md) | Validate cluster config |
 | [manage-secrets](operations/manage-secrets.md) | SOPS encryption lifecycle |
 | [customize-services](operations/customize-services.md) | Enable/disable/configure services |
+| [normalize-legacy-renderer-metadata](operations/normalize-legacy-renderer-metadata.md) | Remove legacy v2 renderer metadata |
 | [configure-networking](operations/configure-networking.md) | Network and DNS setup |
 | [add-worker-pools](operations/add-worker-pools.md) | Add worker node groups |
 | [backup-and-restore](operations/backup-and-restore.md) | Velero backup/restore |

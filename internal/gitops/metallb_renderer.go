@@ -22,10 +22,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func init() {
-	RegisterOverlayFilesRenderer("metallb", metallbOverlayFilesRenderer)
-}
-
 type metallbMetadata struct {
 	Name      string `yaml:"name"`
 	Namespace string `yaml:"namespace"`

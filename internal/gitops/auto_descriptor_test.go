@@ -20,13 +20,11 @@ func TestExtractBaseConfig(t *testing.T) {
 			BaseConfig: services.BaseConfig{
 				Enabled:   true,
 				Namespace: "test-ns",
-				Edition:   "enterprise",
 			},
 		}
 		base := extractBaseConfig(cfg)
 		require.NotNil(t, base)
 		assert.Equal(t, "test-ns", base.Namespace)
-		assert.Equal(t, "enterprise", base.Edition)
 	})
 
 	t.Run("returns nil for non-struct", func(t *testing.T) {
@@ -43,12 +41,8 @@ func TestExtractBaseConfig(t *testing.T) {
 
 func TestBuildAutoServiceContext(t *testing.T) {
 	base := &services.BaseConfig{
-		Enabled:                true,
-		Namespace:              "metallb-system",
-		Edition:                "community",
-		EnterpriseRegistry:     false,
-		GeneratedResourceFiles: []string{"ipaddresspool.yaml", "l2advertisement.yaml"},
-		ExtraDependencies:      []string{"some-dep"},
+		Enabled:   true,
+		Namespace: "metallb-system",
 	}
 
 	cfg := newAutoTestConfig("test-cluster")
@@ -58,19 +52,17 @@ func TestBuildAutoServiceContext(t *testing.T) {
 	assert.Equal(t, "metallb", ctx.ServiceName)
 	assert.Equal(t, "metallb-system", ctx.Namespace)
 	assert.Equal(t, "opencenter-metallb", ctx.SourceName)
-	assert.Equal(t, "applications/base/services/metallb/community", ctx.BasePath)
+	assert.Equal(t, "applications/base/services/metallb", ctx.BasePath)
 	assert.Equal(t, "test-cluster", ctx.ClusterName)
-	assert.Equal(t, []string{"ipaddresspool.yaml", "l2advertisement.yaml"}, ctx.GeneratedResourceFiles)
-	assert.Equal(t, []string{"some-dep"}, ctx.ExtraDependencies)
+	assert.Empty(t, ctx.GeneratedResourceFiles)
+	assert.Empty(t, ctx.ExtraDependencies)
 	assert.False(t, ctx.EnterpriseRegistry)
 }
 
 func TestBuildAutoServiceContextSharedSource(t *testing.T) {
 	base := &services.BaseConfig{
-		Enabled:    true,
-		Namespace:  "observability",
-		SourceName: "opencenter-observability",
-		Edition:    "enterprise",
+		Enabled:   true,
+		Namespace: "observability",
 	}
 
 	cfg := newAutoTestConfig("obs-cluster")
@@ -78,7 +70,7 @@ func TestBuildAutoServiceContextSharedSource(t *testing.T) {
 	ctx := buildAutoServiceContext("loki", base, cfg)
 
 	assert.Equal(t, "opencenter-observability", ctx.SourceName)
-	assert.Equal(t, "applications/base/services/observability/loki/enterprise", ctx.BasePath)
+	assert.Equal(t, "applications/base/services/observability/loki", ctx.BasePath)
 }
 
 func TestBuildAutoServiceContext_ReleaseTag(t *testing.T) {
@@ -389,10 +381,10 @@ func TestHasExplicitDescriptor(t *testing.T) {
 	require.NoError(t, err)
 
 	// cert-manager has an explicit descriptor
-	assert.True(t, hasExplicitDescriptor(registry, "cert-manager"))
+	assert.True(t, hasExplicitDescriptor(registry, "cert-manager", serviceKindStandard))
 
 	// a made-up service does not
-	assert.False(t, hasExplicitDescriptor(registry, "nonexistent-service"))
+	assert.False(t, hasExplicitDescriptor(registry, "nonexistent-service", serviceKindStandard))
 }
 
 func TestPlanAutoServiceActions_SkipsDescriptorServices(t *testing.T) {
@@ -401,12 +393,9 @@ func TestPlanAutoServiceActions_SkipsDescriptorServices(t *testing.T) {
 	cfg.OpenCenter.Services["cert-manager"] = &services.CertManagerConfig{
 		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"},
 	}
-	// Add a service without a descriptor
-	cfg.OpenCenter.Services["my-new-service"] = &services.DefaultServiceConfig{
-		BaseConfig: services.BaseConfig{
-			Enabled:   true,
-			Namespace: "my-ns",
-		},
+	// Add a catalog-owned service without an explicit descriptor.
+	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{
+		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "metallb-system"},
 	}
 
 	registry, err := descriptorcfg.LoadEmbedded()
@@ -415,9 +404,9 @@ func TestPlanAutoServiceActions_SkipsDescriptorServices(t *testing.T) {
 	actions, err := planAutoServiceActions(cfg, registry)
 	require.NoError(t, err)
 
-	// Should only have actions for my-new-service, not cert-manager
+	// Should only have actions for metallb, not cert-manager
 	for _, a := range actions {
-		assert.Contains(t, a.Owner, "my-new-service")
+		assert.Contains(t, a.Owner, "metallb")
 		assert.NotContains(t, a.Owner, "cert-manager")
 	}
 }
@@ -460,8 +449,10 @@ func TestBuildAutoServiceContextPreservesServiceSourceOverride(t *testing.T) {
 		},
 	}
 
-	ctx := buildAutoServiceContext("custom-service", base, cfg)
+	ctx := buildAutoServiceContext("headlamp", base, cfg)
 	assert.Equal(t, "https://gitlab.example.com/team/custom-service.git", ctx.BaseRepoURL)
+	assert.Equal(t, "opencenter-headlamp", ctx.SourceName)
+	assert.Equal(t, "applications/base/services/headlamp", ctx.BasePath)
 	assert.Equal(t, "develop", ctx.RepoBranch)
 	assert.Empty(t, ctx.RepoTag)
 	assert.Equal(t, gitopsAuthMethodSSH, ctx.GitopsAuthMethod)
@@ -609,11 +600,11 @@ func TestRenderSingleServiceIgnoresUnrelatedMaterializedArtifacts(t *testing.T) 
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
-	cfg.OpenCenter.Services["custom-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "custom"}}
-	cfg.OpenCenter.Services["other-service"] = &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "other"}}
+	cfg.OpenCenter.Services["kube-prometheus-stack"] = &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}
+	cfg.OpenCenter.Services["loki"] = &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}
 	cfg.Secrets.ServiceSecrets = map[string]any{
-		"custom_service": map[string]any{"token": "custom"},
-		"other_service":  map[string]any{"token": "other"},
+		"kube_prometheus_stack": map[string]any{"token": "custom"},
+		"loki":                  map[string]any{"token": "other"},
 	}
 
 	artifacts, err := secretartifacts.Plan(&cfg)
@@ -621,7 +612,7 @@ func TestRenderSingleServiceIgnoresUnrelatedMaterializedArtifacts(t *testing.T) 
 	require.Len(t, artifacts, 2)
 	materializeSecretArtifacts(t, cfg, artifacts)
 
-	require.NoError(t, RenderSingleService(cfg, "custom-service", false))
+	require.NoError(t, RenderSingleService(cfg, "kube-prometheus-stack", false))
 }
 
 func TestFilterSingleServiceArtifactsRetainsActionMatchedAggregate(t *testing.T) {

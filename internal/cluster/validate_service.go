@@ -19,7 +19,6 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
-	"gopkg.in/yaml.v3"
 )
 
 // ValidateOptions contains options for cluster validation
@@ -265,7 +264,7 @@ func (s *ValidateService) ValidateConfig(ctx context.Context, cfg *v2.Config) (*
 	registry := defaults.NewRegistry()
 	loader := v2.NewConfigLoader(registry)
 
-	data, err := yaml.Marshal(cfg)
+	data, err := v2.MarshalPublicConfig(cfg)
 	if err != nil {
 		result.Valid = false
 		result.ConfigValid = false

@@ -23,12 +23,6 @@ func TestDeprecatedServiceConfigKeysAreOrderedAndLookedUp(t *testing.T) {
 			t.Fatalf("lookup(%q) = %+v, %v; want %+v, true", entry.Key, got, ok, entry)
 		}
 	}
-	if _, ok := LookupDeprecatedServiceConfigKey("extra_dependencies"); ok {
-		t.Fatal("extra_dependencies should remain supported user configuration")
-	}
-	if _, ok := LookupDeprecatedServiceConfigKey("conditional_dependencies"); ok {
-		t.Fatal("conditional_dependencies should remain supported user configuration")
-	}
 }
 
 func TestDeprecatedConfigWarningsOnlyFindExplicitUserKeys(t *testing.T) {
@@ -37,20 +31,32 @@ opencenter:
   services:
     metallb:
       custom_resources: [secret.yaml]
+      edition: enterprise
+      enterprise_registry: true
       extra_dependencies: [network]
+      conditional_dependencies: [{name: network, when_enabled: cni}]
+      override_values: generated
   managed_services:
     olm:
       kustomization_content: generated
 `)
 	warnings := DeprecatedConfigWarnings(data)
-	if len(warnings) != 2 {
-		t.Fatalf("got %d warnings, want 2: %+v", len(warnings), warnings)
+	if len(warnings) != 7 {
+		t.Fatalf("got %d warnings, want 7: %+v", len(warnings), warnings)
 	}
-	if warnings[0].Path != "opencenter.services.metallb.custom_resources" {
-		t.Fatalf("first warning path = %q", warnings[0].Path)
+	wantPaths := []string{
+		"opencenter.services.metallb.edition",
+		"opencenter.services.metallb.enterprise_registry",
+		"opencenter.services.metallb.custom_resources",
+		"opencenter.services.metallb.extra_dependencies",
+		"opencenter.services.metallb.conditional_dependencies",
+		"opencenter.services.metallb.override_values",
+		"opencenter.managed_services.olm.kustomization_content",
 	}
-	if warnings[1].Path != "opencenter.managed_services.olm.kustomization_content" {
-		t.Fatalf("second warning path = %q", warnings[1].Path)
+	for i, want := range wantPaths {
+		if warnings[i].Path != want {
+			t.Fatalf("warning[%d].Path = %q, want %q", i, warnings[i].Path, want)
+		}
 	}
 }
 
@@ -82,15 +88,9 @@ func TestDeprecatedRegistryMatchesCheckedInSchema(t *testing.T) {
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatalf("decode checked-in schema: %v", err)
 	}
-	servicesSchema := schemaMapAt(t, schema, "properties", "opencenter", "properties", "services", "properties", "metallb", "properties")
 	for _, entry := range DeprecatedServiceConfigKeys() {
-		property := schemaMapAt(t, servicesSchema, entry.Key)
-		if property["deprecated"] != true {
-			t.Errorf("schema property %q is not deprecated: %v", entry.Key, property)
-		}
-		description, _ := property["description"].(string)
-		if !strings.Contains(description, entry.Reason) || !strings.Contains(description, entry.Guidance) {
-			t.Errorf("schema property %q description does not match registry: %q", entry.Key, description)
+		if schemaContainsKey(schema, entry.Key) {
+			t.Errorf("removed legacy key %q still occurs in checked-in schema", entry.Key)
 		}
 	}
 }
@@ -106,4 +106,25 @@ func schemaMapAt(t *testing.T, root map[string]any, path ...string) map[string]a
 		current = next
 	}
 	return current
+}
+
+func schemaContainsKey(node any, key string) bool {
+	switch value := node.(type) {
+	case map[string]any:
+		if _, ok := value[key]; ok {
+			return true
+		}
+		for _, child := range value {
+			if schemaContainsKey(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if schemaContainsKey(child, key) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -52,13 +52,13 @@ Each stage implements: `Execute()`, `Validate()`, `Rollback()`, `DryRun()`
 | `dryrun.go` | Simulated workspace (no I/O) | `DryRunWorkspace`, `DryRunWorkspaceManager` |
 | `progress.go` | Terminal progress bars | `ProgressReporter`, `SimpleProgressReporter` |
 | `copy.go` | Template rendering + file copying | `CopyBaseAtomic()`, `RenderClusterAppsAtomic()`, `RenderInfrastructureClusterAtomic()` |
-| `descriptor_renderer.go` | Descriptor-driven rendering | `planClusterAppActions()`, `writeClusterAppActions()` |
+| `descriptor_renderer.go` | Descriptor-driven rendering and owned-file planning | `planClusterAppActions()`, `writeClusterAppActions()` |
 | `auto_descriptor.go` | Auto-generates FluxCD manifests | `planAutoServiceActions()`, `renderAutoServiceActions()` |
+| `render_catalog.go` | Immutable service render catalog | direct planning/rendering function references |
 | `validators.go` | Post-generation manifest validation | `ManifestValidator`, `validateFluxCDManifests()` |
 | `security_scanner.go` | Leaked secrets detection | `ScanGitOpsSecrets()`, `SecretScanFinding` |
-| `overlay_files_renderers.go` | Dynamic overlay file renderers | `getOverlayFilesRenderer()` |
-| `override_values_renderers.go` | Per-service Helm values | `getOverrideValuesRenderer()` |
-| `override_values_registry.go` | Renderer registration | `RegisterOverrideValuesRenderer()`, `RegisterOverlayFilesRenderer()` |
+| `overlay_files_renderers.go` | Service-specific overlay renderer functions | catalog-referenced render functions |
+| `override_values_renderers.go` | Service-specific Helm value renderer functions | catalog-referenced render functions |
 | `adoption.go` | Service adoption mode logic | `GetAdoptionMode()`, `IsServiceExternal()`, `ShouldRenderService()` |
 | `overlay_units_validation.go` | Overlay unit config validation | `validateOverlayUnitConfig()`, `validateSOPSOverlay()` |
 | `config_helpers.go` | Managed services list | `managedServices()` |
@@ -103,12 +103,13 @@ graph TD
     Config --> RenderInfra[RenderInfrastructureClusterAtomic]
 
     RenderApps --> SvcLoop[For each enabled service]
-    SvcLoop -->|has descriptor| Plan[planClusterAppActions<br/>evaluate conditions, expand, plan]
-    SvcLoop -->|no descriptor| Auto[planAutoServiceActions<br/>auto-generate source, kustomization, overlay]
-    RenderApps --> Write[Write via AtomicWriter]
-    RenderApps --> Overlay[Render overlay files]
-    RenderApps --> Values[Render override values]
-    RenderApps --> CertMgr[Render cert-manager dynamic files]
+    SvcLoop --> Catalog[Resolve immutable render-catalog entry<br/>direct function references]
+    Catalog --> Descriptor[Read explicit descriptor<br/>conditions, aggregates, ownership]
+    Descriptor --> Plan[Plan generator-owned files and actions]
+    Plan --> Write[Write via AtomicWriter]
+    Plan --> Overlay[Render planned overlay files]
+    Plan --> Values[Render planned Helm values]
+    Plan --> CertMgr[Render planned cert-manager files]
 
     RenderInfra --> SelectTpl[Select template by provider]
     RenderInfra --> TF[Render Terraform files]
@@ -121,6 +122,8 @@ graph TD
 - **Checkpoint/rollback**: Filesystem snapshot before each stage; reverse rollback on failure
 - **Dry-run transparency**: `AtomicWriter` detects dry-run mode → delegates to `DryRunAtomicWriter`
 - **Descriptor-driven**: Services declare file layout in descriptors; conditions evaluated at render time
+- **Immutable render catalog**: Service-specific behavior is held as direct function references; no mutable renderer registry or configuration-selected renderer names
+- **Owned-file planning**: The renderer plans generator-owned output before writing and preserves user-owned `custom/`
 - **Auto-generation**: Services without explicit descriptors get FluxCD manifests auto-generated
 - **Embedded templates**: All templates compiled into binary via `//go:embed`
 - **Workspace isolation**: Each generation gets its own directory with automatic stale cleanup

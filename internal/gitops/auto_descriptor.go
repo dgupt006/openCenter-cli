@@ -31,31 +31,31 @@ import (
 
 // autoServiceContext holds the data passed to generic service templates.
 type autoServiceContext struct {
-	ServiceName               string
-	Namespace                 string
-	SourceName                string
-	BasePath                  string
-	Edition                   string
-	SingleStage               bool
-	BaseOnly                  bool
-	KustomizationName         string
-	HasOverrideValues         bool
-	EnterpriseRegistry        bool
-	GeneratedResourceFiles    []string
-	ExtraDependencies         []string
-	OverrideDependsOn         []string
-	OverrideValues            string
-	OverrideValuesRendererKey string
-	KustomizationContent      string
-	OverlayFilesRendererKey   string
-	ClusterName               string
-	BaseRepoURL               string
-	RepoBranch                string
-	RepoTag                   string
-	GitopsAuthMethod          string
-	FluxInterval              string
-	Force                     bool
-	Suspend                   bool
+	ServiceName            string
+	Namespace              string
+	SourceName             string
+	EmitSource             bool
+	BasePath               string
+	SingleStage            bool
+	BaseOnly               bool
+	KustomizationName      string
+	HasOverrideValues      bool
+	EnterpriseRegistry     bool
+	GeneratedResourceFiles []string
+	ExtraDependencies      []string
+	OverrideDependsOn      []string
+	OverrideValues         string
+	OverrideValuesRenderer OverrideValuesRenderer
+	KustomizationContent   string
+	OverlayFilesRenderer   OverlayFilesRenderer
+	ClusterName            string
+	BaseRepoURL            string
+	RepoBranch             string
+	RepoTag                string
+	GitopsAuthMethod       string
+	FluxInterval           string
+	Force                  bool
+	Suspend                bool
 }
 
 // planAutoServiceActions generates render actions for enabled services that lack
@@ -69,19 +69,23 @@ func planAutoServiceActions(cfg v2.Config, registry *descriptorcfg.Registry) ([]
 }
 
 func planAutoServiceActionsWithArtifacts(cfg v2.Config, registry *descriptorcfg.Registry, artifacts []secretartifacts.Artifact) ([]clusterAppAction, error) {
-	var actions []clusterAppAction
+	catalog := newBuiltInRenderCatalog()
+	if err := catalog.ValidateConfigOwnership(cfg, registry); err != nil {
+		return nil, err
+	}
 
+	var actions []clusterAppAction
 	for serviceName, serviceCfg := range cfg.OpenCenter.Services {
-		if IsServiceDisabled(serviceCfg) || IsServiceExternal(serviceCfg) {
+		if IsServiceDisabled(serviceCfg) || IsServiceExternal(serviceCfg) || hasExplicitDescriptor(registry, serviceName, serviceKindStandard) {
 			continue
 		}
-		if hasExplicitDescriptor(registry, serviceName) {
-			continue
+		if _, owned := catalog.Lookup(serviceName); !owned {
+			return nil, fmt.Errorf("enabled service %q has neither an explicit descriptor nor a built-in render catalog entry", serviceName)
 		}
 
 		base := extractBaseConfig(serviceCfg)
 		if base == nil {
-			continue
+			return nil, fmt.Errorf("catalog-owned service %q does not expose declarative service configuration", serviceName)
 		}
 
 		ctx := buildAutoServiceContextWithArtifacts(serviceName, base, cfg, artifacts)
@@ -95,16 +99,34 @@ func planAutoServiceActionsWithArtifacts(cfg v2.Config, registry *descriptorcfg.
 	return actions, nil
 }
 
-// hasExplicitDescriptor checks if the registry already has a descriptor for this service.
-func hasExplicitDescriptor(registry *descriptorcfg.Registry, serviceName string) bool {
+type serviceKind string
+
+const (
+	serviceKindStandard serviceKind = "service"
+	serviceKindManaged  serviceKind = "managed_service"
+)
+
+// hasExplicitDescriptor reports whether a descriptor explicitly owns the named
+// service in the requested config map. Keeping the kind explicit prevents a
+// managed service from being mistaken for a regular service (or vice versa).
+func hasExplicitDescriptor(registry *descriptorcfg.Registry, serviceName string, kind serviceKind) bool {
 	// Structural services that are handled by aggregate descriptors, not auto-descriptors.
-	switch serviceName {
-	case "fluxcd", "sources":
-		return true
+	if kind == serviceKindStandard {
+		switch serviceName {
+		case "fluxcd", "sources":
+			return true
+		}
 	}
 	for _, d := range registry.Descriptors() {
-		if d.Service == serviceName {
-			return true
+		switch kind {
+		case serviceKindStandard:
+			if d.Service == serviceName {
+				return true
+			}
+		case serviceKindManaged:
+			if d.ManagedService == serviceName {
+				return true
+			}
 		}
 	}
 	return false
@@ -139,6 +161,9 @@ func buildAutoServiceContext(serviceName string, base *services.BaseConfig, cfg 
 }
 
 func buildAutoServiceContextWithArtifacts(serviceName string, base *services.BaseConfig, cfg v2.Config, artifacts []secretartifacts.Artifact) autoServiceContext {
+	catalog := newBuiltInRenderCatalog()
+	spec, _ := catalog.Lookup(serviceName)
+
 	baseRepoURL := cfg.OpenCenter.GitOps.BaseRepo.URL
 	if strings.TrimSpace(base.Source.Repo) != "" {
 		baseRepoURL = strings.TrimSpace(base.Source.Repo)
@@ -172,50 +197,48 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 	}
 
 	adoption := GetAdoptionSettings(AdoptionMode(base.GetAdoptionMode()))
-
-	// Resolve conditional dependencies: include only when the gate service is enabled.
-	extraDeps := append([]string{}, base.ExtraDependencies...)
-	for _, cd := range base.ConditionalDependencies {
+	extraDeps := append([]string{}, spec.ExtraDependencies...)
+	for _, cd := range spec.ConditionalDependencies {
 		if svc, exists := cfg.OpenCenter.Services[cd.WhenEnabled]; exists && !IsServiceDisabled(svc) {
 			extraDeps = append(extraDeps, cd.Name)
 		}
 	}
 
-	generatedResourceFiles := append([]string{}, base.GeneratedResourceFiles...)
-	materialized := false
-	if artifacts != nil {
-		materialized = secretArtifactTargetMaterialized(cfg, serviceName, artifacts)
-	}
-	if materialized && !containsString(generatedResourceFiles, "secret.yaml") {
+	generatedResourceFiles := append([]string{}, spec.GeneratedResourceFiles...)
+	if secretArtifactTargetMaterialized(cfg, serviceName, artifacts) && !containsString(generatedResourceFiles, "secret.yaml") {
 		generatedResourceFiles = append(generatedResourceFiles, "secret.yaml")
+	}
+	namespace := base.Namespace
+	if namespace == "" {
+		namespace = spec.DefaultNamespace
 	}
 
 	return autoServiceContext{
-		ServiceName:               serviceName,
-		Namespace:                 base.Namespace,
-		SourceName:                base.GetSourceName(serviceName),
-		BasePath:                  base.GetBasePath(serviceName),
-		Edition:                   base.Edition,
-		SingleStage:               base.SingleStage,
-		BaseOnly:                  base.BaseOnly,
-		KustomizationName:         kustomizationName(serviceName, base.KustomizationName),
-		HasOverrideValues:         base.GetHasOverrideValues(),
-		EnterpriseRegistry:        base.EnterpriseRegistry,
-		GeneratedResourceFiles:    generatedResourceFiles,
-		ExtraDependencies:         extraDeps,
-		OverrideDependsOn:         base.OverrideDependsOn,
-		OverrideValues:            base.OverrideValues,
-		OverrideValuesRendererKey: base.OverrideValuesRendererKey,
-		KustomizationContent:      base.KustomizationContent,
-		OverlayFilesRendererKey:   base.OverlayFilesRendererKey,
-		ClusterName:               cfg.ClusterName(),
-		BaseRepoURL:               baseRepoURL,
-		RepoBranch:                branch,
-		RepoTag:                   repoTag,
-		GitopsAuthMethod:          cfg.OpenCenter.GitOps.ResolvedAuthMethod,
-		FluxInterval:              interval,
-		Force:                     adoption.Force,
-		Suspend:                   adoption.Suspend,
+		ServiceName:            serviceName,
+		Namespace:              namespace,
+		SourceName:             spec.SourceName,
+		BasePath:               spec.BasePath,
+		EmitSource:             spec.EmitSource,
+		SingleStage:            spec.SingleStage,
+		BaseOnly:               spec.BaseOnly,
+		KustomizationName:      kustomizationName(serviceName, spec.KustomizationName),
+		HasOverrideValues:      spec.HasOverrideValues,
+		EnterpriseRegistry:     spec.EnterpriseRegistry,
+		GeneratedResourceFiles: generatedResourceFiles,
+		ExtraDependencies:      extraDeps,
+		OverrideDependsOn:      append([]string{}, spec.OverrideDependsOn...),
+		OverrideValues:         spec.OverrideValues,
+		OverrideValuesRenderer: spec.OverrideValuesRenderer,
+		KustomizationContent:   spec.KustomizationContent,
+		OverlayFilesRenderer:   spec.OverlayFilesRenderer,
+		ClusterName:            cfg.ClusterName(),
+		BaseRepoURL:            baseRepoURL,
+		RepoBranch:             branch,
+		RepoTag:                repoTag,
+		GitopsAuthMethod:       cfg.OpenCenter.GitOps.ResolvedAuthMethod,
+		FluxInterval:           interval,
+		Force:                  adoption.Force,
+		Suspend:                adoption.Suspend,
 	}
 }
 
@@ -247,7 +270,7 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 	var actions []clusterAppAction
 
 	// 1. Source file (skip if shared source owned by another service)
-	if ctx.SourceName == "opencenter-"+ctx.ServiceName {
+	if ctx.EmitSource || ctx.SourceName == "opencenter-"+ctx.ServiceName {
 		content, err := renderInlineAutoTemplate(autoSourceTemplate, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("source: %w", err)
@@ -292,14 +315,10 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 		resources = append(resources, CustomDirName+"/")
 	}
 	var overlayFiles map[string]string
-	if ctx.OverlayFilesRendererKey != "" {
-		renderer, err := getOverlayFilesRenderer(ctx.OverlayFilesRendererKey)
+	if ctx.OverlayFilesRenderer != nil {
+		overlayFiles, err = ctx.OverlayFilesRenderer(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("overlay-files: %w", err)
-		}
-		overlayFiles, err = renderer(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("overlay-files renderer %q: %w", ctx.OverlayFilesRendererKey, err)
+			return nil, fmt.Errorf("overlay-files renderer for %q: %w", ctx.ServiceName, err)
 		}
 		for filename := range overlayFiles {
 			if !containsString(resources, filename) {
@@ -332,14 +351,10 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 	// 5. Override values
 	if ctx.HasOverrideValues {
 		overrideContent := "---\n...\n"
-		if ctx.OverrideValuesRendererKey != "" {
-			renderer, err := getOverrideValuesRenderer(ctx.OverrideValuesRendererKey)
+		if ctx.OverrideValuesRenderer != nil {
+			rendered, err := ctx.OverrideValuesRenderer(cfg)
 			if err != nil {
-				return nil, fmt.Errorf("override-values: %w", err)
-			}
-			rendered, err := renderer(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("override-values renderer %q: %w", ctx.OverrideValuesRendererKey, err)
+				return nil, fmt.Errorf("override-values renderer for %q: %w", ctx.ServiceName, err)
 			}
 			overrideContent = rendered
 		} else if ctx.OverrideValues != "" {

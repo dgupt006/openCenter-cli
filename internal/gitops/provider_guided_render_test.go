@@ -110,7 +110,7 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 	cfg := newDefault("loki-swift-guided")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
 	cfg.OpenCenter.Services["loki"] = &configservices.LokiConfig{
-		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "loki"},
+		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability"},
 		StorageType:                  "swift",
 		BucketName:                   "loki-container",
 		SwiftAuthURL:                 "https://identity.api.example.com/v3",
@@ -144,7 +144,7 @@ func TestRenderClusterAppsTempoSwift(t *testing.T) {
 	cfg := newDefault("tempo-swift-guided")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
 	cfg.OpenCenter.Services["tempo"] = &configservices.TempoConfig{
-		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "tempo"},
+		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability"},
 		StorageType:                  "swift",
 		BucketName:                   "tempo-container",
 		SwiftAuthURL:                 "https://identity.api.example.com/v3",
@@ -660,33 +660,15 @@ func TestRenderClusterAppsOpenStackCSINamespace(t *testing.T) {
 }
 
 func TestRenderClusterAppsGatewayDependsOnEnvoyGatewayAPIBase(t *testing.T) {
-	cfg := newDefault("gw-dep-test")
-
-	// Read through BaseConfig rather than asserting a concrete service type: this
-	// test cares about ExtraDependencies, not how gateway happens to be typed.
-	svc := extractBaseConfig(cfg.OpenCenter.Services["gateway"])
-	if svc == nil {
-		t.Fatal("gateway service config does not expose a BaseConfig")
+	spec, ok := newBuiltInRenderCatalog().Lookup("gateway")
+	if !ok {
+		t.Fatal("gateway is missing from the render catalog")
 	}
-
-	// The gateway must depend on envoy-gateway-api-base (the base-stage kustomization
-	// name for the gateway-api service whose KustomizationName is "envoy-gateway-api").
-	// "gateway-api-base" doesn't exist as a Flux Kustomization name.
-	for _, dep := range svc.ExtraDependencies {
-		if dep == "gateway-api-base" {
-			t.Fatal("gateway service depends on 'gateway-api-base' but should depend on 'envoy-gateway-api-base' — 'gateway-api-base' does not exist as a Flux Kustomization")
-		}
+	if !containsString(spec.ExtraDependencies, "envoy-gateway-api-base") {
+		t.Fatalf("expected catalog gateway dependencies to contain envoy-gateway-api-base, got %v", spec.ExtraDependencies)
 	}
-
-	found := false
-	for _, dep := range svc.ExtraDependencies {
-		if dep == "envoy-gateway-api-base" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected gateway service ExtraDependencies to contain 'envoy-gateway-api-base', got %v", svc.ExtraDependencies)
+	if containsString(spec.ExtraDependencies, "gateway-api-base") {
+		t.Fatal("catalog gateway dependencies contain gateway-api-base, which does not exist")
 	}
 }
 

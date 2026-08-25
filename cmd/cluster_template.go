@@ -92,8 +92,8 @@ available option.`,
 				cfg = generateCompleteTemplate(provider)
 			}
 
-			// Marshal to YAML
-			data, err := yaml.Marshal(&cfg)
+			// Marshal to public YAML
+			data, err := v2.MarshalPublicConfig(&cfg)
 			if err != nil {
 				return fmt.Errorf("failed to marshal configuration: %w", err)
 			}

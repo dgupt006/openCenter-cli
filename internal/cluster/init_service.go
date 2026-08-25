@@ -253,29 +253,48 @@ func (s *InitService) loadOrCreateConfig(opts InitOptions) (*v2.Config, map[stri
 	var configMap map[string]any
 
 	if opts.ConfigFile != "" {
-		// Load from file
+		// Load from file using the same strict public decode contract as ConfigLoader.
 		data, err := s.fileSystem.ReadFile(opts.ConfigFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading config file: %w", err)
 		}
 
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		cfg, err = v2.DecodePublicConfig(data)
+		if err != nil {
 			return nil, nil, fmt.Errorf("parsing config file: %w", err)
 		}
-
+		sanitized, err := v2.SanitizePublicYAML(data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("sanitizing config file: %w", err)
+		}
 		configMap = make(map[string]any)
-		if err := yaml.Unmarshal(data, &configMap); err != nil {
+		if err := yaml.Unmarshal(sanitized, &configMap); err != nil {
 			return nil, nil, fmt.Errorf("parsing config file to map: %w", err)
 		}
 	} else if opts.ConfigMap != nil {
-		// Use provided config map
+		// Use provided config map while retaining its pointer for init merges.
 		configMap = opts.ConfigMap
 		data, err := yaml.Marshal(configMap)
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshaling config map: %w", err)
 		}
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		cfg, err = v2.DecodePublicConfig(data)
+		if err != nil {
 			return nil, nil, fmt.Errorf("parsing config map: %w", err)
+		}
+		data, err = v2.SanitizePublicYAML(data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("sanitizing config map: %w", err)
+		}
+		sanitizedMap := make(map[string]any)
+		if err := yaml.Unmarshal(data, &sanitizedMap); err != nil {
+			return nil, nil, fmt.Errorf("parsing sanitized config map: %w", err)
+		}
+		for key := range configMap {
+			delete(configMap, key)
+		}
+		for key, value := range sanitizedMap {
+			configMap[key] = value
 		}
 	} else {
 		// Create default configuration
@@ -318,7 +337,7 @@ func (s *InitService) createDefaultConfig(opts InitOptions) (*v2.Config, map[str
 		cfg.OpenCenter.Infrastructure.Provider = opts.Provider
 	}
 
-	data, err := yaml.Marshal(cfg)
+	data, err := v2.MarshalPublicConfig(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshaling default v2 config: %w", err)
 	}
@@ -478,7 +497,7 @@ func (s *InitService) effectiveGitopsAuthMethod() string {
 
 // validateConfig validates the configuration
 func (s *InitService) validateConfig(cfg *v2.Config) error {
-	data, err := yaml.Marshal(cfg)
+	data, err := v2.MarshalPublicConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal v2 config for validation: %w", err)
 	}
@@ -528,6 +547,10 @@ func (s *InitService) saveConfig(ctx context.Context, cfg *v2.Config, configPath
 		data, err := v2.RenderFullTemplateYAMLFromConfig(cfg)
 		if err != nil {
 			return fmt.Errorf("rendering v2 full template: %w", err)
+		}
+		data, err = v2.SanitizePublicYAML(data)
+		if err != nil {
+			return fmt.Errorf("sanitizing rendered v2 full template: %w", err)
 		}
 		if _, err := loader.LoadFromBytes(data); err != nil {
 			return fmt.Errorf("validating rendered v2 full template: %w", err)

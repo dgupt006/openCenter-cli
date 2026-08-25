@@ -86,8 +86,6 @@ docs/operations/configure-networking.md:opencenter.cluster.kubernetes.dns_zone_n
 docs/operations/configure-networking.md:opencenter.cluster.kubernetes.loadbalancer_provider
 docs/operations/configure-networking.md:opencenter.cluster.networking
 
-docs/operations/customize-services.md:opencenter.services.vsphere-csi.image_repository
-docs/operations/customize-services.md:opencenter.services.vsphere-csi.image_tag
 docs/operations/customize-services.md:opencenter.managed_service
 docs/operations/customize-services.md:opencenter.services.weave-gitops.hostname
 docs/operations/troubleshoot-deployment.md:opencenter.cluster.kubernetes.worker_count

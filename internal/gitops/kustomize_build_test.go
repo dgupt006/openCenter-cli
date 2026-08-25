@@ -18,7 +18,7 @@ func TestRenderMetalLBOverlayBuildsWithKustomize(t *testing.T) {
 	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
 	cfg.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
 	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{
-		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "metallb-system", OverlayFilesRendererKey: "metallb"},
+		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "metallb-system"},
 		IPAddressPools: []services.IPAddressPool{{
 			Name:      "public-pool",
 			Addresses: []string{"10.0.0.1/32"},
@@ -45,7 +45,7 @@ func TestServiceOverlayWithoutCustomResourcesBuilds(t *testing.T) {
 	cfg := newDefault("kustomize-empty-custom")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
 	cfg.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
-	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"}}
+	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true}}
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("render: %v", err)
 	}

@@ -433,18 +433,51 @@ opencenter:
     # ... (20+ services total)
 ```
 
-**Service Base Fields:**
+**Common service fields (`BaseConfig`):**
 
-All services support these fields:
+Services that embed `BaseConfig` support these fields:
 
 * `enabled` (bool): Enable/disable service
+* `adoption_mode` (string): Flux ownership mode (`managed`, `external`, `sync`, `deferred`, or `takeover`)
 * `namespace` (string): Kubernetes namespace
-* `hostname` (string): HTTPRoute hostname
-* `image_repository` (string): Container image repository
-* `image_tag` (string): Container image tag
-* `gitops_source_repo` (string): GitOps source repository
-* `gitops_source_release` (string): GitOps source release tag
-* `gitops_source_branch` (string): GitOps source branch
+* `image.repository` (string): Container image repository
+* `image.tag` (string): Container image tag
+* `source.repo` (string): GitOps source repository
+* `source.branch` (string): Git branch to track
+* `source.release` (string): Pinned GitOps source release tag; mutually exclusive with `source.branch`
+
+The image and source fields are nested in the service configuration:
+
+```yaml
+opencenter:
+  services:
+    my-service:
+      enabled: true
+      image:
+        repository: "registry.example.com/my-service"
+        tag: "v1.2.3"
+      source:
+        repo: "ssh://git@github.com/example/platform-base.git"
+        branch: "main"
+```
+
+`hostname` is not a universal service field or part of `BaseConfig`. It is
+service-specific and is supported only by service configurations that declare
+it, such as Keycloak or Headlamp.
+
+**Rendering internals are not public configuration.** Renderer selection,
+descriptor or stage topology, generated-file ownership, and raw Helm override
+values are resolved internally from the immutable render catalog and explicit
+service descriptors. Do not add keys such as `renderer`, `single_stage`,
+`base_only`, `source_name`, `override_values_renderer`, or raw
+`override_values` to a cluster file. Legacy v2 renderer metadata is migration
+input only and is removed during the v2 load/normalize path; it is not part of
+the supported schema.
+
+For supported behavior, use the service's typed fields documented above. For
+manifests or values that are intentionally outside the typed service contract,
+use the service overlay's user-owned `custom/` directory. Generator-owned files
+and rendering topology must not be edited through configuration.
 
 ## opentofu Section
 

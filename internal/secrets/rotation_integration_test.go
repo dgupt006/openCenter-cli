@@ -481,11 +481,31 @@ opencenter:
     cluster_name: ` + cluster + `
   meta:
     organization: test-org
+  services:
+    olm:
+      enabled: true
+      edition: enterprise
+      enterprise_registry: true
+      custom_resources: [resource.yaml]
+      extra_dependencies: [network]
+      conditional_dependencies: [{name: network, when_enabled: cni}]
+      kustomization_content: generated
+      overlay_files_renderer: legacy
+      override_values: |
+        arbitrary: value
+      override_values_renderer: legacy
+      single_stage: true
+      base_only: false
+      source_name: legacy-source
+      kustomization_name: legacy-kustomization
+      override_depends_on: [sources]
+      has_override_values: true
 secrets:
   ssh_private_key_file: ~/.ssh/old-key
   ssh_public_key_file: ~/.ssh/old-key.pub
 `
 		configPath := writeRotationTestConfig(t, cluster, configData)
+		require.NoError(t, os.WriteFile(configPath, []byte(configData), 0o600))
 
 		// Update SSH key
 		newKeyPath := "~/.config/opencenter/clusters/" + cluster + "/secrets/ssh/new-key"
@@ -495,6 +515,9 @@ secrets:
 		// Verify config was updated
 		updatedData, err := os.ReadFile(configPath)
 		require.NoError(t, err)
+		for _, key := range []string{"edition", "enterprise_registry", "custom_resources", "extra_dependencies", "conditional_dependencies", "kustomization_content", "overlay_files_renderer", "override_values", "override_values_renderer", "single_stage", "base_only", "source_name", "kustomization_name", "override_depends_on", "has_override_values"} {
+			assert.NotContains(t, string(updatedData), key+":", "rotated config contains legacy key %q", key)
+		}
 
 		var cfg map[string]interface{}
 		err = yaml.Unmarshal(updatedData, &cfg)

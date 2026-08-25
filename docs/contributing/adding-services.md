@@ -2,10 +2,10 @@
 id: adding-services
 title: "Adding New Platform Services"
 sidebar_label: Adding New Platform Services
-description: How to add new platform services to openCenter-cli using auto-descriptors or explicit templates.
+description: How to add new platform services to openCenter-cli using the immutable render catalog and explicit descriptors.
 doc_type: how-to
 audience: "developers, platform engineers"
-tags: [services, rendering, gitops, auto-descriptor]
+tags: [services, rendering, gitops, render-catalog, descriptors]
 ---
 # Adding New Platform Services
 
@@ -16,9 +16,12 @@ tags: [services, rendering, gitops, auto-descriptor]
 * Development environment set up (see [Development Setup](development-setup.md))
 * Service’s Helm chart already added to `openCenter-gitops-base` under `applications/base/services/<service>/`
 
-## Quick Path: Standard Services (Auto-Descriptor)
+## Quick Path: Standard Services (Catalog-Backed Auto-Descriptor)
 
-Most services follow the standard two-stage FluxCD pattern. For these, adding a service requires **only configuration changes** -- no templates, no descriptor files, no Go code beyond a config struct.
+Most services follow the standard two-stage FluxCD pattern. For these, adding a
+service uses the typed config/defaults and an immutable catalog entry that can
+reuse the standard planner. It does not require a service-specific renderer,
+string-based renderer registration, or renderer fields in `BaseConfig`.
 
 ### Step 1: Register the Service Config Type
 
@@ -58,7 +61,8 @@ Add the service to `internal/config/v2/defaults.go` in `defaultServiceMap()`:
 }},
 ```
 
-That’s it. The auto-descriptor engine generates:
+Once the typed config, defaults, and catalog coverage are in place, the
+standard planner generates:
 
 * `services/sources/opencenter-my-service.yaml` (GitRepository)
 * `services/fluxcd/my-service.yaml` (two-stage Kustomization)
@@ -77,100 +81,104 @@ mise run schema-v2
 The regeneration test file is created on demand by the mise task, so
 `go test -run TestRegenSchema` on its own will not find anything to run.
 
-### BaseConfig Rendering Fields
+### Render catalog and contributor contract
 
-Control rendering behavior via `BaseConfig` fields. These are set in Go, in
-`defaultServiceMap()` -- they are contributor surface, not user surface.
+`BaseConfig` is part of the typed desired-state model. Keep it limited to
+public service inputs such as enablement, namespace, image settings, and other
+fields that operators can safely configure. Do not add renderer selectors,
+rendering topology, generated-file lists, or raw Helm override content to a
+service config type.
 
-| Field | Default | Use When | YAML key |
-| --- | --- | --- | --- |
-| `Namespace` | (required) | Always set -- target namespace | supported |
-| `Edition` | `""` | Service has community/enterprise variants in gitops-base | supported |
-| `ExtraDependencies` | `[]` | Additional dependsOn for the base stage | supported |
-| `ConditionalDependencies` | `[]` | Dependencies gated on another service being enabled | supported |
-| `OverrideValues` | `""` | Inline override-values content (default: empty placeholder) | supported |
-| `EnterpriseRegistry` | `false` | Service needs enterprise OCI registry credentials | supported |
-| `GeneratedResourceFiles` | `[]` | Extra **generator-owned** files a renderer emits into the overlay | deprecated |
-| `SourceName` | `opencenter-<name>` | Multiple services share one GitRepository (e.g. observability) | deprecated |
-| `SingleStage` | `false` | Service has no base in gitops-base (overlay-only) | deprecated |
-| `BaseOnly` | `false` | Service needs no cluster-specific overlay | deprecated |
-| `HasOverrideValues` | `true` (nil) | Set `false` to skip secretGenerator | deprecated |
-| `OverrideDependsOn` | `[]` | Override stage dependsOn (default: `[<service>-base]`) | deprecated |
+Rendering is resolved through an immutable internal render catalog. Each
+catalog entry identifies the service and holds direct Go function references for
+service-specific rendering behavior. `newBuiltInRenderCatalog()` is private and
+is constructed at the planner/rendering call sites that need catalog data (for
+example, `planAutoServiceActions`, `buildAutoServiceContextWithArtifacts`, and
+descriptor rendering). Each caller receives its own catalog value; there is no
+mutable global renderer registry. Contributors must not add string-based renderer
+names, `init()` registration calls, or mutable lookup registries.
 
-`GeneratedResourceFiles` was previously named `CustomResources`. The rename is
-deliberate: the field only adds `resources:` entries to the generated overlay
-kustomization. It does **not** create those files and does **not** protect them
-from deletion. Every filename listed here must be emitted by a renderer in the
-same pass, otherwise `kustomize build` fails after regeneration. Prefer letting
-the renderer report its own emitted files rather than listing them here.
+Use this contract for a new service:
 
-To keep hand-authored manifests in an overlay, put them in the service's
-`custom/` directory. That directory is user-owned: the generator never writes to
-it, never deletes from it, and includes it in the overlay kustomization.
+1. Add or extend the typed service config with only declarative fields.
+2. Define the service's explicit descriptor when it has non-standard files,
+   conditions, dependencies, or ownership boundaries.
+3. Implement any service-specific rendering functions with the repository's
+   renderer signatures.
+4. Add those functions directly to the appropriate `RenderSpec` fields.
+5. Let the descriptor and render plan report the generator-owned output files.
+   Put hand-authored manifests and values in the service overlay's user-owned
+   `custom/` directory; the generator never writes to or deletes that directory.
 
-#### On the "deprecated" column
+A catalog entry uses the actual `RenderSpec` field names. Include only the
+fields needed by the service; unused renderer fields remain nil or empty:
 
-The `deprecated` marker applies to the **YAML key only**. The Go fields remain
-fully supported and are the intended way to configure a service you are adding.
-Setting the corresponding key in a cluster config marks it `deprecated: true` in
-the JSON schema (an editor hint; validation still passes) and prints a warning to
-stderr. The registry lives in `internal/config/services/deprecations.go`.
+```go
+RenderSpec{
+    ServiceName:            "my-service",
+    DefaultNamespace:       "my-service",
+    SourceName:             "opencenter-my-service",
+    SourceGroup:            "my-service",
+    EmitSource:             true,
+    BasePath:               "applications/base/services/my-service",
+    HasOverrideValues:     true,
+    OverrideValuesRenderer: myServiceOverrideValuesRenderer,
+    OverlayFilesRenderer:   myServiceOverlayFilesRenderer,
+}
+```
 
-These keys are deprecated at the YAML layer because they select internal
-rendering topology -- which Flux template is used, which GitRepository is
-referenced, whether an override secret is emitted -- and the only correct value
-is the one that matches what exists in openCenter-gitops-base. Overriding them
-per cluster produces a broken render, not a customization.
+For descriptor-owned behavior that must create files from typed configuration,
+associate a direct function reference with the descriptor name in the catalog's
+dynamic planner list:
+
+```go
+type dynamicActionPlanner func(v2.Config) ([]clusterAppAction, error)
+
+type catalogDynamicPlanner struct {
+    descriptorName string
+    planner        dynamicActionPlanner
+}
+
+// Part of the RenderCatalog value returned by newBuiltInRenderCatalog.
+dynamicPlanners: []catalogDynamicPlanner{
+    {descriptorName: "service-my-service", planner: planMyServiceDynamicActions},
+}
+```
+
+The planner returns generator-owned render actions and is validated against its
+explicit descriptor. The association is by descriptor name, but the planner
+itself is a direct Go function reference; it is not a string-based renderer
+lookup. The public YAML contains typed service fields only. If an operator needs
+a value that is not represented by a typed field, document and add that field as
+part of the service contract, or direct the operator to `custom/`; never expose
+the catalog, descriptor topology, renderer selection, or raw override values as
+cluster configuration.
 
 ### Examples
 
-**Observability sub-service (shared source):**
+**Standard service:**
 
 ```go
-"mimir": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{
-    Enabled:    false,
-    Namespace:  "observability",
-    SourceName: "opencenter-observability",
-}},
-```
-
-**Base-only service (no cluster customization):**
-
-```go
-"external-snapshotter": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{
-    Enabled:  true,
-    Namespace: "external-snapshotter",
-    BaseOnly: true,
-}},
-```
-
-**Single-stage service (overlay-only, no base):**
-
-```go
-"gateway": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{
-    Enabled:           true,
-    Namespace:         "gateway",
-    SingleStage:       true,
-    ExtraDependencies: []string{"envoy-gateway-api-base"},
-}},
-```
-
-**Service with conditional dependency:**
-
-```go
-"rbac-manager": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{
+"my-service": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{
     Enabled:   true,
-    Namespace: "rbac-system",
-    BaseOnly:  true,
-    ConditionalDependencies: []services.ConditionalDependency{
-        {Name: "kube-prometheus-stack-base", WhenEnabled: "kube-prometheus-stack"},
-    },
+    Namespace: "my-service",
 }},
+```
+
+**Service with typed settings:**
+
+```go
+type MyServiceConfig struct {
+    BaseConfig `yaml:",inline"`
+    BucketName string `yaml:"bucket_name,omitempty" json:"bucket_name,omitempty"`
+}
 ```
 
 ## Complex Services: Explicit Descriptors
 
-Services that need custom rendering logic (multi-component, conditional files, templated override-values, custom renderers) use explicit descriptors.
+Services that need custom rendering logic (multi-component, conditional files,
+templated override-values, or service-specific planning) use explicit descriptors
+and, when needed, direct function references in the immutable render catalog.
 
 ### When to Use Explicit Descriptors
 
@@ -212,18 +220,13 @@ Add the service to the hardcoded lists in:
 * `services/sources/kustomization.yaml.tpl`
 * `services/fluxcd/kustomization.yaml.tpl`
 
-### Step 4: (Optional) Custom Renderer
+### Step 4: (Optional) Service-Specific Renderer
 
-For services like cert-manager that generate dynamic files based on config:
-
-```go
-// internal/gitops/my_service_renderer.go
-func renderMyServiceDynamicFiles(cfg v2.Config, targetDir string, workspace *GitOpsWorkspace) error {
-    // Generate files based on typed config
-}
-```
-
-Hook it into `RenderClusterApps` or the service plugin’s `Renderer` function.
+For services like cert-manager that generate dynamic files based on typed config,
+implement the renderer function and reference it directly from the service's
+immutable render-catalog entry. The function must report the generator-owned
+files it plans or emits. Do not register it by string name or mutate a global
+renderer registry.
 
 ## Verification
 
@@ -245,9 +248,7 @@ mise run schema-v2
 
 ## Evidence
 
-* Auto-descriptor engine: `internal/gitops/auto_descriptor.go`
-* BaseConfig fields: `internal/config/services/base.go`
-* Service defaults: `internal/config/v2/defaults.go` → `defaultServiceMap()`
+* Immutable render catalog: `internal/gitops/render_catalog.go`
 * Explicit descriptors: `internal/services/descriptors/data/`
 * Descriptor renderer: `internal/gitops/descriptor_renderer.go`
-* Rendering contract: `docs/dev/rendering-contract.md`
+* Rendering contract: [Rendering Contract](rendering-contract.md)

@@ -24,7 +24,7 @@ func TestRenderClusterAppsValidationBeforeMutation(t *testing.T) {
 	bad := cfg
 	bad.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
 	bad.OpenCenter.Services["metallb"] = &services.MetalLBConfig{
-		BaseConfig:       services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"},
+		BaseConfig:       services.BaseConfig{Enabled: true},
 		IPAddressPools:   []services.IPAddressPool{{Name: "public", Addresses: []string{"10.0.0.1/32"}}},
 		L2Advertisements: []services.L2Advertisement{{Name: "invalid", IPAddressPools: []string{"missing"}}},
 	}
@@ -50,7 +50,7 @@ func TestRenderClusterAppsRenderFailureLeavesExistingTreeIntact(t *testing.T) {
 	failed := cfg
 	failed.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
 	failed.OpenCenter.Services["metallb"] = &services.MetalLBConfig{
-		BaseConfig:       services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"},
+		BaseConfig:       services.BaseConfig{Enabled: true},
 		L2Advertisements: []services.L2Advertisement{{Name: "bad", IPAddressPools: []string{"does-not-exist"}}},
 	}
 
@@ -67,7 +67,7 @@ func TestRenderSingleServiceMatchesOwnershipChecks(t *testing.T) {
 	cfg := newDefault("single-service-ownership")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
 	cfg.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
-	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"}}
+	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true}}
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("initial render: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestPlanClusterAppsPromotionReportsChangesWithoutWriting(t *testing.T) {
 	cfg := newDefault("dry-run-report")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
 	cfg.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
-	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"}}
+	cfg.OpenCenter.Services["metallb"] = &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: true}}
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("initial render: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestPlanClusterAppsPromotionReportsChangesWithoutWriting(t *testing.T) {
 	pending := cfg
 	pending.OpenCenter.Services = cloneServiceMap(cfg.OpenCenter.Services)
 	pending.OpenCenter.Services["metallb"] = &services.MetalLBConfig{
-		BaseConfig:     services.BaseConfig{Enabled: true, OverlayFilesRendererKey: "metallb"},
+		BaseConfig:     services.BaseConfig{Enabled: true},
 		IPAddressPools: []services.IPAddressPool{{Name: "public", Addresses: []string{"10.0.0.1/32"}}},
 	}
 	result, err := PlanClusterAppsPromotion(pending)

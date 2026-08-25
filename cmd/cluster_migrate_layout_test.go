@@ -62,6 +62,11 @@ func TestClusterMigrateLayoutMovesZonesAndRewritesConfig(t *testing.T) {
 	}
 
 	migratedConfig := string(data)
+	for _, key := range []string{"edition", "enterprise_registry", "custom_resources", "extra_dependencies", "conditional_dependencies", "kustomization_content", "overlay_files_renderer", "override_values", "override_values_renderer", "single_stage", "base_only", "source_name", "kustomization_name", "override_depends_on", "has_override_values"} {
+		if strings.Contains(migratedConfig, key+":") {
+			t.Fatalf("migrated config contains legacy key %q:\n%s", key, migratedConfig)
+		}
+	}
 	for _, want := range []string{
 		"local_dir: " + filepath.Join(dir, "clusters", "gitops", "acme"),
 		"sops_age_key_file: " + filepath.Join(dir, "clusters", "secrets", "acme", "prod", "age", "keys", "prod-key.txt"),
@@ -115,6 +120,25 @@ opencenter:
   meta:
     name: ` + clusterName + `
     organization: ` + organization + `
+  services:
+    olm:
+      enabled: true
+      edition: enterprise
+      enterprise_registry: true
+      custom_resources: [resource.yaml]
+      extra_dependencies: [network]
+      conditional_dependencies: [{name: network, when_enabled: cni}]
+      kustomization_content: generated
+      overlay_files_renderer: legacy
+      override_values: |
+        arbitrary: value
+      override_values_renderer: legacy
+      single_stage: true
+      base_only: false
+      source_name: legacy-source
+      kustomization_name: legacy-kustomization
+      override_depends_on: [sources]
+      has_override_values: true
   gitops:
     repository:
       local_dir: ` + legacyOrgDir + `

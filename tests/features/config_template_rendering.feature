@@ -157,8 +157,6 @@ Feature: Configuration-driven template rendering
             loki_volume_size: 50
             loki_storage_class: "fast-ssd"
             swift_auth_url: "https://keystone.example.com/v3/"
-            swift_username: "loki-user"
-            swift_project_name: "my-project"
             swift_region: "US-EAST-1"
             swift_domain_name: "default"
       secrets:
@@ -454,8 +452,6 @@ Feature: Configuration-driven template rendering
             loki_volume_size: 50
             loki_storage_class: csi-cinder-sc-delete
             swift_auth_url: https://keystone.api.test.example.com/v3/
-            swift_username: loki-user
-            swift_project_name: test-project
             swift_region: US-EAST-1
             swift_domain_name: default
           velero:

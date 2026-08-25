@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -791,4 +793,77 @@ func TestInitService_NewInitService(t *testing.T) {
 	if service.validationEngine == nil {
 		t.Error("validationEngine is nil")
 	}
+}
+
+func TestInitServiceLoadOrCreateConfigUsesStrictPublicDecode(t *testing.T) {
+	initService := newInitServiceForPublicDecodeTest(t)
+	configPath := filepath.Join(t.TempDir(), "input.yaml")
+	configData := []byte(`schema_version: "2.0"
+opencenter:
+  meta:
+    name: init-config
+    organization: acme
+    env: dev
+    region: dfw3
+  services:
+    olm:
+      enabled: true
+      override_values_renderer: legacy
+`)
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stderr = writer
+	cfg, configMap, decodeErr := initService.loadOrCreateConfig(InitOptions{ConfigFile: configPath})
+	_ = writer.Close()
+	os.Stderr = oldStderr
+	warningOutput, _ := io.ReadAll(reader)
+	_ = reader.Close()
+
+	if decodeErr != nil {
+		t.Fatalf("loadOrCreateConfig() error = %v", decodeErr)
+	}
+	if cfg.OpenCenter.Meta.Name != "init-config" {
+		t.Fatalf("decoded name = %q, want init-config", cfg.OpenCenter.Meta.Name)
+	}
+	if strings.Contains(string(warningOutput), "opencenter.services.olm.override_values_renderer is deprecated") == false {
+		t.Fatalf("warning output = %q, want legacy metadata warning", warningOutput)
+	}
+	if strings.Contains(fmt.Sprintf("%v", configMap), "override_values_renderer") {
+		t.Fatalf("config map contains legacy metadata: %#v", configMap)
+	}
+}
+
+func TestInitServiceLoadOrCreateConfigRejectsUnknownServiceKey(t *testing.T) {
+	initService := newInitServiceForPublicDecodeTest(t)
+	configPath := filepath.Join(t.TempDir(), "input.yaml")
+	configData := []byte(`schema_version: "2.0"
+opencenter:
+  services:
+    olm:
+      enabled: true
+      unknown_service_key: must-fail
+`)
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, _, err := initService.loadOrCreateConfig(InitOptions{ConfigFile: configPath}); err == nil || !strings.Contains(err.Error(), "unknown_service_key") {
+		t.Fatalf("loadOrCreateConfig() error = %v, want unknown service key rejection", err)
+	}
+}
+
+func newInitServiceForPublicDecodeTest(t *testing.T) *InitService {
+	t.Helper()
+	configManager, err := config.NewConfigManager("")
+	if err != nil {
+		t.Fatalf("create config manager: %v", err)
+	}
+	return NewInitService(paths.NewPathResolver(t.TempDir()), setupValidationEngine(t), configManager)
 }

@@ -24,7 +24,7 @@ The earlier review covered `remediation/generator-ownership-and-sops-keys` throu
 * Secret-artifact routing and generated membership are one topology defect and were implemented together.
 * `.sops.yaml` is shared and tracked; its ignore rule was removed.
 * The restored `.mise.toml` task definitions and `docs/refactor-audit-report.md` are retained and are not product debt.
-* The `custom/` omission for services using verbatim `kustomization_content` is intentional and remains deferred until that mechanism is retired.
+* The `custom/` directory is the supported user-owned customization boundary; legacy `kustomization_content` is not public configuration and is removed during v2 normalization and public serialization. No follow-up is deferred for exposing that key.
 
 ## Completed phases
 
@@ -79,13 +79,21 @@ The generator uses a deterministic built-in command factory with no external plu
 
 The restored `.mise.toml` task definitions and `docs/refactor-audit-report.md` were confirmed wanted, retained, and are no longer product debt.
 
-## Deferred by decision
+## Decisions and remaining deferred items
 
-**Hard removal of deprecated renderer keys.** `custom_resources`, `kustomization_content`, `overlay_files_renderer`, `override_values_renderer`, `single_stage`, `base_only`, `source_name`, `kustomization_name`, `override_depends_on`, and `has_override_values` remain supported for compatibility while deprecated. Removing them requires a major schema version bump; the underlying Go fields remain the supported contributor surface — see [Adding Services](contributing/adding-services.md).
+### Renderer metadata removal — resolved
+
+Legacy v2 renderer metadata is migration input only. The v2 loader strips
+renderer selection, topology, and raw override metadata before typed validation
+and public serialization. New service behavior is described by typed desired-state
+fields, the immutable internal render catalog, and explicit descriptors with
+direct function references. Operators customize unsupported behavior through
+service-specific typed fields or the user-owned `custom/` directory; they do not
+edit renderer metadata in cluster YAML.
 
 **A `generated/` overlay subdirectory.** Rejected in favour of the `.opencenter-generated.json` manifest plus a user-owned `custom/` directory, because introducing the subdirectory would break existing repositories, fixtures, and tests without adding safety the manifest does not already provide.
 
-**`custom/` for verbatim `kustomization_content`.** The omission of a seeded `custom/` directory for services whose overlay is supplied verbatim is intentional and tested. Defer changing it until `kustomization_content` is retired; hand-authored files remain protected by the generated-file manifest, but operators must add their own resource entry in the meantime.
+**Overlay customization.** The user-owned `custom/` directory is the supported place for hand-authored manifests and values, and generated-file manifests protect those files. Legacy `kustomization_content` is migration-only metadata, not supported public behavior; operators must not add it to cluster YAML. No follow-up is deferred for that key.
 
 ## Completion / outcome summary
 
@@ -115,4 +123,4 @@ The restored `.mise.toml` task definitions and `docs/refactor-audit-report.md` w
 * [Manage Secrets](operations/manage-secrets.md) — key lifecycle, reconcile, and revocation guidance
 * [Security Model](concepts/security-model.md) — key lifecycle invariants
 * [Secrets Management Codemap](CODEMAPS/secrets-management.md) — package structure and behaviors
-* [Adding Services](contributing/adding-services.md) — generator ownership and BaseConfig fields
+* [Adding Services](contributing/adding-services.md) — immutable render-catalog contributor contract

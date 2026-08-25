@@ -481,7 +481,7 @@ func RenderFullTemplateYAMLFromConfig(cfg *Config) ([]byte, error) {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	data, err := yaml.Marshal(cfg)
+	data, err := MarshalPublicConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal v2 full template: %w", err)
 	}
@@ -727,49 +727,35 @@ func normalizeGitopsAuthMethod(authMethod string) string {
 
 func defaultServiceMap(clusterFQDN string) ServiceMap {
 	return ServiceMap{
-		"calico":               &services.CalicoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "calico-system"}, KubeAPIServer: ""},
-		"cert-manager":         &services.CertManagerConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"}},
-		"etcd-backup":          &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kube-system"}},
-		"external-snapshotter": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "external-snapshotter", BaseOnly: true}},
-		"fluxcd":               &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
-		"gateway":              &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "gateway", SingleStage: true, HasOverrideValues: boolPtr(false), ExtraDependencies: []string{"envoy-gateway-api-base"}, OverlayFilesRendererKey: "gateway", KustomizationContent: "---\napiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - \"namespace.yaml\"\n  - \"gateway-class.yaml\"\n  - \"gateway.yaml\"\n  - \"envoy-proxy-config.yaml\"\n"}},
-		"gateway-api":          &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "envoy-gateway-system", KustomizationName: "envoy-gateway-api", OverrideValues: "---\nenvoyGateway:\n  config:\n    envoyGateway:\n      logging:\n        level:\n          default: info\n"}},
-		"headlamp": &services.HeadlampConfig{
-			BaseConfig: services.BaseConfig{Enabled: true, Namespace: "headlamp", OverrideValuesRendererKey: "headlamp"},
-			Hostname:   fmt.Sprintf("dashboard.%s", clusterFQDN),
-		},
-		"keycloak": &services.KeycloakConfig{
-			BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"},
-			Hostname:   fmt.Sprintf("auth.%s", clusterFQDN),
-		},
-		// Required by keycloak (keycloak-postgres dependsOn postgres-operator-base).
-		"postgres-operator": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "postgres-operator", OverrideValues: "configGeneral:\n  workers: 2\n"}},
-		// Required by keycloak (oidc-rbac dependsOn rbac-manager-base).
-		"rbac-manager": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system", BaseOnly: true, ConditionalDependencies: []services.ConditionalDependency{{Name: "kube-prometheus-stack-base", WhenEnabled: "kube-prometheus-stack"}}}},
-		// The sources FluxCD Kustomization deploys GitRepository objects for all services.
-		"sources":               &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
-		"kube-prometheus-stack": &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "kube-prometheus-stack", ExtraDependencies: []string{"observability-namespace", "kube-prometheus-stack-override"}, OverrideDependsOn: []string{"sources"}}},
-		"kyverno":               &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kyverno", BaseOnly: true}},
-		"loki":                  &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "loki", ExtraDependencies: []string{"observability-namespace", "loki-override"}, OverrideDependsOn: []string{"sources"}}},
-		"openstack-ccm":         &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-ccm", OverrideValuesRendererKey: "openstack-ccm", ExtraDependencies: []string{"openstack-ccm-override"}, OverrideDependsOn: []string{"sources"}}},
-		"openstack-csi":         &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-csi", OverrideValuesRendererKey: "openstack-csi"}},
-		"tempo":                 &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "tempo", ExtraDependencies: []string{"observability-namespace", "tempo-override"}, OverrideDependsOn: []string{"sources"}}},
-		"velero":                &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero", OverrideValuesRendererKey: "velero", ExtraDependencies: []string{"velero-override"}, OverrideDependsOn: []string{"sources"}}},
-		// Present (disabled) so template conditionals can safely index the key.
-		"harbor":  &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}},
-		"metallb": &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "metallb-system", OverlayFilesRendererKey: "metallb"}},
-		// Required by keycloak (keycloak-operator is managed by OLM).
-		"olm":           &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "olm", BaseOnly: true}},
-		"kafka-cluster": &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "strimzi"}},
-		"vsphere-csi":   &services.VSphereCSIConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "vmware-system-csi", OverrideValuesRendererKey: "vsphere-csi"}},
-		"weave-gitops":  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "flux-system", OverrideDependsOn: []string{"sources", "envoy-gateway-api-base"}}},
-		"longhorn": &services.LonghornConfig{
-			BaseConfig: services.BaseConfig{Enabled: false, Namespace: "longhorn-system", OverlayFilesRendererKey: "longhorn"},
-			Hostname:   fmt.Sprintf("longhorn.%s", clusterFQDN),
-		},
-		"mimir":                    &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "mimir"}},
-		"opentelemetry-kube-stack": &services.OpenTelemetryConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability", SourceName: "opencenter-observability", OverrideValuesRendererKey: "opentelemetry-kube-stack"}},
-		"sealed-secrets":           &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "sealed-secrets", OverrideValues: "keyrenewperiod: \"0\"\n"}},
+		"calico":                   &services.CalicoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "calico-system"}, KubeAPIServer: ""},
+		"cert-manager":             &services.CertManagerConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"}},
+		"etcd-backup":              &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kube-system"}},
+		"external-snapshotter":     &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "external-snapshotter"}},
+		"fluxcd":                   &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
+		"gateway":                  &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "gateway"}},
+		"gateway-api":              &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "envoy-gateway-system"}},
+		"headlamp":                 &services.HeadlampConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "headlamp"}, Hostname: fmt.Sprintf("dashboard.%s", clusterFQDN)},
+		"keycloak":                 &services.KeycloakConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"}, Hostname: fmt.Sprintf("auth.%s", clusterFQDN)},
+		"postgres-operator":        &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "postgres-operator"}},
+		"rbac-manager":             &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system"}},
+		"sources":                  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
+		"kube-prometheus-stack":    &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
+		"kyverno":                  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kyverno"}},
+		"loki":                     &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
+		"openstack-ccm":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-ccm"}},
+		"openstack-csi":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-csi"}},
+		"tempo":                    &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
+		"velero":                   &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero"}},
+		"harbor":                   &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}},
+		"metallb":                  &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "metallb-system"}},
+		"olm":                      &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "olm"}},
+		"kafka-cluster":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "strimzi"}},
+		"vsphere-csi":              &services.VSphereCSIConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "vmware-system-csi"}},
+		"weave-gitops":             &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "flux-system"}},
+		"longhorn":                 &services.LonghornConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "longhorn-system"}, Hostname: fmt.Sprintf("longhorn.%s", clusterFQDN)},
+		"mimir":                    &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}},
+		"opentelemetry-kube-stack": &services.OpenTelemetryConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}},
+		"sealed-secrets":           &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "sealed-secrets"}},
 	}
 }
 
@@ -1031,5 +1017,3 @@ func currentUser() string {
 	}
 	return "unknown"
 }
-
-func boolPtr(b bool) *bool { return &b }

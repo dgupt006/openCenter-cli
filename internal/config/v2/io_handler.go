@@ -20,7 +20,6 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
-	"gopkg.in/yaml.v3"
 )
 
 // ConfigIOHandler handles configuration file I/O operations.
@@ -122,7 +121,7 @@ func (cl *ConfigIOHandler) MarshalConfig(config *Config) ([]byte, error) {
 		return nil, NewValidationError("", "configuration cannot be nil", nil)
 	}
 
-	data, err := yaml.Marshal(config)
+	data, err := MarshalPublicConfig(config)
 	if err != nil {
 		return nil, NewParseError("", 0, 0, fmt.Errorf("failed to marshal configuration to YAML: %w", err))
 	}

@@ -335,8 +335,6 @@ Feature: Configuration validation rules
           loki:
             enabled: true
             swift_auth_url: https://keystone.example.com/v3/
-            swift_username: loki
-            swift_project_name: project
             swift_region: REGION
             swift_domain_name: default
       deployment:

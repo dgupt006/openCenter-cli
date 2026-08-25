@@ -30,7 +30,124 @@ const (
 	stringKind = reflect.String
 )
 
-// certManagerCredentialData holds the template context for rendering a single
+// renderInlineTemplateContent renders a template without writing to disk.
+func renderInlineTemplateContent(tmplStr, filename string, data any) (string, error) {
+	funcMap := sprig.TxtFuncMap()
+	t, err := template.New(filename).Funcs(funcMap).Parse(tmplStr)
+	if err != nil {
+		return "", fmt.Errorf("parsing template for %s: %w", filename, err)
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("executing template for %s: %w", filename, err)
+	}
+	if strings.TrimSpace(buf.String()) == "" {
+		return "", nil
+	}
+	return buf.String(), nil
+}
+
+// planCertManagerDynamicActions returns the dynamic cert-manager files as
+// ordinary render actions. Keeping them in the plan preserves atomic promotion
+// and makes single-service rendering use the same ownership model as full render.
+func planCertManagerDynamicActions(cfg v2.Config) ([]clusterAppAction, error) {
+	certManagerSvc, exists := cfg.OpenCenter.Services["cert-manager"]
+	if !exists || IsServiceDisabled(certManagerSvc) {
+		return nil, nil
+	}
+	if err := validateCertManagerCredentials(cfg); err != nil {
+		return nil, err
+	}
+
+	awsCreds := cfg.EnabledCertManagerAWSCredentials()
+	cfCreds := cfg.EnabledCertManagerCloudflareCredentials()
+	var credentials []certManagerCredentialData
+	for name, cred := range awsCreds {
+		credentials = append(credentials, certManagerCredentialData{
+			Name: name, Provider: "aws", AWSAccessKey: cred.AWSAccessKey,
+			AWSSecretAccessKey: cred.AWSSecretAccessKey, Region: cred.Region, DNSZones: cred.DNSZones,
+		})
+	}
+	for name, cred := range cfCreds {
+		credentials = append(credentials, certManagerCredentialData{
+			Name: name, Provider: "cloudflare", APIToken: cred.APIToken, DNSZones: cred.DNSZones,
+		})
+	}
+	sort.Slice(credentials, func(i, j int) bool {
+		if credentials[i].Provider != credentials[j].Provider {
+			return credentials[i].Provider < credentials[j].Provider
+		}
+		return credentials[i].Name < credentials[j].Name
+	})
+
+	certManagerConfig := extractCertManagerConfig(cfg)
+	for i := range credentials {
+		credentials[i].ClusterName = cfg.ClusterName()
+		credentials[i].ClusterFQDN = cfg.OpenCenter.Cluster.ClusterFQDN
+		credentials[i].LetsEncryptServer = certManagerConfig.letsEncryptServer
+		credentials[i].Email = certManagerConfig.email
+		if credentials[i].Region == "" {
+			credentials[i].Region = certManagerConfig.region
+		}
+	}
+
+	var actions []clusterAppAction
+	for _, cred := range credentials {
+		var templateText, filename string
+		switch cred.Provider {
+		case "aws":
+			templateText = awsSecretTemplate
+			filename = fmt.Sprintf("opencenter-aws-credentials-secret-%s.yaml", cred.Name)
+		case "cloudflare":
+			templateText = cloudflareSecretTemplate
+			filename = fmt.Sprintf("opencenter-cloudflare-credentials-secret-%s.yaml", cred.Name)
+		default:
+			return nil, fmt.Errorf("unsupported provider %q", cred.Provider)
+		}
+		content, err := renderInlineTemplateContent(templateText, filename, cred)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: filepath.ToSlash(filepath.Join("services/cert-manager", filename)), Content: content})
+
+		switch cred.Provider {
+		case "aws":
+			templateText = issuerAWSTemplate
+		case "cloudflare":
+			templateText = issuerCloudflareTemplate
+		}
+		filename = fmt.Sprintf("letsencrypt-%s-issuer.yaml", cred.Name)
+		content, err = renderInlineTemplateContent(templateText, filename, cred)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: filepath.ToSlash(filepath.Join("services/cert-manager", filename)), Content: content})
+	}
+
+	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok && dnsProvider == "designate" {
+		issuerData := certManagerCredentialData{
+			Name: "designate", Provider: "designate", ClusterName: cfg.ClusterName(),
+			ClusterFQDN: cfg.OpenCenter.Cluster.ClusterFQDN, LetsEncryptServer: certManagerConfig.letsEncryptServer, Email: certManagerConfig.email,
+		}
+		content, err := renderInlineTemplateContent(issuerDesignateTemplate, "letsencrypt-designate-issuer.yaml", issuerData)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: "services/cert-manager/letsencrypt-designate-issuer.yaml", Content: content})
+	}
+
+	hasDesignate := false
+	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok {
+		hasDesignate = dnsProvider == "designate"
+	}
+	content, err := renderInlineTemplateContent(kustomizationTemplate, "kustomization.yaml", kustomizationData{Credentials: credentials, HasDesignate: hasDesignate})
+	if err != nil {
+		return nil, err
+	}
+	actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: "services/cert-manager/kustomization.yaml", Content: content})
+	return actions, nil
+}
+
 // cert-manager credential secret and its corresponding issuer.
 type certManagerCredentialData struct {
 	// Name is the credential identifier (map key from config).
@@ -57,98 +174,6 @@ type certManagerCredentialData struct {
 	Email             string
 }
 
-// renderCertManagerDynamicFiles renders the dynamic cert-manager credential secrets
-// and issuer files based on enabled credentials in the configuration.
-// It also renders the kustomization.yaml that references all generated files.
-//
-// This function is called as part of the cert-manager service rendering pipeline
-// after the descriptor-driven static files have been written.
-func renderCertManagerDynamicFiles(cfg v2.Config, targetDir string, workspace *GitOpsWorkspace) error {
-	certManagerSvc, exists := cfg.OpenCenter.Services["cert-manager"]
-	if !exists || IsServiceDisabled(certManagerSvc) {
-		return nil
-	}
-
-	// Validate enabled credentials have required fields
-	if err := validateCertManagerCredentials(cfg); err != nil {
-		return err
-	}
-
-	awsCreds := cfg.EnabledCertManagerAWSCredentials()
-	cfCreds := cfg.EnabledCertManagerCloudflareCredentials()
-
-	// Collect all credential data for rendering
-	var credentials []certManagerCredentialData
-	for name, cred := range awsCreds {
-		credentials = append(credentials, certManagerCredentialData{
-			Name:               name,
-			Provider:           "aws",
-			AWSAccessKey:       cred.AWSAccessKey,
-			AWSSecretAccessKey: cred.AWSSecretAccessKey,
-			Region:             cred.Region,
-			DNSZones:           cred.DNSZones,
-		})
-	}
-	for name, cred := range cfCreds {
-		credentials = append(credentials, certManagerCredentialData{
-			Name:     name,
-			Provider: "cloudflare",
-			APIToken: cred.APIToken,
-			DNSZones: cred.DNSZones,
-		})
-	}
-
-	// Sort for deterministic output
-	sort.Slice(credentials, func(i, j int) bool {
-		if credentials[i].Provider != credentials[j].Provider {
-			return credentials[i].Provider < credentials[j].Provider
-		}
-		return credentials[i].Name < credentials[j].Name
-	})
-
-	// Populate cluster-level fields from config
-	certManagerConfig := extractCertManagerConfig(cfg)
-	for i := range credentials {
-		credentials[i].ClusterName = cfg.ClusterName()
-		credentials[i].ClusterFQDN = cfg.OpenCenter.Cluster.ClusterFQDN
-		credentials[i].LetsEncryptServer = certManagerConfig.letsEncryptServer
-		credentials[i].Email = certManagerConfig.email
-		// Use credential-level region if set, otherwise fall back to service-level
-		if credentials[i].Region == "" {
-			credentials[i].Region = certManagerConfig.region
-		}
-	}
-
-	// Render each credential secret + issuer
-	for _, cred := range credentials {
-		if err := renderCredentialSecret(cred, targetDir, workspace); err != nil {
-			return fmt.Errorf("rendering credential secret %s/%s: %w", cred.Provider, cred.Name, err)
-		}
-		if err := renderCredentialIssuer(cred, targetDir, workspace); err != nil {
-			return fmt.Errorf("rendering credential issuer %s/%s: %w", cred.Provider, cred.Name, err)
-		}
-	}
-
-	// Render designate issuer if DNS provider is designate
-	dnsProvider, _ := getStringField(certManagerSvc, "DNSProvider")
-	if dnsProvider == "designate" {
-		issuerData := certManagerCredentialData{
-			Name:              "designate",
-			Provider:          "designate",
-			ClusterName:       cfg.ClusterName(),
-			ClusterFQDN:       cfg.OpenCenter.Cluster.ClusterFQDN,
-			LetsEncryptServer: certManagerConfig.letsEncryptServer,
-			Email:             certManagerConfig.email,
-		}
-		if err := renderInlineTemplate(issuerDesignateTemplate, "letsencrypt-designate-issuer.yaml", issuerData, targetDir, workspace); err != nil {
-			return fmt.Errorf("rendering designate issuer: %w", err)
-		}
-	}
-
-	// Render the kustomization.yaml that references all generated files
-	return renderCertManagerKustomization(cfg, credentials, targetDir, workspace)
-}
-
 // certManagerServiceConfig holds extracted cert-manager service configuration.
 type certManagerServiceConfig struct {
 	letsEncryptServer string
@@ -156,12 +181,40 @@ type certManagerServiceConfig struct {
 	region            string
 }
 
+// validateCertManagerCredentialName enforces the DNS-1123 label contract used by
+// credential names in Kubernetes resource names and generated filenames.
+func validateCertManagerCredentialName(provider, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s credential name must not be empty", provider)
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("%s credential name %q exceeds the 63-character DNS-1123 label limit", provider, name)
+	}
+	isLowerAlphaNumeric := func(char byte) bool {
+		return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
+	}
+	if !isLowerAlphaNumeric(name[0]) || !isLowerAlphaNumeric(name[len(name)-1]) {
+		return fmt.Errorf("%s credential name %q must start and end with a lowercase letter or digit", provider, name)
+	}
+	for i := 0; i < len(name); i++ {
+		char := name[i]
+		if !isLowerAlphaNumeric(char) && char != '-' {
+			return fmt.Errorf("%s credential name %q must be a DNS-1123 label containing only lowercase letters, digits, and hyphens", provider, name)
+		}
+	}
+	return nil
+}
+
 // validateCertManagerCredentials checks that all enabled credentials have their
-// required secret fields populated. Returns an error listing all missing fields.
+// required secret fields populated and that every credential map key is safe to
+// interpolate into Kubernetes resource names and generated paths.
 func validateCertManagerCredentials(cfg v2.Config) error {
 	var errors []string
 
 	for name, cred := range cfg.Secrets.CertManager.AWS {
+		if err := validateCertManagerCredentialName("AWS", name); err != nil {
+			errors = append(errors, fmt.Sprintf("secrets.cert_manager.aws: %v", err))
+		}
 		if !cred.Enabled {
 			continue
 		}
@@ -174,6 +227,9 @@ func validateCertManagerCredentials(cfg v2.Config) error {
 	}
 
 	for name, cred := range cfg.Secrets.CertManager.Cloudflare {
+		if err := validateCertManagerCredentialName("Cloudflare", name); err != nil {
+			errors = append(errors, fmt.Sprintf("secrets.cert_manager.cloudflare: %v", err))
+		}
 		if !cred.Enabled {
 			continue
 		}
@@ -367,87 +423,8 @@ secretGenerator:
       disableNameSuffixHash: true
 `
 
-func renderCredentialSecret(cred certManagerCredentialData, targetDir string, workspace *GitOpsWorkspace) error {
-	var tmplStr string
-	var filename string
-
-	switch cred.Provider {
-	case "aws":
-		tmplStr = awsSecretTemplate
-		filename = fmt.Sprintf("opencenter-aws-credentials-secret-%s.yaml", cred.Name)
-	case "cloudflare":
-		tmplStr = cloudflareSecretTemplate
-		filename = fmt.Sprintf("opencenter-cloudflare-credentials-secret-%s.yaml", cred.Name)
-	default:
-		return fmt.Errorf("unsupported provider %q", cred.Provider)
-	}
-
-	return renderInlineTemplate(tmplStr, filename, cred, targetDir, workspace)
-}
-
-func renderCredentialIssuer(cred certManagerCredentialData, targetDir string, workspace *GitOpsWorkspace) error {
-	var tmplStr string
-
-	switch cred.Provider {
-	case "aws":
-		tmplStr = issuerAWSTemplate
-	case "cloudflare":
-		tmplStr = issuerCloudflareTemplate
-	default:
-		return fmt.Errorf("unsupported provider %q", cred.Provider)
-	}
-
-	filename := fmt.Sprintf("letsencrypt-%s-issuer.yaml", cred.Name)
-	return renderInlineTemplate(tmplStr, filename, cred, targetDir, workspace)
-}
-
 // kustomizationData holds the template context for the cert-manager kustomization.yaml.
 type kustomizationData struct {
 	Credentials  []certManagerCredentialData
 	HasDesignate bool
-}
-
-func renderCertManagerKustomization(cfg v2.Config, credentials []certManagerCredentialData, targetDir string, workspace *GitOpsWorkspace) error {
-	// Check if designate is the DNS provider
-	certManagerConfig := extractCertManagerConfig(cfg)
-	hasDesignate := false
-	if dnsProvider, ok := getStringField(cfg.OpenCenter.Services["cert-manager"], "DNSProvider"); ok {
-		hasDesignate = dnsProvider == "designate"
-	}
-	_ = certManagerConfig // used above via getStringField
-
-	data := kustomizationData{
-		Credentials:  credentials,
-		HasDesignate: hasDesignate,
-	}
-	return renderInlineTemplate(kustomizationTemplate, "kustomization.yaml", data, targetDir, workspace)
-}
-
-// renderInlineTemplate parses and executes an inline Go template string, writing
-// the result to the specified file within the target directory.
-func renderInlineTemplate(tmplStr, filename string, data any, targetDir string, workspace *GitOpsWorkspace) error {
-	funcMap := sprig.TxtFuncMap()
-	t, err := template.New(filename).Funcs(funcMap).Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parsing template for %s: %w", filename, err)
-	}
-
-	var buf strings.Builder
-	if err := t.Execute(&buf, data); err != nil {
-		return fmt.Errorf("executing template for %s: %w", filename, err)
-	}
-
-	output := strings.TrimSpace(buf.String())
-	if output == "" {
-		return nil
-	}
-
-	dst := filepath.Join(targetDir, filename)
-	relPath, err := filepath.Rel(workspace.RootDir, dst)
-	if err != nil {
-		return fmt.Errorf("computing relative path for %s: %w", filename, err)
-	}
-
-	writer := NewAtomicWriter(workspace)
-	return writer.WriteFileString(relPath, buf.String(), 0o644)
 }

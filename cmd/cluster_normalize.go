@@ -19,8 +19,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // newClusterNormalizeCmd creates the "cluster normalize" command.
@@ -115,8 +115,8 @@ If no cluster name is provided, normalizes the currently active cluster.`,
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
 
-			// Marshal the complete configuration to YAML
-			completeData, err := yaml.Marshal(completeCfg)
+			// Marshal the complete configuration to public YAML
+			completeData, err := v2.MarshalPublicConfig(completeCfg)
 			if err != nil {
 				return fmt.Errorf("failed to marshal configuration: %w", err)
 			}

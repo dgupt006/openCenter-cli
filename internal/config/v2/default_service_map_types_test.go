@@ -94,8 +94,8 @@ func TestDefaultServiceMapHostnameServicesExposeHostname(t *testing.T) {
 }
 
 // TestDefaultServiceMapEntriesEmbedBaseConfig ensures every service exposes the
-// shared BaseConfig, which the renderer relies on to read Enabled, Namespace and
-// the renderer keys.
+// shared BaseConfig used for public desired-state fields such as Enabled and
+// Namespace; rendering metadata is owned by the GitOps render catalog.
 func TestDefaultServiceMapEntriesEmbedBaseConfig(t *testing.T) {
 	serviceMap := defaultServiceMap("cluster.example.com")
 
@@ -110,30 +110,6 @@ func TestDefaultServiceMapEntriesEmbedBaseConfig(t *testing.T) {
 			t.Errorf("%q (%s) embeds %s, expected services.BaseConfig",
 				name, typ.Name(), field.Type)
 		}
-	}
-}
-
-// TestDefaultServiceMapBaseOnlyServices ensures services deployed entirely by the
-// shared base repository do not emit stale overlay configuration.
-func TestDefaultServiceMapBaseOnlyServices(t *testing.T) {
-	serviceMap := defaultServiceMap("cluster.example.com")
-
-	for _, name := range []string{"kyverno", "olm"} {
-		t.Run(name, func(t *testing.T) {
-			serviceCfg, ok := serviceMap[name].(*services.DefaultServiceConfig)
-			if !ok {
-				t.Fatalf("%q is not a DefaultServiceConfig", name)
-			}
-			if !serviceCfg.BaseOnly {
-				t.Errorf("%q BaseOnly = false, want true", name)
-			}
-			if serviceCfg.KustomizationContent != "" {
-				t.Errorf("%q has stale KustomizationContent", name)
-			}
-			if len(serviceCfg.GeneratedResourceFiles) != 0 {
-				t.Errorf("%q has stale GeneratedResourceFiles: %v", name, serviceCfg.GeneratedResourceFiles)
-			}
-		})
 	}
 }
 

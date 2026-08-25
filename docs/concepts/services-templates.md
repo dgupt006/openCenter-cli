@@ -15,11 +15,56 @@ tags: [services, templates, cert-manager, fluxcd, gitops, kustomize]
 
 Every openCenter-managed cluster runs a set of platform services (cert-manager, Kyverno, MetalLB, Keycloak, etc.). These services share a common deployment pattern:
 
-1. The openCenter-cli reads a cluster configuration YAML file.
-2. For each enabled service, the CLI renders a set of embedded Go templates into the customer’s GitOps repository.
-3. FluxCD on the cluster reconciles those rendered manifests, pulling base definitions from `openCenter-gitops-base` and applying cluster-specific overrides from the customer repository.
+1. The openCenter-cli reads and validates the typed cluster desired state.
+2. The renderer resolves the enabled service through the immutable render catalog;
+   catalog entries contain direct function references rather than mutable lookup
+   state or configuration-selected renderer names.
+3. An explicit descriptor, when present, declares the service's file layout,
+   conditions, aggregate membership, and ownership boundaries.
+4. The renderer produces a plan of generator-owned files and actions before any
+   output is written.
+5. The planned files are rendered atomically into the customer GitOps repository.
+6. FluxCD on the cluster reconciles the generated manifests, pulling base
+   definitions from `openCenter-gitops-base` and applying cluster-specific
+   overrides from the customer repository.
 
-The result is a two-tier Kustomize overlay model: a shared base (maintained centrally) composed with per-cluster overrides (generated per customer).
+The result is a two-tier Kustomize overlay model: a shared base maintained
+centrally composed with per-cluster overrides generated from typed desired state.
+
+## Desired State to Owned Output
+
+The rendering boundary is deliberately one-way:
+
+```
+Typed desired state
+        │
+        ▼
+Immutable render catalog
+(service identity + direct function references)
+        │
+        ▼
+Explicit descriptor
+(files, conditions, aggregates, ownership)
+        │
+        ▼
+Generation plan
+(planned generator-owned files and actions)
+        │
+        ▼
+Atomic rendered overlay
+(user-owned custom/ remains untouched)
+```
+
+Service configuration describes what the operator wants: whether a service is
+enabled and its typed settings. The catalog and descriptor describe how the
+implementation fulfills that desired state. Renderer selection, stage topology,
+raw Helm override values, and generated-file ownership are internal concerns;
+they are not public cluster configuration.
+
+If a service needs an operator-facing setting, add a typed field and validate it.
+If an operator needs a manifest or value not modeled by the service, place it in
+the service overlay's `custom/` directory. Do not expose descriptor topology or
+raw renderer inputs in YAML.
 
 ## How It Works
 
@@ -33,41 +78,41 @@ Every service deployment involves three distinct layers, each owned by a differe
 | Overlay manifests | Customer GitOps repo | `applications/overlays/<cluster>/services/<service>/` | Issuers, secrets, Helm value overrides, custom resources |
 | FluxCD wiring | Customer GitOps repo | `applications/overlays/<cluster>/services/fluxcd/` and `sources/` | GitRepository sources, Kustomization resources that connect base → overlay |
 
-### Template Rendering Pipeline
+### Desired-State Rendering Pipeline
 
-When you run `opencenter cluster generate <cluster-name>`, the CLI executes a multi-stage pipeline. The `ServiceStage` handles service template generation:
+When you run `opencenter cluster generate <cluster-name>`, the CLI executes a
+multi-stage pipeline. The `ServiceStage` handles service output generation:
 
 ```
-Cluster Config (.k8s-*-config.yaml)
+Cluster desired state
         │
         ▼
 ┌─────────────────────┐
-│  1. Read enabled     │  Iterates .OpenCenter.Services map,
-│     services         │  collects names where Enabled: true
+│  1. Read and        │  Uses typed, validated service configuration.
+│     validate        │
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  2. Resolve          │  Orders services by dependency graph
-│     dependencies     │  (e.g., cert-manager before gateway)
+│  2. Resolve catalog │  Selects the immutable service entry and its direct
+│     entry           │  planning/rendering function references.
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  3. Match templates  │  Finds embedded .tpl files tagged
-│     to services      │  for each enabled service
+│  3. Read descriptor │  Declares files, conditions, aggregates, and ownership.
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  4. Evaluate         │  Checks render conditions (provider
-│     conditions       │  type, feature flags, etc.)
+│  4. Plan owned      │  Computes the generator-owned files and actions before
+│     files           │  writing anything.
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  5. Render & write   │  Go template engine + Sprig functions
-│     output files     │  writes to customer repo
+│  5. Render & write  │  Go templates and direct functions write atomically;
+│                     │  user-owned `custom/` files are preserved.
 └─────────────────────┘
 ```
 

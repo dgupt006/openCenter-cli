@@ -232,6 +232,7 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 	// to include dynamically-added services.
 	funcMap["autoServices"] = func() []string {
 		registry, err := loadClusterDescriptorRegistry()
+		catalog := newBuiltInRenderCatalog()
 		if err != nil {
 			return nil
 		}
@@ -240,11 +241,10 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 			if IsServiceDisabled(svc) || IsServiceExternal(svc) {
 				continue
 			}
-			if hasExplicitDescriptor(registry, name) {
+			if hasExplicitDescriptor(registry, name, serviceKindStandard) {
 				continue
 			}
-			base := extractBaseConfig(svc)
-			if base == nil {
+			if _, owned := catalog.Lookup(name); !owned {
 				continue
 			}
 			names = append(names, name)
@@ -255,15 +255,10 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 
 	// autoServiceSourceName returns the source name for an auto-descriptor service.
 	funcMap["autoServiceSourceName"] = func(serviceName string) string {
-		svc, exists := cfg.OpenCenter.Services[serviceName]
-		if !exists {
-			return "opencenter-" + serviceName
+		if spec, ok := newBuiltInRenderCatalog().Lookup(serviceName); ok {
+			return spec.SourceName
 		}
-		base := extractBaseConfig(svc)
-		if base == nil {
-			return "opencenter-" + serviceName
-		}
-		return base.GetSourceName(serviceName)
+		return "opencenter-" + serviceName
 	}
 
 	// sourceAuthBlock renders the shared active-and-commented GitRepository
@@ -670,13 +665,6 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 		return err
 	}
 
-	// For cert-manager, also render dynamic credential files
-	if serviceName == "cert-manager" && !isManaged {
-		certManagerDir := filepath.Join(targetRoot, "services", "cert-manager")
-		if err := renderCertManagerDynamicFiles(cfg, certManagerDir, workspace); err != nil {
-			return fmt.Errorf("rendering cert-manager dynamic files: %w", err)
-		}
-	}
 	validationArtifacts := filterSingleServiceArtifacts(serviceName, actions, artifacts)
 	if err := validateMaterializedSecretMembership(cfg, actions, validationArtifacts, targetRoot); err != nil {
 		return err
@@ -807,17 +795,8 @@ func RenderClusterAppsAtomic(cfg v2.Config, workspace *GitOpsWorkspace) error {
 	if err != nil {
 		return err
 	}
-
 	if err := writeClusterAppActions(actions, target, cfg, workspace); err != nil {
 		return err
-	}
-
-	// Render dynamic cert-manager credential files (secrets + issuers + kustomization).
-	// These are rendered outside the descriptor pipeline because they produce N files
-	// from a map of enabled credentials rather than a fixed set of templates.
-	certManagerDir := filepath.Join(target, "services", "cert-manager")
-	if err := renderCertManagerDynamicFiles(cfg, certManagerDir, workspace); err != nil {
-		return fmt.Errorf("rendering cert-manager dynamic files: %w", err)
 	}
 	if err := validateMaterializedSecretMembership(cfg, actions, artifacts, target); err != nil {
 		return err
