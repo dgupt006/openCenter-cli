@@ -75,6 +75,28 @@ func TestInitServiceInitializeUsesSecureLayoutAndHygiene(t *testing.T) {
 		}
 	}
 
+	sopsConfig, err := os.ReadFile(filepath.Join(clusterPaths.GitOpsDir, ".sops.yaml"))
+	if err != nil {
+		t.Fatalf("read .sops.yaml: %v", err)
+	}
+	sopsText := string(sopsConfig)
+	if strings.Contains(sopsText, `encrypted_regex: "^(secret)$"`) {
+		t.Fatalf(".sops.yaml contains obsolete Secret regex:\n%s", sopsText)
+	}
+	if !strings.Contains(sopsText, `encrypted_regex: "^(data|stringData)$"`) {
+		t.Fatalf(".sops.yaml is missing data|stringData regex:\n%s", sopsText)
+	}
+	if !strings.Contains(sopsText, `encrypted_regex: "^(data|stringData|secret)$"`) {
+		t.Fatalf(".sops.yaml is missing infrastructure regex:\n%s", sopsText)
+	}
+	for _, rule := range strings.Split(sopsText, "  - path_regex: ")[1:] {
+		if strings.Contains(rule, "secrets/age/") || strings.Contains(rule, "secrets/ssh/") {
+			if strings.Contains(rule, "encrypted_regex:") {
+				t.Fatalf("key rule must encrypt the whole file:\n%s", rule)
+			}
+		}
+	}
+
 	gitignoreData, err := os.ReadFile(filepath.Join(clusterPaths.GitOpsDir, ".gitignore"))
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)

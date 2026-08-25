@@ -237,3 +237,35 @@ func TestGenerateAdditionalKeyIndependence(t *testing.T) {
 	manager.DeleteKey(clusterName + "-key-2")
 	manager.DeleteKey(clusterName + "-key-5")
 }
+
+func TestEnhancedKeyManagerGenerateSOPSConfigScopes(t *testing.T) {
+	manager := NewEnhancedKeyManager(t.TempDir(), slog.Default())
+	manager.SetKeyringEnabled(false)
+	cluster := "scope-test"
+	_, err := manager.GenerateKey(cluster)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	defer manager.DeleteKey(cluster)
+
+	config, err := manager.GenerateSOPSConfig(cluster)
+	if err != nil {
+		t.Fatalf("failed to generate SOPS config: %v", err)
+	}
+	if !strings.Contains(config, `encrypted_regex: "^(data|stringData)$"`) {
+		t.Fatal("missing application Secret scope")
+	}
+	if !strings.Contains(config, `encrypted_regex: "^(data|stringData|secret)$"`) {
+		t.Fatal("missing infrastructure scope")
+	}
+	if strings.Contains(config, `encrypted_regex: "^(secret)$"`) {
+		t.Fatal("obsolete Secret scope remains")
+	}
+	for _, rule := range strings.Split(config, "  - path_regex: ")[1:] {
+		if strings.Contains(rule, "secrets/age/") || strings.Contains(rule, "secrets/ssh/") {
+			if strings.Contains(rule, "encrypted_regex:") {
+				t.Fatalf("key rule must encrypt the whole file: %s", rule)
+			}
+		}
+	}
+}

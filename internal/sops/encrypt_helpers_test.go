@@ -1,6 +1,9 @@
 package sops
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNeedsExplicitYAMLType(t *testing.T) {
 	tests := []struct {
@@ -44,5 +47,33 @@ func TestBuildEncryptionArgsFilenameOverrideBeforePath(t *testing.T) {
 		if args[i] != want[i] {
 			t.Fatalf("args = %#v, want %#v", args, want)
 		}
+	}
+}
+
+func TestBuildEncryptionArgsEncryptedRegex(t *testing.T) {
+	tests := []struct {
+		name           string
+		encryptedRegex string
+		wantFlag       bool
+	}{
+		{name: "configured", encryptedRegex: "^(data|stringData)$", wantFlag: true},
+		{name: "empty", wantFlag: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildEncryptionArgs("secret.yaml", EncryptionConfig{
+				EncryptedRegex: tt.encryptedRegex,
+				InPlace:        true,
+			}, nil, nil)
+			joined := strings.Join(args, " ")
+			if tt.wantFlag {
+				if !strings.Contains(joined, "--encrypted-regex ^(data|stringData)$") {
+					t.Fatalf("args = %#v, want encrypted regex flag", args)
+				}
+			} else if strings.Contains(joined, "--encrypted-regex") {
+				t.Fatalf("args = %#v, must omit encrypted regex flag", args)
+			}
+		})
 	}
 }

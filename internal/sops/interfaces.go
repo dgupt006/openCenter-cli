@@ -57,6 +57,7 @@ type EncryptionConfig struct {
 	PGPKeys          []string
 	ConfigFile       string
 	FilenameOverride string
+	EncryptedRegex   string
 	InPlace          bool
 	DryRun           bool
 	Verbose          bool

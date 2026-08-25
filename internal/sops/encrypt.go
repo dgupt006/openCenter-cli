@@ -564,6 +564,9 @@ func buildEncryptionArgs(filePath string, config EncryptionConfig, defaultAgeKey
 	if config.FilenameOverride != "" {
 		args = append(args, "--filename-override", config.FilenameOverride)
 	}
+	if config.EncryptedRegex != "" {
+		args = append(args, "--encrypted-regex", config.EncryptedRegex)
+	}
 	if config.InPlace {
 		args = append(args, "-i")
 	}

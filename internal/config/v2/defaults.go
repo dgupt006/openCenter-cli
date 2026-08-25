@@ -337,6 +337,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 				OIDCClientSecret: PlaceholderSecret,
 			},
 			Grafana: GrafanaSecrets{
+				AdminUser:     "admin",
 				AdminPassword: grafanaAdminPassword,
 			},
 			Loki: LokiSecrets{

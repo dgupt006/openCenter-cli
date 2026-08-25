@@ -1496,7 +1496,13 @@ func (m *DefaultSecretsManager) decryptManifest(ctx context.Context, manifestPat
 		return nil, fmt.Errorf("failed to parse decrypted manifest: %w", err)
 	}
 
-	// Extract the data section
+	// Extract the secret payload. Manifests are generated with `stringData`
+	// (raw values); `data` is only present in manifests written by older
+	// versions, so it is read as a fallback to keep drift detection working
+	// against a repo that has not been re-synced yet.
+	if data, ok := manifest["stringData"].(map[string]interface{}); ok {
+		return data, nil
+	}
 	data, ok := manifest["data"].(map[string]interface{})
 	if !ok {
 		return make(map[string]interface{}), nil // Return empty map if no data section
@@ -1787,8 +1793,10 @@ func (m *DefaultSecretsManager) writeEncryptedManifest(
 	}
 
 	encryptConfig := sops.EncryptionConfig{
-		AgeKeys: []string{ageKey},
-		InPlace: true,
+		AgeKeys:          []string{ageKey},
+		EncryptedRegex:   "^(data|stringData)$",
+		FilenameOverride: manifestPath,
+		InPlace:          true,
 	}
 
 	if err := encryptor.EncryptFile(ctx, tmpPath, encryptConfig); err != nil {
@@ -1873,7 +1881,7 @@ func (m *DefaultSecretsManager) generateSecretManifest(
 		k8sKey := strings.ReplaceAll(key, "_", "-")
 		data[k8sKey] = value
 	}
-	manifest["data"] = data
+	manifest["stringData"] = data
 
 	return manifest
 }

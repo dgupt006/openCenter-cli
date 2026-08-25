@@ -732,7 +732,7 @@ func TestGenerateSecretManifest(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "opencenter-cert-manager-secret", metadata["name"])
 
-		data, ok := manifest["data"].(map[string]interface{})
+		data, ok := manifest["stringData"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, "AKIAIOSFODNN7EXAMPLE", data["aws-access-key"])
 		assert.Equal(t, "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", data["aws-secret-access-key"])
@@ -770,9 +770,13 @@ func TestGenerateSecretManifest(t *testing.T) {
 		assert.NotNil(t, metadata["labels"])
 		assert.NotNil(t, metadata["annotations"])
 
-		data, ok := manifest["data"].(map[string]interface{})
+		data, ok := manifest["stringData"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, "new-value", data["new-key"])
+		// A legacy manifest's plaintext `data` block must not survive: raw values
+		// under `data` are invalid Kubernetes (base64 required) and would collide
+		// with the regenerated stringData entries.
+		assert.NotContains(t, manifest, "data")
 	})
 
 	t.Run("converts underscores to hyphens in keys", func(t *testing.T) {
@@ -784,7 +788,7 @@ func TestGenerateSecretManifest(t *testing.T) {
 
 		manifest := manager.generateSecretManifest("test-service", secrets, nil)
 
-		data, ok := manifest["data"].(map[string]interface{})
+		data, ok := manifest["stringData"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Contains(t, data, "aws-access-key")
 		assert.Contains(t, data, "aws-secret-access-key")

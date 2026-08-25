@@ -474,11 +474,11 @@ creation_rules:
     age: >-
       %s
   - path_regex: 'applications/overlays/[^/]+/(managed-services|services)/.*/.*\.ya?ml$'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData)$"
     age: >-
       %s
   - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData|secret)$"
     age: >-
       %s
 `, cfg.OpenCenter.Cluster.ClusterName, ageKey, ageKey, ageKey, cfg.OpenCenter.Cluster.ClusterName, ageKey)

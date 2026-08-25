@@ -665,7 +665,7 @@ creation_rules:
 
 	// Add third rule for application overlays
 	config += `  - path_regex: 'applications/overlays/[^/]+/(managed-services|services)/.*/.*\.ya?ml$'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData)$"
     age: >-
 `
 	for i, key := range ageKeys {
@@ -678,7 +678,7 @@ creation_rules:
 
 	// Add fourth rule for infrastructure clusters
 	config += fmt.Sprintf(`  - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData|secret)$"
     age: >-
 `, cluster)
 	for i, key := range ageKeys {

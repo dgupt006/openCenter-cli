@@ -80,7 +80,7 @@ func TestProperty_SyncRoundTripConsistency(t *testing.T) {
 				manifest := manager.generateSecretManifest(service, secrets, nil)
 
 				// Extract the data section (simulating what validate does)
-				manifestData, ok := manifest["data"].(map[string]interface{})
+				manifestData, ok := manifest["stringData"].(map[string]interface{})
 				if !ok {
 					t.Logf("Failed to extract data from manifest for service %s", service)
 					return false
@@ -307,7 +307,7 @@ func TestProperty_ManifestFieldPreservation(t *testing.T) {
 			}
 
 			// Property 4: data section should contain new secrets (not old ones)
-			newData, ok := newManifest["data"].(map[string]interface{})
+			newData, ok := newManifest["stringData"].(map[string]interface{})
 			if !ok {
 				t.Logf("data is not a map")
 				return false
@@ -380,7 +380,7 @@ func TestProperty_ManifestFieldPreservation(t *testing.T) {
 			}
 
 			// Property 4: Should have data section with secrets
-			data, ok := newManifest["data"].(map[string]interface{})
+			data, ok := newManifest["stringData"].(map[string]interface{})
 			if !ok {
 				t.Logf("data is not a map")
 				return false
@@ -438,7 +438,7 @@ func TestProperty_SyncRoundTripConsistency_Sanity(t *testing.T) {
 		manifest := manager.generateSecretManifest(service, secrets, nil)
 
 		// Extract data from manifest
-		manifestData, ok := manifest["data"].(map[string]interface{})
+		manifestData, ok := manifest["stringData"].(map[string]interface{})
 		require.True(t, ok, "Manifest should have data section")
 
 		// Detect drift
@@ -533,7 +533,7 @@ func TestProperty_ManifestFieldPreservation_Sanity(t *testing.T) {
 	require.Equal(t, expectedAnnotations, newMetadata["annotations"], "metadata.annotations should be preserved")
 
 	// Verify data section has new secrets
-	newData, ok := newManifest["data"].(map[string]interface{})
+	newData, ok := newManifest["stringData"].(map[string]interface{})
 	require.True(t, ok, "data should be a map")
 	require.Equal(t, "AKIAIOSFODNN7EXAMPLE", newData["aws-access-key"], "New secret should be present with key transformation")
 	require.Equal(t, "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", newData["aws-secret-access-key"], "New secret should be present")
@@ -551,7 +551,7 @@ func TestProperty_ManifestFieldPreservation_Sanity(t *testing.T) {
 	require.True(t, ok, "metadata should be a map")
 	require.NotNil(t, nilMetadata["name"], "metadata.name should be set")
 
-	nilData, ok := newManifestFromNil["data"].(map[string]interface{})
+	nilData, ok := newManifestFromNil["stringData"].(map[string]interface{})
 	require.True(t, ok, "data should be a map")
 	require.Equal(t, "AKIAIOSFODNN7EXAMPLE", nilData["aws-access-key"], "Secret should be present")
 }

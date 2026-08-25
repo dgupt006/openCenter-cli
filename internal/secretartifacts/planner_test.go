@@ -44,3 +44,22 @@ func TestPlanRejectsUnsafeServiceNames(t *testing.T) {
 	}})
 	require.Error(t, err)
 }
+
+func TestPlanDefaultGrafanaSecretContainsUserAndPassword(t *testing.T) {
+	cfg, err := v2.NewV2Default("grafana-defaults", "kind")
+	require.NoError(t, err)
+
+	artifacts, err := Plan(cfg)
+	require.NoError(t, err)
+	var grafana *Artifact
+	for i := range artifacts {
+		if artifacts[i].LogicalService == "grafana" {
+			grafana = &artifacts[i]
+			break
+		}
+	}
+	require.NotNil(t, grafana)
+	require.Equal(t, "admin", grafana.Payload["admin_user"])
+	require.Contains(t, grafana.Payload, "admin_password")
+	require.NotEmpty(t, grafana.Payload["admin_password"])
+}

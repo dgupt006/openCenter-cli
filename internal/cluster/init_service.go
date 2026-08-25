@@ -738,11 +738,11 @@ func (s *InitService) ensureSOPSConfig(clusterPaths *paths.ClusterPaths, cfg *v2
     age: >-
       %s
   - path_regex: 'applications/overlays/[^/]+/(managed-services|services)/.*/.*\.ya?ml$'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData)$"
     age: >-
       %s
   - path_regex: '^infrastructure/clusters/%s/.*\.ya?ml$'
-    encrypted_regex: "^(secret)$"
+    encrypted_regex: "^(data|stringData|secret)$"
     age: >-
       %s
 `, publicKey, publicKey, publicKey, cfg.OpenCenter.Cluster.ClusterName, publicKey)
