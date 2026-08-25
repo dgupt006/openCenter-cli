@@ -24,11 +24,16 @@ graph TD
 graph LR
     Register[Register Key] --> Sync[Sync Secrets]
     Sync --> Validate[Validate / Detect Drift]
-    Validate --> Rotate[Rotate Key]
-    Rotate --> DualKey[Dual-Key Period]
-    DualKey --> Complete[Complete Rotation]
-    Rotate -.-> Revoke[Revoke Key]
+    Validate --> Reconcile[Reconcile .sops.yaml and Registry]
+    Reconcile --> Rotate[Rotate Active Primary]
+    Rotate --> DualKey[Dual-Key Period: Primary Successor + Predecessor]
+    DualKey --> Complete[Complete: Archive Predecessor]
+    Validate --> Rotate
+    Rotate -.-> Revoke[Revoke Recipient]
+    Reconcile -.-> Revoke
 ```
+
+Multiple active Age recipients are normal and there is no fixed maximum; the dual-key period is identified by an active successor that names an active predecessor, not by counting active keys. Reconcile is dry-run by default and should precede destructive operations when recipient drift is possible.
 
 ## `internal/secrets/` — Multi-Cluster Secrets Management
 
@@ -37,8 +42,8 @@ graph LR
 | Interface | Methods | Purpose |
 |-----------|---------|---------|
 | `SecretsManager` | SyncSecrets, ValidateSecrets, DetectDrift, GetSecretSources | Core sync and validation |
-| `KeyRegistry` | RegisterKey, GetKey, UpdateKeyStatus, ListKeys, CheckExpiration, RebuildFromFiles | Key metadata store |
-| `KeyRotator` | RotateAgeKey, RotateSSHKey, CompleteRotation, GetRotationStatus | Dual-key rotation |
+| `KeyRegistry` | RegisterKey, GetKey, GetPrimaryKey, ReplacePrimary, UpdateKeyStatus, ListKeys, CheckExpiration, RebuildFromFiles | Key metadata and primary-key lifecycle |
+| `KeyRotator` | RotateAgeKey, RotateSSHKey, CompleteRotation, GetRotationStatus | Primary-based dual-key rotation |
 | `KeyRevoker` | RevokeByUser, RevokeByFingerprint, EmergencyRevoke | Key revocation |
 | `HookManager` | InstallHooks, ValidatePreCommit, UninstallHooks | Git pre-commit hooks |
 | `MultiClusterSyncer` | SyncAll | Parallel multi-cluster sync |
@@ -51,7 +56,7 @@ graph LR
 | `manager.go` | Core sync/validate/drift logic | `DefaultSecretsManager` |
 | `interfaces.go` | All interface definitions | See table above |
 | `registry.go` | SOPS-encrypted key registry | `DefaultKeyRegistry`, `KeyEntry` |
-| `rotation.go` | Dual-key rotation workflow | `RotateOptions`, `RotationResult`, `RotationStatus` |
+| `rotation.go` | Primary-based dual-key rotation workflow | `RotateOptions`, `RotationResult`, `RotationStatus` |
 | `revocation.go` | Key revocation + emergency re-key | `RevokeOptions`, `RevocationResult` |
 | `hooks.go` | Git pre-commit hook management | `DefaultHookManager`, `HookResult` |
 | `multi_cluster.go` | Parallel multi-cluster operations | `MultiClusterSyncOptions`, `MultiClusterSyncResult` |
@@ -66,8 +71,9 @@ type KeyEntry struct {
     Cluster, KeyType, Fingerprint, PublicKey string
     CreatedAt, ExpiresAt time.Time
     Status KeyStatus  // active | archived | revoked
-    RotationMetadata, RevocationMetadata map[string]string
+    RotatedFrom string
     UserEmail string
+    Primary bool      // at most one active primary per cluster and key type
 }
 
 type SyncResult struct {
@@ -87,12 +93,14 @@ type ExpirationReport struct {
 
 - **Sync**: Reads secrets from cluster config → generates SOPS-encrypted manifests per service
 - **Drift Detection**: Compares config values (hashed) against decrypted manifests
-- **Rotation**: Generates new key → dual-key mode (both active) → re-encrypts → completes (removes old)
-- **Revocation**: Removes key → re-encrypts without it; emergency mode generates new primary immediately
+- **Reconcile**: Compares `.sops.yaml` recipients with the registry and can import missing recipients; dry-run by default
+- **Rotation**: Replaces the active primary, keeps the predecessor active during the dual-key period, re-encrypts for every active recipient, then archives the predecessor
+- **Revocation**: Removes a recipient → re-encrypts without it while preserving unrelated active recipients; aborts on unregistered `.sops.yaml` recipients
+- **Lifecycle**: Fingerprints are unique across all statuses; active keys become archived through replacement or revoked through explicit distrust, and inactive keys are not recipients
 - **Expiration**: Age keys default 90 days, SSH keys 180 days
 - **Hooks**: Pre-commit prevents committing plaintext secrets or drifted manifests
 - **Multi-Cluster**: Parallel sync with configurable concurrency (default 4)
-- **Rollback**: Atomic file operations with backup/restore on failure
+- **Rollback**: Registry and encrypted-file changes remain atomic through the rollback window
 - **Audit**: All operations logged with HMAC signatures for tamper detection
 
 ---

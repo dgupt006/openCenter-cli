@@ -377,11 +377,15 @@ securityContext:
 opencenter secrets keys generate
 ```
 
+**Lifecycle invariants:** The registry rejects duplicate `(cluster, key type, fingerprint)` entries in every status, so archived and revoked fingerprints cannot be silently reinstated. A cluster may have multiple active Age recipients, with no fixed maximum; SOPS encrypts to all of them. At most one active entry per cluster and key type is the **primary**, the cluster-managed key that rotation replaces. SOPS has no primary-recipient concept, so other active recipients remain equally able to decrypt. Keys transition from `active` to `archived` when replaced by normal rotation or to `revoked` when explicitly distrusted; only active keys are SOPS recipients.
+
 **Rotation (90-day lifecycle):**
 
 ```bash
 opencenter secrets keys rotate --cluster my-cluster --type age
 ```
+
+Rotation state is a dual-key period only when an active successor names an active predecessor; it is not inferred from the number of active keys. Completing rotation archives the predecessor while preserving unrelated active recipients.
 
 **Revocation:**
 
@@ -391,7 +395,7 @@ opencenter secrets keys revoke --cluster my-cluster --key abc123
 
 **Why 90 days:** Balance between security (frequent rotation) and operational overhead (re-encryption).
 
-**Evidence:** `internal/secrets/rotation.go`, Session 1 A11
+**Evidence:** `internal/secrets/interfaces.go`, `internal/secrets/registry.go`, `internal/secrets/rotation.go`, `internal/secrets/revocation.go`
 
 ## Layer 4: Access Control
 

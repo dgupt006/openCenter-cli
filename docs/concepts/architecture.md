@@ -135,12 +135,14 @@ Encryption strategy:
 Key management features:
 
 * OS keyring integration with file-based fallback
-* Dual-key rotation (add new key → re-encrypt → remove old key)
+* Multi-recipient Age encryption: multiple active Age keys may decrypt a file simultaneously; there is no fixed maximum
+* Primary-based rotation: the active primary key is replaced through a dual-key period while unrelated active recipients remain available
 * Key expiration monitoring (Age 90 days, SSH 180 days)
 * Git pre-commit hooks preventing plaintext secret commits
 * HMAC-signed audit logging for tamper detection
+* Reconciliation of `.sops.yaml` recipients with the key registry before destructive operations
 
-**Why this design:** Secrets can be version-controlled safely. FluxCD handles decryption automatically. Age keys are simpler than GPG (no key servers). Dual-key rotation allows gradual re-encryption without downtime.
+**Why this design:** Secrets can be version-controlled safely. FluxCD handles decryption automatically. Age keys are simpler than GPG (no key servers). Primary-based rotation allows gradual re-encryption without removing unrelated recipients, while rollback keeps registry and encrypted-file changes consistent.
 
 **Evidence:** `internal/sops/`, `internal/secrets/`, `internal/security/audit_logger.go`
 

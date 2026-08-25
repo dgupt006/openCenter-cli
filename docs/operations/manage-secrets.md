@@ -179,25 +179,47 @@ opencenter secrets status --path applications/overlays/my-cluster
 
 ## Rotate Encryption Keys
 
-Rotate Age keys for security (recommended every 90 days):
+Rotate the active primary Age key for security (recommended every 90 days):
 
 ```bash
 opencenter secrets keys rotate --cluster my-cluster --type age
 ```
 
+A cluster may have multiple active Age keys; there is no fixed maximum. SOPS encrypts to all active recipients, so additional recipients—such as individual engineers’ keys—remain able to decrypt and are not primary. The primary is the one cluster-managed active key that rotation operates on; there can be at most one active primary per cluster and key type.
+
 This process:
 
-1. Generates new Age key pair
-2. Decrypts all secrets with old key
-3. Re-encrypts all secrets with new key
-4. Updates `.sops.yaml` configuration
-5. Backs up old key
+1. Generates a new Age key pair as the new primary
+2. Adds it alongside the current primary for the dual-key period
+3. Re-encrypts all secrets with the complete active recipient set
+4. Updates `.sops.yaml` without removing unrelated active recipients
+5. Records the predecessor relationship in the registry and keeps filesystem and registry changes atomic
+
+A dual-key rotation is in progress when an active key names another active key as its predecessor. The presence of two or more active keys alone does not indicate an in-progress rotation.
 
 ### Complete a Dual-Key Rotation
 
 ```bash
 opencenter secrets keys rotate --cluster my-cluster --type age --complete
 ```
+
+Completion archives the replaced predecessor and removes it from the SOPS recipient set; unrelated active recipients remain. Archived and revoked keys are not recipients.
+
+### Reconcile SOPS Recipients
+
+Before revocation, or whenever `.sops.yaml` and the registry may have drifted, compare them with a dry run:
+
+```bash
+opencenter secrets keys reconcile --cluster my-cluster
+```
+
+Reconcile compares the `.sops.yaml` recipients with the registry and can import recipients missing from the registry. It is dry-run by default; use `--apply` only after reviewing the proposed imports:
+
+```bash
+opencenter secrets keys reconcile --cluster my-cluster --apply
+```
+
+Revocation aborts if `.sops.yaml` contains a recipient with no active registry entry. This protects that recipient from being silently dropped when revocation rebuilds the recipient list from the registry. Resolve the drift with reconcile, review and apply the imports, then retry revocation.
 
 ### Rotate SSH Keys
 
