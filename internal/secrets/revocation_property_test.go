@@ -195,14 +195,27 @@ func TestProperty_RevocationEffectiveness(t *testing.T) {
 func setupRevocationTest(t *testing.T, tmpDir string, clusterName string, secrets map[string]string) (*DefaultKeyRevoker, string, string, string, string, string, error) {
 	t.Helper()
 
+	// Redirect HOME into the temp dir. Cluster config lookup resolves through
+	// ~/.config/opencenter (see DefaultSecretsManager.getConfigPath), so without
+	// this the revoker reads the developer's real config tree instead of the
+	// fixture. setupDryRunRevocationTest does the same.
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	t.Cleanup(func() {
+		os.Setenv("HOME", originalHome)
+	})
+
 	// Create logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	// Create SOPS manager
 	sopsManager := sops.NewSOPSManager()
 
-	// Create directory structure
-	configDir := filepath.Join(tmpDir, ".config", "opencenter", "clusters", "test-org", clusterName)
+	// Create directory structure.
+	// The layout must match DefaultSecretsManager.getConfigPath, which resolves
+	// <HOME>/.config/opencenter/clusters/blueprints/<org>/<cluster>/<cluster>-config.yaml
+	// and defaults the organization to "opencenter" when none is given.
+	configDir := filepath.Join(tmpDir, ".config", "opencenter", "clusters", "blueprints", "opencenter", clusterName)
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return nil, "", "", "", "", "", fmt.Errorf("failed to create config dir: %w", err)
 	}
@@ -224,7 +237,7 @@ func setupRevocationTest(t *testing.T, tmpDir string, clusterName string, secret
 	}
 
 	// Create mock SOPS encryptor for registry
-	mockEncryptor := &mockSOPSEncryptor{}
+	mockEncryptor := newMockSOPSEncryptor()
 
 	// Create key registry
 	registry := NewDefaultKeyRegistry(registryDir, mockEncryptor, logger)
@@ -350,7 +363,7 @@ func setupRevocationTest(t *testing.T, tmpDir string, clusterName string, secret
 	}
 
 	// Create cluster config file (needed for revocation to work)
-	configPath := filepath.Join(configDir, fmt.Sprintf(".k8s-%s-config.yaml", clusterName))
+	configPath := filepath.Join(configDir, fmt.Sprintf("%s-config.yaml", clusterName))
 	clusterConfig := fmt.Sprintf(`schema_version: "2.0"
 opencenter:
   cluster:
@@ -367,6 +380,22 @@ secrets:
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		return nil, "", "", "", "", "", fmt.Errorf("failed to create cluster config: %w", err)
 	}
+
+	// Revocation re-encrypts by decrypting each manifest first, and the SOPS
+	// encryptor takes the private key from SOPS_AGE_KEY_FILE. In the CLI that is
+	// exported by the command layer (see setupSOPSKeyEnvironment in
+	// cmd/secrets_sops_helpers.go); these tests drive DefaultKeyRevoker directly,
+	// so the fixture has to provide it. key1 is chosen because it survives
+	// revocation of key2.
+	originalAgeKeyFile, hadAgeKeyFile := os.LookupEnv("SOPS_AGE_KEY_FILE")
+	os.Setenv("SOPS_AGE_KEY_FILE", key1Path)
+	t.Cleanup(func() {
+		if hadAgeKeyFile {
+			os.Setenv("SOPS_AGE_KEY_FILE", originalAgeKeyFile)
+		} else {
+			os.Unsetenv("SOPS_AGE_KEY_FILE")
+		}
+	})
 
 	return revoker, key1Path, key2Path, key3Path, manifestPath, overlayPath, nil
 }

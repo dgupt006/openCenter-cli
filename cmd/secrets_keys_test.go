@@ -32,7 +32,7 @@ func TestSecretsKeysCmd_Structure(t *testing.T) {
 	}
 
 	// Verify subcommands exist
-	expectedSubcommands := []string{"generate", "rotate", "backup", "validate", "check", "revoke"}
+	expectedSubcommands := []string{"generate", "rotate", "backup", "validate", "check", "revoke", "reconcile"}
 	subcommands := cmd.Commands()
 
 	if len(subcommands) != len(expectedSubcommands) {

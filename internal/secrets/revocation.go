@@ -22,10 +22,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
-	"gopkg.in/yaml.v3"
 )
 
 // DefaultKeyRevoker implements the KeyRevoker interface.
@@ -113,18 +113,37 @@ func (r *DefaultKeyRevoker) RevokeByUser(ctx context.Context, opts RevokeOptions
 
 	r.logger.Debug("Found keys for user", "user", opts.User, "count", len(userKeys))
 
-	// Check if revoking these keys would leave no active keys
-	activeKeyCount := 0
-	for _, key := range keys {
-		if key.KeyType == KeyTypeAge && key.Status == KeyStatusActive {
-			activeKeyCount++
-		}
-	}
-
-	if activeKeyCount-len(userKeys) == 0 {
+	// Compute the exact authorized recipient set once. The same set is passed
+	// through mutation so the precheck and the file update cannot diverge.
+	remainingKeys := r.remainingAuthorizedRecipients(opts.Cluster, keys, userKeys)
+	if len(remainingKeys) == 0 {
 		return nil, &ErrSingleKeyRevocation{
 			Cluster: opts.Cluster,
 			KeyType: KeyTypeAge,
+		}
+	}
+
+	// Run drift preflight before consulting operator credentials or mutating
+	// files, so an unregistered SOPS recipient always aborts first.
+	if err := r.checkRegistryDrift(ctx, opts.Cluster); err != nil {
+		return nil, err
+	}
+
+	if !opts.Emergency {
+		if primaryKey, ok := activePrimaryTarget(keys, userKeys); ok {
+			return nil, &ErrPrimaryKeyRevocation{
+				Cluster:     opts.Cluster,
+				KeyType:     KeyTypeAge,
+				Fingerprint: primaryKey.Fingerprint,
+			}
+		}
+	}
+
+	// An absent key-file signal is intentionally non-blocking: CI and other
+	// automation may decrypt through credentials not exposed as a local file.
+	if !opts.Emergency {
+		if err := r.verifyReachablePrivateKey(ctx, opts.Cluster, remainingKeys); err != nil {
+			return nil, err
 		}
 	}
 
@@ -175,13 +194,15 @@ func (r *DefaultKeyRevoker) RevokeByUser(ctx context.Context, opts RevokeOptions
 
 	for _, manifestPath := range manifestFiles {
 		if err := rollbackMgr.Backup(manifestPath); err != nil {
-			r.logger.Warn("Failed to backup manifest", "path", manifestPath, "error", err)
-			// Continue with other files
+			if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
+				return nil, fmt.Errorf("failed to backup manifest %s and rollback failed: %w (rollback error: %v)", manifestPath, err, rollbackErr)
+			}
+			return nil, fmt.Errorf("failed to backup manifest %s: %w", manifestPath, err)
 		}
 	}
 
-	// Remove user's keys from .sops.yaml
-	remainingKeys, err := r.removeKeysFromSOPSConfig(ctx, opts.Cluster, userKeys)
+	// Remove the same computed recipient set that passed the precheck.
+	remainingKeys, err = r.removeKeysFromSOPSConfig(ctx, opts.Cluster, userKeys, keys, remainingKeys)
 	if err != nil {
 		rollbackMgr.Rollback()
 		return nil, fmt.Errorf("failed to update .sops.yaml: %w", err)
@@ -199,27 +220,27 @@ func (r *DefaultKeyRevoker) RevokeByUser(ctx context.Context, opts RevokeOptions
 		return nil, fmt.Errorf("failed to re-encrypt manifests (changes rolled back): %w", err)
 	}
 
-	// Operation succeeded, clear backups
-	rollbackMgr.Clear()
-
 	result.ReencryptedFiles = reencryptedFiles
 
-	// Update key status in registry
+	// Registry updates stay inside the rollback window so failures restore the files.
 	actor := r.getActor(ctx)
 	for _, key := range userKeys {
 		result.RevokedKeys = append(result.RevokedKeys, key.Fingerprint)
-
-		// Update key entry with revocation details
 		key.Status = KeyStatusRevoked
+		key.Primary = false
 		key.RevokedAt = time.Now()
 		key.RevokedBy = actor
 		key.RevokedReason = opts.Reason
-
 		if err := r.registry.UpdateKey(ctx, key); err != nil {
-			r.logger.Warn("Failed to update key in registry", "fingerprint", key.Fingerprint, "error", err)
-			// Don't fail the revocation if registry update fails
+			if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
+				return nil, fmt.Errorf("failed to update revoked key %s and rollback failed: %w (rollback error: %v)", key.Fingerprint, err, rollbackErr)
+			}
+			return nil, fmt.Errorf("failed to update revoked key %s (changes rolled back): %w", key.Fingerprint, err)
 		}
 	}
+
+	// Clear backups only after filesystem and registry state are consistent.
+	rollbackMgr.Clear()
 
 	r.logger.Info("Key revocation completed",
 		"cluster", opts.Cluster,
@@ -231,6 +252,7 @@ func (r *DefaultKeyRevoker) RevokeByUser(ctx context.Context, opts RevokeOptions
 	if r.auditLogger != nil {
 		for _, fingerprint := range result.RevokedKeys {
 			if err := r.auditLogger.LogKeyRevoked(ctx, actor, opts.Cluster, fingerprint, opts.User, len(result.ReencryptedFiles)); err != nil {
+				// Audit logging is observability-only; it must not invalidate a committed state.
 				r.logger.Warn("Failed to log audit event", "error", err)
 			}
 		}
@@ -278,18 +300,38 @@ func (r *DefaultKeyRevoker) RevokeByFingerprint(ctx context.Context, opts Revoke
 		}
 	}
 
-	// Check if revoking this key would leave no active keys
-	activeKeyCount := 0
-	for _, key := range keys {
-		if key.KeyType == KeyTypeAge && key.Status == KeyStatusActive {
-			activeKeyCount++
-		}
-	}
-
-	if activeKeyCount == 1 {
+	// Compute the exact authorized recipient set once. The same set is passed
+	// through mutation so the precheck and the file update cannot diverge.
+	targets := []KeyEntry{*targetKey}
+	remainingKeys := r.remainingAuthorizedRecipients(opts.Cluster, keys, targets)
+	if len(remainingKeys) == 0 {
 		return nil, &ErrSingleKeyRevocation{
 			Cluster: opts.Cluster,
 			KeyType: KeyTypeAge,
+		}
+	}
+
+	// Run drift preflight before consulting operator credentials or mutating
+	// files, so an unregistered SOPS recipient always aborts first.
+	if err := r.checkRegistryDrift(ctx, opts.Cluster); err != nil {
+		return nil, err
+	}
+
+	if !opts.Emergency {
+		if primaryKey, ok := activePrimaryTarget(keys, targets); ok {
+			return nil, &ErrPrimaryKeyRevocation{
+				Cluster:     opts.Cluster,
+				KeyType:     KeyTypeAge,
+				Fingerprint: primaryKey.Fingerprint,
+			}
+		}
+	}
+
+	// EmergencyRevoke has already generated a replacement key, so it is the
+	// sanctioned path even when the configured operator key is compromised.
+	if !opts.Emergency {
+		if err := r.verifyReachablePrivateKey(ctx, opts.Cluster, remainingKeys); err != nil {
+			return nil, err
 		}
 	}
 
@@ -336,13 +378,15 @@ func (r *DefaultKeyRevoker) RevokeByFingerprint(ctx context.Context, opts Revoke
 
 	for _, manifestPath := range manifestFiles {
 		if err := rollbackMgr.Backup(manifestPath); err != nil {
-			r.logger.Warn("Failed to backup manifest", "path", manifestPath, "error", err)
-			// Continue with other files
+			if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
+				return nil, fmt.Errorf("failed to backup manifest %s and rollback failed: %w (rollback error: %v)", manifestPath, err, rollbackErr)
+			}
+			return nil, fmt.Errorf("failed to backup manifest %s: %w", manifestPath, err)
 		}
 	}
 
-	// Remove key from .sops.yaml
-	remainingKeys, err := r.removeKeysFromSOPSConfig(ctx, opts.Cluster, []KeyEntry{*targetKey})
+	// Remove the same computed recipient set that passed the precheck.
+	remainingKeys, err = r.removeKeysFromSOPSConfig(ctx, opts.Cluster, targets, keys, remainingKeys)
 	if err != nil {
 		rollbackMgr.Rollback()
 		return nil, fmt.Errorf("failed to update .sops.yaml: %w", err)
@@ -360,21 +404,22 @@ func (r *DefaultKeyRevoker) RevokeByFingerprint(ctx context.Context, opts Revoke
 		return nil, fmt.Errorf("failed to re-encrypt manifests (changes rolled back): %w", err)
 	}
 
-	// Operation succeeded, clear backups
-	rollbackMgr.Clear()
-
 	result.ReencryptedFiles = reencryptedFiles
 
-	// Update key status in registry
 	targetKey.Status = KeyStatusRevoked
+	targetKey.Primary = false
 	targetKey.RevokedAt = time.Now()
 	targetKey.RevokedBy = r.getActor(ctx)
 	targetKey.RevokedReason = opts.Reason
-
 	if err := r.registry.UpdateKey(ctx, *targetKey); err != nil {
-		r.logger.Warn("Failed to update key in registry", "fingerprint", opts.Fingerprint, "error", err)
-		// Don't fail the revocation if registry update fails
+		if rollbackErr := rollbackMgr.Rollback(); rollbackErr != nil {
+			return nil, fmt.Errorf("failed to update revoked key %s and rollback failed: %w (rollback error: %v)", opts.Fingerprint, err, rollbackErr)
+		}
+		return nil, fmt.Errorf("failed to update revoked key %s (changes rolled back): %w", opts.Fingerprint, err)
 	}
+
+	// Clear backups only after filesystem and registry state are consistent.
+	rollbackMgr.Clear()
 
 	r.logger.Info("Key revocation completed",
 		"cluster", opts.Cluster,
@@ -385,6 +430,7 @@ func (r *DefaultKeyRevoker) RevokeByFingerprint(ctx context.Context, opts Revoke
 	if r.auditLogger != nil {
 		actor := r.getActor(ctx)
 		if err := r.auditLogger.LogKeyRevoked(ctx, actor, opts.Cluster, opts.Fingerprint, "", len(result.ReencryptedFiles)); err != nil {
+			// Audit logging is observability-only; it must not invalidate a committed state.
 			r.logger.Warn("Failed to log audit event", "error", err)
 		}
 	}
@@ -446,6 +492,7 @@ func (r *DefaultKeyRevoker) EmergencyRevoke(ctx context.Context, cluster string,
 	if r.auditLogger != nil {
 		actor := r.getActor(ctx)
 		if err := r.auditLogger.LogKeyRevoked(ctx, actor, cluster, fingerprint, "", len(revocationResult.ReencryptedFiles)); err != nil {
+			// Audit logging is observability-only; it must not invalidate a committed state.
 			r.logger.Warn("Failed to log audit event", "error", err)
 		}
 	}
@@ -453,9 +500,169 @@ func (r *DefaultKeyRevoker) EmergencyRevoke(ctx context.Context, cluster string,
 	return revocationResult, nil
 }
 
-// Private helper methods
+// checkRegistryDrift performs the safety preflight shared by revocation paths.
+func (r *DefaultKeyRevoker) checkRegistryDrift(ctx context.Context, cluster string) error {
+	reconciler := NewDefaultKeyReconciler(r.registry, r.secretsManager, r.logger)
+	report, err := reconciler.Reconcile(ctx, cluster, false)
+	if err != nil {
+		return fmt.Errorf("failed to run registry drift preflight: %w", err)
+	}
 
-// isKeyOwnedByUser checks if a key is owned by the specified user.
+	if len(report.OnlyInSOPSConfig) > 0 {
+		return &ErrRegistryDriftDetected{
+			Cluster:    cluster,
+			Recipients: report.OnlyInSOPSConfig,
+		}
+	}
+	if len(report.OnlyInRegistry) > 0 {
+		r.logger.Debug("Active registry recipients are absent from .sops.yaml; continuing revocation", "cluster", cluster, "recipients", report.OnlyInRegistry)
+	}
+	return nil
+}
+
+// remainingAuthorizedRecipients computes the authorized Age recipient set
+// after removing keysToRevoke from the registry snapshot. Callers pass the
+// snapshot used by the preflight so mutation cannot recompute a different set.
+func (r *DefaultKeyRevoker) remainingAuthorizedRecipients(cluster string, allKeys, keysToRevoke []KeyEntry) []string {
+	remaining := make([]string, 0, len(allKeys))
+	for _, key := range allKeys {
+		if key.Cluster != cluster || key.KeyType != KeyTypeAge || key.Status != KeyStatusActive {
+			continue
+		}
+		if keyMatchesRevocationTarget(key, keysToRevoke) {
+			continue
+		}
+		recipient := strings.TrimSpace(key.PublicKey)
+		if recipient == "" {
+			recipient = strings.TrimSpace(key.Fingerprint)
+		}
+		if recipient != "" {
+			remaining = appendUniqueRecipient(remaining, recipient)
+		}
+	}
+	return remaining
+}
+
+func keyMatchesRevocationTarget(key KeyEntry, targets []KeyEntry) bool {
+	for _, target := range targets {
+		if target.Fingerprint != "" && key.Fingerprint == target.Fingerprint {
+			return true
+		}
+		if target.PublicKey != "" && key.PublicKey == target.PublicKey {
+			return true
+		}
+		targetRecipient := strings.TrimSpace(target.PublicKey)
+		if targetRecipient == "" {
+			targetRecipient = strings.TrimSpace(target.Fingerprint)
+		}
+		keyRecipient := strings.TrimSpace(key.PublicKey)
+		if keyRecipient == "" {
+			keyRecipient = strings.TrimSpace(key.Fingerprint)
+		}
+		if targetRecipient != "" && targetRecipient == keyRecipient {
+			return true
+		}
+	}
+	return false
+}
+
+func activePrimaryTarget(allKeys, keysToRevoke []KeyEntry) (KeyEntry, bool) {
+	for _, key := range allKeys {
+		if key.KeyType == KeyTypeAge && key.Status == KeyStatusActive && key.Primary && keyMatchesRevocationTarget(key, keysToRevoke) {
+			return key, true
+		}
+	}
+	return KeyEntry{}, false
+}
+
+// verifyReachablePrivateKey checks readable key-file signals only. An absent
+// signal, an unreadable file, or a file without a public-key comment is
+// non-blocking because CI/automation may provide decryption credentials by a
+// mechanism that is not represented by a local Age key file. A readable file
+// with a non-authorized public key is the only case that proves lockout.
+func (r *DefaultKeyRevoker) verifyReachablePrivateKey(ctx context.Context, cluster string, remaining []string) error {
+	paths := make([]string, 0, 2)
+	if path := strings.TrimSpace(os.Getenv("SOPS_AGE_KEY_FILE")); path != "" {
+		paths = append(paths, path)
+	}
+
+	manager, ok := r.secretsManager.(*DefaultSecretsManager)
+	if ok && manager != nil {
+		cfg, _, err := manager.loadClusterConfig(ctx, cluster)
+		if err != nil {
+			r.logger.Warn("Could not load cluster config while checking reachable Age key; continuing without config key signal", "cluster", cluster, "error", err)
+		} else if path := strings.TrimSpace(cfg.Secrets.SopsAgeKeyFile); path != "" {
+			paths = append(paths, path)
+		}
+	}
+
+	resolvedPaths := make([]string, 0, len(paths))
+	seenPaths := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		resolved := resolveAgeKeyFilePath(path)
+		if _, seen := seenPaths[resolved]; seen {
+			continue
+		}
+		seenPaths[resolved] = struct{}{}
+		resolvedPaths = append(resolvedPaths, resolved)
+	}
+	if len(resolvedPaths) == 0 {
+		r.logger.Warn("No Age key file signal available for revocation reachability check; proceeding", "cluster", cluster)
+		return nil
+	}
+
+	remainingSet := make(map[string]struct{}, len(remaining))
+	for _, recipient := range remaining {
+		remainingSet[recipient] = struct{}{}
+	}
+	checked := make([]string, 0, len(resolvedPaths))
+	for _, path := range resolvedPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			r.logger.Warn("Could not read Age key file for revocation reachability check; proceeding", "cluster", cluster, "path", path, "error", err)
+			continue
+		}
+		publicKey, err := extractAgePublicKey(data)
+		if err != nil {
+			r.logger.Warn("Could not extract public key from Age key file for revocation reachability check; proceeding", "cluster", cluster, "path", path, "error", err)
+			continue
+		}
+		if _, reachable := remainingSet[publicKey]; reachable {
+			return nil
+		}
+		checked = append(checked, path)
+	}
+	if len(checked) == 0 {
+		return nil
+	}
+	return &ErrNoReachablePrivateKey{
+		Cluster: cluster,
+		KeyType: KeyTypeAge,
+		KeyFile: strings.Join(checked, ", "),
+	}
+}
+
+func resolveAgeKeyFilePath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(homeDir, path[2:])
+		}
+	}
+	return path
+}
+
+func extractAgePublicKey(data []byte) (string, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "# public key:") {
+			publicKey := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "# public key:"))
+			if publicKey != "" {
+				return publicKey, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("public key comment not found")
+}
+
 // This is a placeholder implementation that should be replaced with
 // actual user-key mapping logic.
 func (r *DefaultKeyRevoker) isKeyOwnedByUser(key KeyEntry, userEmail string) bool {
@@ -473,8 +680,10 @@ func (r *DefaultKeyRevoker) isKeyOwnedByUser(key KeyEntry, userEmail string) boo
 }
 
 // removeKeysFromSOPSConfig removes the specified keys from .sops.yaml.
-// Returns the list of remaining active keys.
-func (r *DefaultKeyRevoker) removeKeysFromSOPSConfig(ctx context.Context, cluster string, keysToRemove []KeyEntry) ([]string, error) {
+// remainingKeys is the authorized recipient set computed by the caller's
+// precheck and is deliberately reused here instead of querying the registry a
+// second time.
+func (r *DefaultKeyRevoker) removeKeysFromSOPSConfig(ctx context.Context, cluster string, keysToRemove []KeyEntry, registryKeys []KeyEntry, remainingKeys []string) ([]string, error) {
 	r.logger.Debug("Removing keys from .sops.yaml", "cluster", cluster, "key_count", len(keysToRemove))
 
 	// Get the .sops.yaml path from the cluster config
@@ -497,64 +706,55 @@ func (r *DefaultKeyRevoker) removeKeysFromSOPSConfig(ctx context.Context, cluste
 		return nil, fmt.Errorf("failed to read .sops.yaml: %w", err)
 	}
 
-	// Parse the SOPS config
-	var sopsConfig struct {
-		CreationRules []struct {
-			PathRegex      string `yaml:"path_regex,omitempty"`
-			EncryptedRegex string `yaml:"encrypted_regex,omitempty"`
-			Age            string `yaml:"age,omitempty"`
-		} `yaml:"creation_rules"`
-	}
-
-	if err := yaml.Unmarshal(data, &sopsConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse .sops.yaml: %w", err)
-	}
-
-	// Create a set of keys to remove for quick lookup
+	// Parse and update only existing age scalar values in the YAML node tree.
 	keysToRemoveSet := make(map[string]bool)
 	for _, key := range keysToRemove {
-		keysToRemoveSet[key.PublicKey] = true
-	}
-
-	// Get all active keys for the cluster
-	allKeys, err := r.registry.ListKeys(ctx, cluster)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list keys: %w", err)
-	}
-
-	// Build list of remaining active keys
-	var remainingKeys []string
-	for _, key := range allKeys {
-		if key.KeyType == KeyTypeAge && key.Status == KeyStatusActive && !keysToRemoveSet[key.PublicKey] {
-			remainingKeys = append(remainingKeys, key.PublicKey)
+		if key.PublicKey != "" {
+			keysToRemoveSet[key.PublicKey] = true
+		}
+		if key.Fingerprint != "" {
+			keysToRemoveSet[key.Fingerprint] = true
 		}
 	}
 
+	computedRemaining := r.remainingAuthorizedRecipients(cluster, registryKeys, keysToRemove)
+	if len(computedRemaining) != len(remainingKeys) {
+		return nil, fmt.Errorf("remaining authorized recipient set changed between precheck and mutation")
+	}
+	for index := range computedRemaining {
+		if computedRemaining[index] != remainingKeys[index] {
+			return nil, fmt.Errorf("remaining authorized recipient set changed between precheck and mutation")
+		}
+	}
+
+	// This guard is defense in depth; the shared precheck should make it
+	// unreachable unless a caller violates the revocation flow contract.
 	if len(remainingKeys) == 0 {
 		return nil, fmt.Errorf("no active keys would remain after revocation")
 	}
 
-	// Update all Age keys in .sops.yaml to use only remaining keys
-	remainingKeysStr := ""
-	for i, key := range remainingKeys {
-		if i > 0 {
-			remainingKeysStr += ","
+	updatedData, err := rewriteSOPSAgeValues(data, func(existing []string) ([]string, error) {
+		remainingSet := make(map[string]struct{}, len(remainingKeys))
+		for _, key := range remainingKeys {
+			remainingSet[key] = struct{}{}
 		}
-		remainingKeysStr += key
-	}
-
-	for i := range sopsConfig.CreationRules {
-		if sopsConfig.CreationRules[i].Age != "" {
-			sopsConfig.CreationRules[i].Age = remainingKeysStr
+		ordered := make([]string, 0, len(remainingKeys))
+		for _, recipient := range existing {
+			if _, removed := keysToRemoveSet[recipient]; removed {
+				continue
+			}
+			if _, active := remainingSet[recipient]; active {
+				ordered = appendUniqueRecipient(ordered, recipient)
+			}
 		}
-	}
-
-	// Write back the updated config
-	updatedData, err := yaml.Marshal(&sopsConfig)
+		for _, recipient := range remainingKeys {
+			ordered = appendUniqueRecipient(ordered, recipient)
+		}
+		return ordered, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal .sops.yaml: %w", err)
+		return nil, fmt.Errorf("failed to update SOPS YAML: %w", err)
 	}
-
 	if err := os.WriteFile(sopsConfigPath, updatedData, 0o644); err != nil {
 		return nil, fmt.Errorf("failed to write .sops.yaml: %w", err)
 	}
@@ -613,8 +813,13 @@ func (r *DefaultKeyRevoker) reencryptManifestsWithKeys(ctx context.Context, clus
 			continue
 		}
 
-		// Create a temporary file for decryption
-		tmpDecrypted := manifestPath + ".tmp.decrypted"
+		// Create a temporary file for decryption.
+		// The temp name must keep a .yaml suffix: SOPS refuses to encrypt a file
+		// when a .sops.yaml is discoverable and no creation_rules path_regex
+		// matches it ("no matching creation rules found"), even when recipients
+		// are passed explicitly via --age. Rules are keyed on a .yaml suffix, so
+		// a bare ".tmp.decrypted" name never matches.
+		tmpDecrypted := manifestPath + ".tmp.decrypted.yaml"
 		defer os.Remove(tmpDecrypted)
 
 		// Decrypt the file
@@ -623,20 +828,21 @@ func (r *DefaultKeyRevoker) reencryptManifestsWithKeys(ctx context.Context, clus
 			continue
 		}
 
-		// Re-encrypt with the remaining keys
-		// Note: The SOPS config has already been updated with the remaining keys,
-		// so we can use in-place encryption
+		// Re-encrypt with the remaining keys.
+		// Note: The SOPS config has already been updated with the remaining keys.
+		// InPlace is required: without -i (and without --output) sops writes the
+		// ciphertext to stdout, which is discarded, so no encrypted file is ever
+		// produced.
 		if err := encryptor.EncryptFile(ctx, tmpDecrypted, sops.EncryptionConfig{
 			AgeKeys: keys,
-			InPlace: false,
+			InPlace: true,
 		}); err != nil {
 			reencryptErrors = append(reencryptErrors, fmt.Errorf("failed to re-encrypt %s: %w", manifestPath, err))
 			continue
 		}
 
 		// Move the encrypted file back
-		encryptedPath := tmpDecrypted + ".enc"
-		if err := os.Rename(encryptedPath, manifestPath); err != nil {
+		if err := os.Rename(tmpDecrypted, manifestPath); err != nil {
 			reencryptErrors = append(reencryptErrors, fmt.Errorf("failed to move re-encrypted file %s: %w", manifestPath, err))
 			continue
 		}

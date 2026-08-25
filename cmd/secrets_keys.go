@@ -33,6 +33,7 @@ for standalone clusters and GitOps deployments.`,
 	cmd.AddCommand(newSecretsKeysValidateCmd())
 	cmd.AddCommand(newSecretsKeysCheckCmd())
 	cmd.AddCommand(newSecretsKeysRevokeCmd())
+	cmd.AddCommand(newSecretsKeysReconcileCmd())
 
 	return cmd
 }

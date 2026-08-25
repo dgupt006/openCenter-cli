@@ -671,7 +671,7 @@ func setupDryRunRotationTest(t *testing.T, tmpDir string, clusterName string, se
 	}
 
 	// Create mock SOPS encryptor for registry
-	mockEncryptor := &mockSOPSEncryptor{}
+	mockEncryptor := newMockSOPSEncryptor()
 
 	// Create key registry
 	registry := NewDefaultKeyRegistry(registryDir, mockEncryptor, logger)
@@ -722,12 +722,7 @@ func setupDryRunRotationTest(t *testing.T, tmpDir string, clusterName string, se
 func setupDryRunRevocationTest(t *testing.T, tmpDir string, clusterName string, secrets map[string]string) (*DefaultKeyRevoker, error) {
 	t.Helper()
 
-	// Override HOME environment variable for testing
-	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() {
-		os.Setenv("HOME", originalHome)
-	})
+	configureDryRunTestEnv(t, tmpDir)
 
 	// Create logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -787,7 +782,7 @@ func setupDryRunRevocationTest(t *testing.T, tmpDir string, clusterName string, 
 	}
 
 	// Create mock SOPS encryptor for registry
-	mockEncryptor := &mockSOPSEncryptor{}
+	mockEncryptor := newMockSOPSEncryptor()
 
 	// Create key registry
 	registry := NewDefaultKeyRegistry(registryDir, mockEncryptor, logger)
@@ -843,6 +838,16 @@ func setupDryRunRevocationTest(t *testing.T, tmpDir string, clusterName string, 
 		return nil, fmt.Errorf("failed to register key 2: %w", err)
 	}
 
+	writeRevocationPreflightFixture(t, tmpDir, clusterName, publicKey1+","+publicKey2)
+	if _, err := config.NewConfigManager(""); err != nil {
+		return nil, fmt.Errorf("failed to initialize test config: %w", err)
+	}
+	if _, err := config.ResolveStateDir(); err != nil {
+		return nil, fmt.Errorf("failed to initialize test state: %w", err)
+	}
+	if err := os.MkdirAll(config.GetPluginsDir(), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to initialize test plugins: %w", err)
+	}
 	return revoker, nil
 }
 

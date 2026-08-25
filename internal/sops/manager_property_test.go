@@ -418,6 +418,13 @@ func TestProperty_DecryptionFailureClassification(t *testing.T) {
 // Feature: stub-implementation-completion, Property 41: No Placeholder Key Fallback
 // **Validates: Requirements 9.5**
 func TestProperty_NoPlaceholderKeyFallback(t *testing.T) {
+	// Isolate SOPS config discovery. sops resolves .sops.yaml by searching upward
+	// from the process working directory, so when these tests run from within the
+	// repository sops finds the repository's own .sops.yaml and encrypts using
+	// the age recipient declared there -- which makes "no key provided" succeed
+	// and defeats the property. Run from a directory with no ancestor .sops.yaml.
+	t.Chdir(t.TempDir())
+
 	properties := gopter.NewProperties(nil)
 
 	properties.Property("SOPS config never contains placeholder age keys", prop.ForAll(

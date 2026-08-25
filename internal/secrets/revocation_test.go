@@ -69,6 +69,30 @@ func setupTestRevoker(t *testing.T) (*DefaultKeyRevoker, *MockKeyRegistry, *Defa
 	return revoker, mockRegistry, secretsManager, tmpDir, cleanup
 }
 
+func writeRevocationPreflightFixture(t *testing.T, tmpDir, cluster, recipients string) string {
+	t.Helper()
+
+	clustersDir := filepath.Join(tmpDir, ".config", "opencenter", "clusters")
+	t.Setenv("OPENCENTER_CLUSTERS_DIR", clustersDir)
+	t.Setenv("OPENCENTER_BLUEPRINTS_DIR", filepath.Join(clustersDir, "blueprints"))
+	repoDir := filepath.Join(tmpDir, "test-repo")
+	writeRotationTestConfig(t, cluster, `schema_version: "2.0"
+opencenter:
+  cluster:
+    cluster_name: `+cluster+`
+  gitops:
+    git_dir: `+repoDir+`
+`)
+
+	overlayPath := filepath.Join(repoDir, "applications", "overlays", cluster)
+	require.NoError(t, os.MkdirAll(overlayPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(overlayPath, ".sops.yaml"), []byte(`creation_rules:
+  - path_regex: .*\.yaml$
+    age: `+recipients+`
+`), 0o644))
+	return overlayPath
+}
+
 // MockKeyRotator is a mock implementation of KeyRotator for testing
 type MockKeyRotator struct {
 	rotateAgeKeyCalled bool
@@ -211,14 +235,27 @@ func TestRevokeByUser(t *testing.T) {
 	})
 
 	t.Run("succeeds in dry-run mode", func(t *testing.T) {
-		revoker, mockRegistry, _, _, cleanup := setupTestRevoker(t)
+		revoker, mockRegistry, _, tmpDir, cleanup := setupTestRevoker(t)
 		defer cleanup()
 
 		cluster := "test-cluster-dryrun"
 		userEmail := "user@example.com"
+		writeRevocationPreflightFixture(t, tmpDir, cluster, "age1user123,age1other456")
 
-		// Register two keys: one for the user, one for another user
+		// Register two keys: one for another user (the primary), one for the user
 		err := mockRegistry.RegisterKey(ctx, KeyEntry{
+			Cluster:     cluster,
+			KeyType:     KeyTypeAge,
+			Fingerprint: "age1other456",
+			PublicKey:   "age1other456",
+			CreatedAt:   time.Now(),
+			Status:      KeyStatusActive,
+			Primary:     true,
+			UsedBy:      []string{"other@example.com"},
+		})
+		require.NoError(t, err)
+
+		err = mockRegistry.RegisterKey(ctx, KeyEntry{
 			Cluster:     cluster,
 			KeyType:     KeyTypeAge,
 			Fingerprint: "age1user123",
@@ -226,17 +263,6 @@ func TestRevokeByUser(t *testing.T) {
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
 			UsedBy:      []string{userEmail},
-		})
-		require.NoError(t, err)
-
-		err = mockRegistry.RegisterKey(ctx, KeyEntry{
-			Cluster:     cluster,
-			KeyType:     KeyTypeAge,
-			Fingerprint: "age1other456",
-			PublicKey:   "age1other456",
-			CreatedAt:   time.Now(),
-			Status:      KeyStatusActive,
-			UsedBy:      []string{"other@example.com"},
 		})
 		require.NoError(t, err)
 
@@ -255,14 +281,27 @@ func TestRevokeByUser(t *testing.T) {
 	})
 
 	t.Run("identifies multiple keys for user", func(t *testing.T) {
-		revoker, mockRegistry, _, _, cleanup := setupTestRevoker(t)
+		revoker, mockRegistry, _, tmpDir, cleanup := setupTestRevoker(t)
 		defer cleanup()
 
 		cluster := "test-cluster-multi"
 		userEmail := "user@example.com"
+		writeRevocationPreflightFixture(t, tmpDir, cluster, "age1user1,age1user2,age1other")
 
-		// Register multiple keys for the user
+		// Register the remaining primary first, then the user's keys.
 		err := mockRegistry.RegisterKey(ctx, KeyEntry{
+			Cluster:     cluster,
+			KeyType:     KeyTypeAge,
+			Fingerprint: "age1other",
+			PublicKey:   "age1other",
+			CreatedAt:   time.Now(),
+			Status:      KeyStatusActive,
+			Primary:     true,
+			UsedBy:      []string{"other@example.com"},
+		})
+		require.NoError(t, err)
+
+		err = mockRegistry.RegisterKey(ctx, KeyEntry{
 			Cluster:     cluster,
 			KeyType:     KeyTypeAge,
 			Fingerprint: "age1user1",
@@ -281,18 +320,6 @@ func TestRevokeByUser(t *testing.T) {
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
 			UsedBy:      []string{userEmail},
-		})
-		require.NoError(t, err)
-
-		// Register a key for another user (to prevent single-key error)
-		err = mockRegistry.RegisterKey(ctx, KeyEntry{
-			Cluster:     cluster,
-			KeyType:     KeyTypeAge,
-			Fingerprint: "age1other",
-			PublicKey:   "age1other",
-			CreatedAt:   time.Now(),
-			Status:      KeyStatusActive,
-			UsedBy:      []string{"other@example.com"},
 		})
 		require.NoError(t, err)
 
@@ -396,28 +423,30 @@ func TestRevokeByFingerprint(t *testing.T) {
 	})
 
 	t.Run("succeeds in dry-run mode", func(t *testing.T) {
-		revoker, mockRegistry, _, _, cleanup := setupTestRevoker(t)
+		revoker, mockRegistry, _, tmpDir, cleanup := setupTestRevoker(t)
 		defer cleanup()
 
 		cluster := "test-cluster-dryrun"
 		fingerprint := "age1revoke"
+		writeRevocationPreflightFixture(t, tmpDir, cluster, "age1revoke,age1keep")
 
-		// Register two keys
+		// Register the remaining primary first, then the key to revoke.
 		err := mockRegistry.RegisterKey(ctx, KeyEntry{
 			Cluster:     cluster,
 			KeyType:     KeyTypeAge,
-			Fingerprint: fingerprint,
-			PublicKey:   fingerprint,
+			Fingerprint: "age1keep",
+			PublicKey:   "age1keep",
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
+			Primary:     true,
 		})
 		require.NoError(t, err)
 
 		err = mockRegistry.RegisterKey(ctx, KeyEntry{
 			Cluster:     cluster,
 			KeyType:     KeyTypeAge,
-			Fingerprint: "age1keep",
-			PublicKey:   "age1keep",
+			Fingerprint: fingerprint,
+			PublicKey:   fingerprint,
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
 		})
@@ -543,9 +572,22 @@ func TestRevokeByUserIntegration(t *testing.T) {
 		ctx := context.Background()
 		cluster := "test-cluster-integration"
 		userEmail := "departing@example.com"
+		writeRevocationPreflightFixture(t, tmpDir, cluster, "age1departing,age1remaining")
 
-		// Setup: Register keys for multiple users
+		// Setup: Register the remaining primary first, then the departing user key.
 		err := mockRegistry.RegisterKey(ctx, KeyEntry{
+			Cluster:     cluster,
+			KeyType:     KeyTypeAge,
+			Fingerprint: "age1remaining",
+			PublicKey:   "age1remaining",
+			CreatedAt:   time.Now(),
+			Status:      KeyStatusActive,
+			Primary:     true,
+			UsedBy:      []string{"remaining@example.com"},
+		})
+		require.NoError(t, err)
+
+		err = mockRegistry.RegisterKey(ctx, KeyEntry{
 			Cluster:     cluster,
 			KeyType:     KeyTypeAge,
 			Fingerprint: "age1departing",
@@ -553,17 +595,6 @@ func TestRevokeByUserIntegration(t *testing.T) {
 			CreatedAt:   time.Now(),
 			Status:      KeyStatusActive,
 			UsedBy:      []string{userEmail},
-		})
-		require.NoError(t, err)
-
-		err = mockRegistry.RegisterKey(ctx, KeyEntry{
-			Cluster:     cluster,
-			KeyType:     KeyTypeAge,
-			Fingerprint: "age1remaining",
-			PublicKey:   "age1remaining",
-			CreatedAt:   time.Now(),
-			Status:      KeyStatusActive,
-			UsedBy:      []string{"remaining@example.com"},
 		})
 		require.NoError(t, err)
 
