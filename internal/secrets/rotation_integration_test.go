@@ -18,6 +18,8 @@ package secrets
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -544,4 +546,192 @@ opencenter:
 		require.True(t, ok, "ssh_private_key_file should exist")
 		assert.Equal(t, newKeyPath, privateKeyFile)
 	})
+}
+
+func TestSOPSRewritePreservesUnmodeledFieldsAndRecipients(t *testing.T) {
+	rotator, registry, _, tmpDir, cleanup := setupTestRotator(t)
+	defer cleanup()
+	ctx := context.Background()
+	cluster := "test-sops-preservation"
+	oldKey := "age1old"
+	userKey := "age1user"
+	newKey := "age1new"
+
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: oldKey, PublicKey: oldKey,
+		Status: KeyStatusActive,
+	}))
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: userKey, PublicKey: userKey,
+		Status: KeyStatusActive, UserEmail: "engineer@example.com",
+	}))
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: newKey, PublicKey: newKey,
+		Status: KeyStatusActive, RotatedFrom: oldKey,
+	}))
+
+	repoDir := filepath.Join(tmpDir, "preservation-repo")
+	require.NoError(t, os.MkdirAll(repoDir, 0o755))
+	writeRotationTestConfig(t, cluster, `schema_version: "2.0"
+opencenter:
+  cluster:
+    cluster_name: `+cluster+`
+  meta:
+    organization: test-org
+  gitops:
+    git_dir: `+repoDir+`
+secrets:
+  sops_age_key_file: ~/.config/sops/age/test-key.txt
+`)
+	overlayPath := filepath.Join(repoDir, "applications", "overlays", cluster)
+	require.NoError(t, os.MkdirAll(overlayPath, 0o755))
+	sopsPath := filepath.Join(overlayPath, ".sops.yaml")
+	original := `top_level_preserved: yes
+creation_rules:
+  - path_regex: .*\\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    pgp: 0123456789ABCDEF
+    age: >-
+      age1old,
+      age1user
+  - path_regex: no-age\\.yaml$
+    pgp: FEDCBA9876543210
+`
+	require.NoError(t, os.WriteFile(sopsPath, []byte(original), 0o644))
+
+	require.NoError(t, rotator.updateSOPSConfigDualKey(ctx, cluster, oldKey, newKey))
+	data, err := os.ReadFile(sopsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "top_level_preserved: yes")
+	assert.Contains(t, string(data), "pgp: 0123456789ABCDEF")
+	assert.Contains(t, string(data), "pgp: FEDCBA9876543210")
+	assert.Contains(t, string(data), "path_regex: no-age\\\\.yaml$")
+	assert.Contains(t, string(data), oldKey+","+userKey+","+newKey)
+
+	require.NoError(t, rotator.updateSOPSConfigSingleKey(ctx, cluster, newKey, oldKey))
+	data, err = os.ReadFile(sopsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "top_level_preserved: yes")
+	assert.Contains(t, string(data), "pgp: 0123456789ABCDEF")
+	assert.Contains(t, string(data), "pgp: FEDCBA9876543210")
+	assert.Contains(t, string(data), userKey+","+newKey)
+	assert.NotContains(t, string(data), oldKey+","+userKey+","+newKey)
+
+	revoker := NewDefaultKeyRevoker(registry, nil, rotator.secretsManager, nil, slog.Default())
+	allKeys, err := registry.ListKeys(ctx, cluster)
+	require.NoError(t, err)
+	revokedKeys := []KeyEntry{{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: userKey, PublicKey: userKey,
+	}}
+	remainingKeys := revoker.remainingAuthorizedRecipients(cluster, allKeys, revokedKeys)
+	remaining, err := revoker.removeKeysFromSOPSConfig(ctx, cluster, revokedKeys, allKeys, remainingKeys)
+	require.NoError(t, err)
+	assert.Equal(t, []string{oldKey, newKey}, remaining)
+	data, err = os.ReadFile(sopsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "top_level_preserved: yes")
+	assert.Contains(t, string(data), "pgp: 0123456789ABCDEF")
+	assert.Contains(t, string(data), "pgp: FEDCBA9876543210")
+	assert.Contains(t, string(data), newKey+","+oldKey)
+	assert.NotContains(t, string(data), userKey)
+}
+
+func TestCompleteRotationRegistryFailureRollsBackFiles(t *testing.T) {
+	rotator, registry, _, tmpDir, cleanup := setupTestRotator(t)
+	defer cleanup()
+	ctx := context.Background()
+	cluster := "test-complete-registry-failure"
+	oldKey := "age1old-failure"
+	newKey := "age1new-failure"
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: oldKey, PublicKey: oldKey,
+		Status: KeyStatusActive,
+	}))
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: newKey, PublicKey: newKey,
+		Status: KeyStatusActive, RotatedFrom: oldKey,
+	}))
+
+	repoDir := filepath.Join(tmpDir, "failure-repo")
+	require.NoError(t, os.MkdirAll(repoDir, 0o755))
+	writeRotationTestConfig(t, cluster, `schema_version: "2.0"
+opencenter:
+  cluster:
+    cluster_name: `+cluster+`
+  meta:
+    organization: test-org
+  gitops:
+    git_dir: `+repoDir+`
+secrets:
+  sops_age_key_file: ~/.config/sops/age/test-key.txt
+`)
+	overlayPath := filepath.Join(repoDir, "applications", "overlays", cluster)
+	manifestPath := filepath.Join(overlayPath, "services", "test", "secret.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(manifestPath), 0o755))
+	sopsPath := filepath.Join(overlayPath, ".sops.yaml")
+	beforeSOPS := []byte("creation_rules:\n  - path_regex: .*\\\\.yaml$\n    age: " + oldKey + "," + newKey + "\n")
+	beforeManifest := []byte("apiVersion: v1\nkind: Secret\ndata:\n  value: plaintext\n")
+	require.NoError(t, os.WriteFile(sopsPath, beforeSOPS, 0o644))
+	require.NoError(t, os.WriteFile(manifestPath, beforeManifest, 0o644))
+
+	registry.SetMutationError(fmt.Errorf("injected registry failure"))
+	err := rotator.CompleteRotation(ctx, cluster, KeyTypeAge)
+	require.Error(t, err)
+	afterSOPS, readErr := os.ReadFile(sopsPath)
+	require.NoError(t, readErr)
+	afterManifest, readErr := os.ReadFile(manifestPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeSOPS, afterSOPS)
+	assert.Equal(t, beforeManifest, afterManifest)
+}
+
+func TestRevokeRegistryFailureRollsBackFiles(t *testing.T) {
+	revoker, registry, _, tmpDir, cleanup := setupTestRevoker(t)
+	defer cleanup()
+	ctx := context.Background()
+	cluster := "test-revoke-registry-failure"
+	targetKey := "age1revoke-failure"
+	remainingKey := "age1remaining-failure"
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: targetKey, PublicKey: targetKey,
+		Status: KeyStatusActive,
+	}))
+	require.NoError(t, registry.RegisterKey(ctx, KeyEntry{
+		Cluster: cluster, KeyType: KeyTypeAge, Fingerprint: remainingKey, PublicKey: remainingKey,
+		Status: KeyStatusActive,
+	}))
+
+	repoDir := filepath.Join(tmpDir, "revoke-failure-repo")
+	require.NoError(t, os.MkdirAll(repoDir, 0o755))
+	writeRotationTestConfig(t, cluster, `schema_version: "2.0"
+opencenter:
+  cluster:
+    cluster_name: `+cluster+`
+  meta:
+    organization: test-org
+  gitops:
+    git_dir: `+repoDir+`
+secrets:
+  sops_age_key_file: ~/.config/sops/age/test-key.txt
+`)
+	overlayPath := filepath.Join(repoDir, "applications", "overlays", cluster)
+	manifestPath := filepath.Join(overlayPath, "services", "test", "secret.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(manifestPath), 0o755))
+	sopsPath := filepath.Join(overlayPath, ".sops.yaml")
+	beforeSOPS := []byte("top_level_preserved: yes\ncreation_rules:\n  - path_regex: .*\\\\.yaml$\n    pgp: 0123456789ABCDEF\n    age: >-\n      " + targetKey + ",\n      " + remainingKey + "\n")
+	beforeManifest := []byte("apiVersion: v1\nkind: Secret\ndata:\n  value: plaintext\n")
+	require.NoError(t, os.WriteFile(sopsPath, beforeSOPS, 0o644))
+	require.NoError(t, os.WriteFile(manifestPath, beforeManifest, 0o644))
+
+	registry.SetMutationError(fmt.Errorf("injected registry failure"))
+	_, err := revoker.RevokeByFingerprint(ctx, RevokeOptions{
+		Cluster: cluster, Fingerprint: targetKey,
+	})
+	require.Error(t, err)
+	afterSOPS, readErr := os.ReadFile(sopsPath)
+	require.NoError(t, readErr)
+	afterManifest, readErr := os.ReadFile(manifestPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, beforeSOPS, afterSOPS)
+	assert.Equal(t, beforeManifest, afterManifest)
 }

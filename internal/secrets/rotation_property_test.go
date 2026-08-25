@@ -160,7 +160,7 @@ func setupDualKeyRotationTest(t *testing.T, tmpDir string, clusterName string, s
 	}
 
 	// Create mock SOPS encryptor for registry
-	mockEncryptor := &mockSOPSEncryptor{}
+	mockEncryptor := newMockSOPSEncryptor()
 
 	// Create key registry
 	registry := NewDefaultKeyRegistry(registryDir, mockEncryptor, logger)
@@ -308,6 +308,38 @@ data:
 	return content
 }
 
+// findSOPSConfigForManifest returns the nearest .sops.yaml at or above the
+// manifest's directory, or "" when none exists.
+//
+// Test helpers must pass this to sops with --config. Without it sops resolves a
+// config by searching upward from the process working directory, which during
+// `go test` is the package directory -- so it picks up the repository's own
+// .sops.yaml instead of the fixture's, and the result depends on ambient state
+// outside the test.
+func findSOPSConfigForManifest(manifestPath string) string {
+	dir := filepath.Dir(manifestPath)
+	for {
+		candidate := filepath.Join(dir, ".sops.yaml")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// sopsArgsWithConfig prefixes sops arguments with --config when a fixture
+// config can be located for the manifest.
+func sopsArgsWithConfig(manifestPath string, args ...string) []string {
+	if cfg := findSOPSConfigForManifest(manifestPath); cfg != "" {
+		return append([]string{"--config", cfg}, args...)
+	}
+	return args
+}
+
 // decryptManifestWithKey decrypts a manifest using a specific Age key
 func decryptManifestWithKey(ctx context.Context, manifestPath string, keyPath string) (map[string]interface{}, error) {
 	// Create a temporary file for decrypted output
@@ -324,7 +356,8 @@ func decryptManifestWithKey(ctx context.Context, manifestPath string, keyPath st
 	defer os.Setenv("SOPS_AGE_KEY_FILE", oldEnv)
 
 	// Decrypt using SOPS
-	cmd := exec.CommandContext(ctx, "sops", "--decrypt", "--output", tmpFile.Name(), manifestPath)
+	args := sopsArgsWithConfig(manifestPath, "--decrypt", "--output", tmpFile.Name(), manifestPath)
+	cmd := exec.CommandContext(ctx, "sops", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt manifest: %w (output: %s)", err, string(output))
@@ -676,7 +709,7 @@ func setupCompletedRotationTest(t *testing.T, tmpDir string, clusterName string,
 	}
 
 	// Create mock SOPS encryptor for registry
-	mockEncryptor := &mockSOPSEncryptor{}
+	mockEncryptor := newMockSOPSEncryptor()
 
 	// Create key registry
 	registry := NewDefaultKeyRegistry(registryDir, mockEncryptor, logger)
@@ -817,20 +850,30 @@ func completeRotationForTest(ctx context.Context, rotator *DefaultKeyRotator, cl
 	serviceDir := filepath.Join(overlayPath, "services", "test-service")
 	manifestPath := filepath.Join(serviceDir, "secret.yaml")
 
+	// The old key must be named explicitly. `sops --rotate` re-keys a file using
+	// the recipients already recorded in its SOPS metadata; it does not re-read
+	// creation_rules, so rewriting .sops.yaml above is not enough to drop a
+	// recipient. --rm-age is what removes it.
+	oldKeyPath := filepath.Join(filepath.Dir(newKeyPath), fmt.Sprintf("%s_keys.txt", clusterName))
+	oldPublicKey, err := extractPublicKeyFromFile(oldKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to extract old public key: %w", err)
+	}
+
 	// Set SOPS_AGE_KEY_FILE to new key
 	oldEnv := os.Getenv("SOPS_AGE_KEY_FILE")
 	os.Setenv("SOPS_AGE_KEY_FILE", newKeyPath)
 	defer os.Setenv("SOPS_AGE_KEY_FILE", oldEnv)
 
 	// Decrypt and re-encrypt with new key
-	cmd := exec.CommandContext(ctx, "sops", "--rotate", "--in-place", manifestPath)
+	args := sopsArgsWithConfig(manifestPath, "--rotate", "--in-place", "--rm-age", oldPublicKey, manifestPath)
+	cmd := exec.CommandContext(ctx, "sops", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to rotate manifest: %w (output: %s)", err, string(output))
 	}
 
 	// Archive old key (simulate what CompleteRotation does)
-	oldKeyPath := filepath.Join(filepath.Dir(newKeyPath), fmt.Sprintf("%s_keys.txt", clusterName))
 	archiveDir := filepath.Join(filepath.Dir(oldKeyPath), "..", "archive")
 	timestamp := "20240115_103000" // Fixed timestamp for testing
 	archivedKeyPath := filepath.Join(archiveDir, fmt.Sprintf("%s_keys_%s.txt", clusterName, timestamp))

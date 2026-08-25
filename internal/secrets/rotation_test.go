@@ -18,9 +18,11 @@ package secrets
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,7 +89,14 @@ func setupTestRotator(t *testing.T) (*DefaultKeyRotator, *MockKeyRegistry, *Defa
 
 // MockKeyRegistry is a mock implementation of KeyRegistry for testing
 type MockKeyRegistry struct {
-	keys map[string][]KeyEntry
+	keys          map[string][]KeyEntry
+	mutationError error
+}
+
+// SetMutationError injects a failure into the next registry mutation path.
+// It is intentionally configurable so rollback tests can exercise every caller.
+func (m *MockKeyRegistry) SetMutationError(err error) {
+	m.mutationError = err
 }
 
 func NewMockKeyRegistry() *MockKeyRegistry {
@@ -97,27 +106,99 @@ func NewMockKeyRegistry() *MockKeyRegistry {
 }
 
 func (m *MockKeyRegistry) RegisterKey(ctx context.Context, entry KeyEntry) error {
+	if m.mutationError != nil {
+		return m.mutationError
+	}
 	key := entry.Cluster + ":" + string(entry.KeyType)
+	for _, existing := range m.keys[key] {
+		if existing.Fingerprint == entry.Fingerprint {
+			return fmt.Errorf("%s key %s already exists for cluster %s with status %s", entry.KeyType, entry.Fingerprint, entry.Cluster, existing.Status)
+		}
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now()
+	}
+	if entry.ExpiresAt.IsZero() {
+		days := DefaultAgeExpirationDays
+		if entry.KeyType == KeyTypeSSH {
+			days = DefaultSSHExpirationDays
+		}
+		entry.ExpiresAt = entry.CreatedAt.AddDate(0, 0, days)
+	}
+	if entry.Status == "" {
+		entry.Status = KeyStatusActive
+	}
+	if entry.Status == KeyStatusActive && !entry.Primary {
+		if _, ok := mockActivePrimary(m.keys[key]); !ok {
+			entry.Primary = true
+		}
+	}
+	if entry.Primary && entry.Status == KeyStatusActive {
+		if existing, ok := mockActivePrimary(m.keys[key]); ok {
+			return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, existing.Fingerprint, entry.Cluster)
+		}
+	}
 	m.keys[key] = append(m.keys[key], entry)
 	return nil
 }
 
+// GetKey retrieves key metadata by cluster and type.
+// It delegates to the active primary key when one exists, falling back to the earliest-registered active key when no primary is set (legacy registries).
 func (m *MockKeyRegistry) GetKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error) {
-	key := cluster + ":" + string(keyType)
-	entries := m.keys[key]
-	if len(entries) == 0 {
-		return nil, &ErrKeyNotFound{Cluster: cluster, KeyType: keyType}
+	return mockSelectKey(m.keys[cluster+":"+string(keyType)], cluster, keyType, false)
+}
+
+func (m *MockKeyRegistry) GetPrimaryKey(ctx context.Context, cluster string, keyType KeyType) (*KeyEntry, error) {
+	return mockSelectKey(m.keys[cluster+":"+string(keyType)], cluster, keyType, true)
+}
+
+func (m *MockKeyRegistry) ReplacePrimary(ctx context.Context, oldFingerprint string, newEntry KeyEntry) error {
+	if m.mutationError != nil {
+		return m.mutationError
 	}
-	// Return the most recent active key
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Status == KeyStatusActive {
-			return &entries[i], nil
+	key := newEntry.Cluster + ":" + string(newEntry.KeyType)
+	entries := m.keys[key]
+	for _, existing := range entries {
+		if existing.Fingerprint == newEntry.Fingerprint {
+			return fmt.Errorf("%s key %s already exists for cluster %s with status %s", newEntry.KeyType, newEntry.Fingerprint, newEntry.Cluster, existing.Status)
 		}
 	}
-	return &entries[len(entries)-1], nil
+	oldIndex := -1
+	for i := range entries {
+		if entries[i].Fingerprint == oldFingerprint {
+			oldIndex = i
+			break
+		}
+	}
+	if oldIndex == -1 {
+		return &ErrKeyNotFound{Cluster: newEntry.Cluster, KeyType: newEntry.KeyType}
+	}
+	if existing, ok := mockActivePrimary(entries); ok && existing.Fingerprint != oldFingerprint {
+		return fmt.Errorf("active primary %s key %s already exists for cluster %s", newEntry.KeyType, existing.Fingerprint, newEntry.Cluster)
+	}
+	if newEntry.CreatedAt.IsZero() {
+		newEntry.CreatedAt = time.Now()
+	}
+	if newEntry.ExpiresAt.IsZero() {
+		days := DefaultAgeExpirationDays
+		if newEntry.KeyType == KeyTypeSSH {
+			days = DefaultSSHExpirationDays
+		}
+		newEntry.ExpiresAt = newEntry.CreatedAt.AddDate(0, 0, days)
+	}
+	if newEntry.Status == "" {
+		newEntry.Status = KeyStatusActive
+	}
+	entries[oldIndex].Primary = false
+	newEntry.Primary = true
+	m.keys[key] = append(entries, newEntry)
+	return nil
 }
 
 func (m *MockKeyRegistry) UpdateKeyStatus(ctx context.Context, cluster string, keyType KeyType, status KeyStatus) error {
+	if m.mutationError != nil {
+		return m.mutationError
+	}
 	key := cluster + ":" + string(keyType)
 	entries := m.keys[key]
 	if len(entries) > 0 {
@@ -134,11 +215,41 @@ func (m *MockKeyRegistry) UpdateKeyStatus(ctx context.Context, cluster string, k
 }
 
 func (m *MockKeyRegistry) UpdateKey(ctx context.Context, entry KeyEntry) error {
+	if m.mutationError != nil {
+		return m.mutationError
+	}
 	key := entry.Cluster + ":" + string(entry.KeyType)
 	entries := m.keys[key]
 	for i := range entries {
 		if entry.Fingerprint != "" && entries[i].Fingerprint == entry.Fingerprint {
-			entries[i] = entry
+			updated := entries[i]
+			if entry.PublicKey != "" {
+				updated.PublicKey = entry.PublicKey
+			}
+			if entry.Status != "" {
+				updated.Status = entry.Status
+			}
+			if !entry.CreatedAt.IsZero() {
+				updated.CreatedAt = entry.CreatedAt
+			}
+			if !entry.ExpiresAt.IsZero() {
+				updated.ExpiresAt = entry.ExpiresAt
+			}
+			updated.RotatedFrom = entry.RotatedFrom
+			updated.RevokedAt = entry.RevokedAt
+			updated.RevokedBy = entry.RevokedBy
+			updated.RevokedReason = entry.RevokedReason
+			updated.UsedBy = entry.UsedBy
+			updated.UserEmail = entry.UserEmail
+			updated.Primary = entry.Primary
+			if updated.Primary && updated.Status == KeyStatusActive {
+				for j, other := range entries {
+					if j != i && other.Status == KeyStatusActive && other.Primary {
+						return fmt.Errorf("active primary %s key %s already exists for cluster %s", entry.KeyType, other.Fingerprint, entry.Cluster)
+					}
+				}
+			}
+			entries[i] = updated
 			m.keys[key] = entries
 			return nil
 		}
@@ -150,12 +261,51 @@ func (m *MockKeyRegistry) ListKeys(ctx context.Context, cluster string) ([]KeyEn
 	var result []KeyEntry
 	for _, entries := range m.keys {
 		for _, entry := range entries {
-			if entry.Cluster == cluster {
+			if cluster == "" || entry.Cluster == cluster {
 				result = append(result, entry)
 			}
 		}
 	}
 	return result, nil
+}
+
+func mockActivePrimary(entries []KeyEntry) (KeyEntry, bool) {
+	for _, entry := range entries {
+		if entry.Status == KeyStatusActive && entry.Primary {
+			return entry, true
+		}
+	}
+	return KeyEntry{}, false
+}
+
+func mockSelectKey(entries []KeyEntry, cluster string, keyType KeyType, primaryOnly bool) (*KeyEntry, error) {
+	var primaries []KeyEntry
+	for _, entry := range entries {
+		if entry.Status == KeyStatusActive && entry.Primary {
+			primaries = append(primaries, entry)
+		}
+	}
+	if len(primaries) > 1 {
+		fingerprints := make([]string, len(primaries))
+		for i, entry := range primaries {
+			fingerprints[i] = entry.Fingerprint
+		}
+		return nil, fmt.Errorf("multiple active primary %s keys for cluster %s: %s", keyType, cluster, strings.Join(fingerprints, ", "))
+	}
+	if len(primaries) == 1 {
+		entry := primaries[0]
+		return &entry, nil
+	}
+	if primaryOnly {
+		return nil, &ErrKeyNotFound{Cluster: cluster, KeyType: keyType}
+	}
+	for _, entry := range entries {
+		if entry.Status == KeyStatusActive {
+			returnEntry := entry
+			return &returnEntry, nil
+		}
+	}
+	return nil, &ErrKeyNotFound{Cluster: cluster, KeyType: keyType}
 }
 
 func (m *MockKeyRegistry) CheckExpiration(ctx context.Context, warnDays int) (*ExpirationReport, error) {
@@ -240,6 +390,7 @@ func TestGetRotationStatus(t *testing.T) {
 			PublicKey:   "age1new456",
 			CreatedAt:   newTime,
 			Status:      KeyStatusActive,
+			RotatedFrom: "age1old123",
 		})
 		require.NoError(t, err)
 
@@ -320,6 +471,7 @@ func TestCompleteRotation(t *testing.T) {
 			PublicKey:   "age1key2",
 			CreatedAt:   now,
 			Status:      KeyStatusActive,
+			RotatedFrom: "age1key1",
 		})
 		require.NoError(t, err)
 
@@ -362,6 +514,7 @@ func TestCompleteRotationIntegration(t *testing.T) {
 			PublicKey:   "age1new456",
 			CreatedAt:   newTime,
 			Status:      KeyStatusActive,
+			RotatedFrom: "age1old123",
 		})
 		require.NoError(t, err)
 
@@ -474,6 +627,7 @@ func TestRotateAgeKey(t *testing.T) {
 			PublicKey:   "age1new",
 			CreatedAt:   newTime,
 			Status:      KeyStatusActive,
+			RotatedFrom: "age1old",
 		})
 		require.NoError(t, err)
 
@@ -667,6 +821,6 @@ secrets:
 		result, err := rotator.RotateSSHKey(ctx, opts)
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "failed to get current SSH key")
+		assert.Contains(t, err.Error(), "no active primary SSH key")
 	})
 }
