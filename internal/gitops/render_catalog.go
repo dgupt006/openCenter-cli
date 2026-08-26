@@ -131,7 +131,8 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true,
 			SourceName: "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
-			BasePath: "applications/base/services/openstack-csi", OverrideValuesRenderer: templateRenderer(openstackCSITemplate),
+			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources"},
+			OverrideValuesRenderer: templateRenderer(openstackCSITemplate),
 		},
 		{
 			ServiceName: "tempo", DefaultNamespace: "observability", HasOverrideValues: true,

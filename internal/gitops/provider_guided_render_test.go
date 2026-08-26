@@ -659,6 +659,101 @@ func TestRenderClusterAppsOpenStackCSINamespace(t *testing.T) {
 	}
 }
 
+func TestRenderClusterAppsOpenStackCSIStagesAndSecretSettings(t *testing.T) {
+	dst := t.TempDir()
+	cfg := newDefault("csi-stages-test")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("RenderClusterApps() error = %v", err)
+	}
+
+	fluxPath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "openstack-csi.yaml")
+	fluxDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, fluxPath)))
+	if err != nil {
+		t.Fatalf("parse %s: %v", fluxPath, err)
+	}
+
+	dependsOn := func(doc map[string]any) map[string]bool {
+		t.Helper()
+
+		spec, ok := doc["spec"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s document has no spec map: %#v", fluxPath, doc)
+		}
+		rawDependencies, ok := spec["dependsOn"].([]any)
+		if !ok {
+			t.Fatalf("%s document has no dependsOn list: %#v", fluxPath, doc)
+		}
+
+		dependencies := make(map[string]bool, len(rawDependencies))
+		for _, rawDependency := range rawDependencies {
+			dependency, ok := rawDependency.(map[string]any)
+			if !ok {
+				t.Fatalf("%s document has malformed dependsOn entry: %#v", fluxPath, rawDependency)
+			}
+			name, ok := dependency["name"].(string)
+			if !ok {
+				t.Fatalf("%s document has dependsOn entry without a name: %#v", fluxPath, dependency)
+			}
+			dependencies[name] = true
+		}
+		return dependencies
+	}
+
+	stageDependencies := make(map[string]map[string]bool)
+	for _, doc := range fluxDocs {
+		metadata, ok := doc["metadata"].(map[string]any)
+		if !ok || doc["kind"] != "Kustomization" {
+			continue
+		}
+		name, ok := metadata["name"].(string)
+		if ok {
+			stageDependencies[name] = dependsOn(doc)
+		}
+	}
+
+	baseDependencies, ok := stageDependencies["openstack-csi-base"]
+	if !ok {
+		t.Fatalf("openstack-csi-base was not rendered in %s", fluxPath)
+	}
+	for _, dependency := range []string{"sources", "openstack-csi-override"} {
+		if !baseDependencies[dependency] {
+			t.Errorf("openstack-csi-base must depend on %q, got %v", dependency, baseDependencies)
+		}
+	}
+
+	overrideDependencies, ok := stageDependencies["openstack-csi-override"]
+	if !ok {
+		t.Fatalf("openstack-csi-override was not rendered in %s", fluxPath)
+	}
+	if !overrideDependencies["sources"] {
+		t.Errorf("openstack-csi-override must depend on sources, got %v", overrideDependencies)
+	}
+	if overrideDependencies["openstack-csi-base"] {
+		t.Errorf("openstack-csi-override must not depend on openstack-csi-base, got %v", overrideDependencies)
+	}
+
+	overridePath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "openstack-csi", "helm-values", "override-values.yaml")
+	overrideDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, overridePath)))
+	if err != nil {
+		t.Fatalf("parse %s: %v", overridePath, err)
+	}
+	if len(overrideDocs) != 1 {
+		t.Fatalf("expected one YAML document in %s, got %d", overridePath, len(overrideDocs))
+	}
+	secret, ok := overrideDocs[0]["secret"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no secret map: %#v", overridePath, overrideDocs[0])
+	}
+	for field, expected := range map[string]bool{"enabled": true, "hostMount": true, "create": false} {
+		actual, ok := secret[field].(bool)
+		if !ok || actual != expected {
+			t.Errorf("%s secret.%s = %#v, want %t", overridePath, field, secret[field], expected)
+		}
+	}
+}
+
 func TestRenderClusterAppsGatewayDependsOnEnvoyGatewayAPIBase(t *testing.T) {
 	spec, ok := newBuiltInRenderCatalog().Lookup("gateway")
 	if !ok {
