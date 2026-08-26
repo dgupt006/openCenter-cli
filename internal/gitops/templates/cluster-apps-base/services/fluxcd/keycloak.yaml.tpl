@@ -42,6 +42,8 @@ spec:
   dependsOn:
     - name: sources
       namespace: flux-system
+    - name: olm
+      namespace: flux-system
     - name: keycloak-postgres
       namespace: flux-system
   interval: 15m
@@ -52,14 +54,14 @@ spec:
     name: opencenter-keycloak-config
     namespace: flux-system
   path: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/keycloak/10-operator
-  targetNamespace: keycloak
+  targetNamespace: operators
   prune: true
   wait: true
   healthChecks:
     - apiVersion: apps/v1
       kind: Deployment
       name: keycloak-operator
-      namespace: keycloak
+      namespace: operators
   commonMetadata:
     labels:
       app.kubernetes.io/part-of: keycloak

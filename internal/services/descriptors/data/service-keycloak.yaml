@@ -12,10 +12,6 @@ roots:
       - 20-keycloak/keycloak-hpa.yaml.tpl
 files:
   - template: services/keycloak/10-operator/patch-subscription.yaml.tpl
-    when:
-      field: opencenter.meta.region
-      operator: equals
-      value: ord1
   - template: services/keycloak/20-keycloak/keycloak-backup-cronjob.yaml.tpl
     when:
       field: opencenter.services.keycloak.backup_enabled
