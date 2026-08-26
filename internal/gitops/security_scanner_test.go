@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -87,6 +88,110 @@ sops:
 		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
 	}
 	assertFinding(t, findings, "invalid-sops-metadata")
+}
+
+func TestSecretScannerTraversesNestedSecretValues(t *testing.T) {
+	t.Parallel()
+
+	const validSOPSMetadata = `sops:
+  mac: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]
+  age:
+    - recipient: age1example
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        example
+        -----END AGE ENCRYPTED FILE-----`
+	const encrypted = `ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]`
+
+	tests := []struct {
+		name         string
+		secretFields string
+		wantMessages []string
+	}{
+		{
+			name: "fully encrypted nested leaves are accepted",
+			secretFields: `data:
+  database:
+    username: ` + encrypted + `
+    password: ` + encrypted + `
+stringData:
+  tls:
+    certificate: ` + encrypted,
+		},
+		{
+			name: "mixed nested leaves report only plaintext leaves",
+			secretFields: `data:
+  database:
+    username: ` + encrypted + `
+    password: plaintext-password
+stringData:
+  nested:
+    api:
+      token: plaintext-token`,
+			wantMessages: []string{
+				"Secret data.database.password is not SOPS-encrypted",
+				"Secret stringData.nested.api.token is not SOPS-encrypted",
+			},
+		},
+		{
+			name: "non-string map keys are traversed",
+			secretFields: `data:
+  nested:
+    7: plaintext-number-key
+    safe: ` + encrypted,
+			wantMessages: []string{
+				"Secret data.nested[7] is not SOPS-encrypted",
+			},
+		},
+		{
+			name: "arrays are recursively checked",
+			secretFields: `data:
+  tokens:
+    - ` + encrypted + `
+    - plaintext-array-value
+    - nested: plaintext-array-child`,
+			wantMessages: []string{
+				"Secret data.tokens[1] is not SOPS-encrypted",
+				"Secret data.tokens[2].nested is not SOPS-encrypted",
+			},
+		},
+		{
+			name: "non-string leaves fail closed",
+			secretFields: `data:
+  null-value: null
+  bool-value: true
+  numeric-value: 42
+  encrypted-value: ` + encrypted,
+			wantMessages: []string{
+				"Secret data.bool-value is not SOPS-encrypted",
+				"Secret data.null-value is not SOPS-encrypted",
+				"Secret data.numeric-value is not SOPS-encrypted",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, "secret.yaml", "apiVersion: v1\nkind: Secret\nmetadata:\n  name: nested\n"+tt.secretFields+"\n"+validSOPSMetadata+"\n")
+
+			findings, err := ScanGitOpsSecrets(root)
+			if err != nil {
+				t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+			}
+
+			var gotMessages []string
+			for _, finding := range findings {
+				if finding.Rule != "plaintext-secret-field" {
+					t.Fatalf("unexpected finding = %+v", finding)
+				}
+				gotMessages = append(gotMessages, finding.Message)
+			}
+			if !reflect.DeepEqual(gotMessages, tt.wantMessages) {
+				t.Fatalf("plaintext-secret-field messages = %#v, want %#v", gotMessages, tt.wantMessages)
+			}
+		})
+	}
 }
 
 func TestSecretScannerScansStagedFilesWithSpaces(t *testing.T) {

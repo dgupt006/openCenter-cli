@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -229,12 +230,17 @@ func scanYAMLSecrets(path string, data []byte) []SecretScanFinding {
 		}
 
 		for _, field := range []string{"data", "stringData"} {
-			for key, value := range yamlStringMap(doc[field]) {
-				if !isSOPSEncryptedValue(value) {
+			value, ok := doc[field]
+			if !ok {
+				continue
+			}
+			for _, leaf := range walkSecretValueLeaves(value, field) {
+				text, isString := leaf.value.(string)
+				if !isString || !isSOPSEncryptedValue(text) {
 					findings = append(findings, SecretScanFinding{
 						Path:    path,
 						Rule:    "plaintext-secret-field",
-						Message: fmt.Sprintf("Secret %s.%s is not SOPS-encrypted", field, key),
+						Message: fmt.Sprintf("Secret %s is not SOPS-encrypted", leaf.path),
 					})
 				}
 			}
@@ -246,6 +252,64 @@ func scanYAMLSecrets(path string, data []byte) []SecretScanFinding {
 func isYAMLPath(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".yaml" || ext == ".yml"
+}
+
+type secretValueLeaf struct {
+	path  string
+	value any
+}
+
+// walkSecretValueLeaves recursively visits only the leaf values used by the
+// plaintext-secret-field scanner. Stub scanning intentionally continues to use
+// yamlStringMap for its existing shallow behavior.
+func walkSecretValueLeaves(value any, path string) []secretValueLeaf {
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		var leaves []secretValueLeaf
+		for _, key := range keys {
+			leaves = append(leaves, walkSecretValueLeaves(typed[key], path+"."+key)...)
+		}
+		return leaves
+	case map[any]any:
+		keys := make([]any, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			return secretMapKeySortValue(keys[i]) < secretMapKeySortValue(keys[j])
+		})
+
+		var leaves []secretValueLeaf
+		for _, key := range keys {
+			leaves = append(leaves, walkSecretValueLeaves(typed[key], secretMapKeyPath(path, key))...)
+		}
+		return leaves
+	case []any:
+		var leaves []secretValueLeaf
+		for index, item := range typed {
+			leaves = append(leaves, walkSecretValueLeaves(item, fmt.Sprintf("%s[%d]", path, index))...)
+		}
+		return leaves
+	default:
+		return []secretValueLeaf{{path: path, value: value}}
+	}
+}
+
+func secretMapKeyPath(path string, key any) string {
+	if text, ok := key.(string); ok {
+		return path + "." + text
+	}
+	return fmt.Sprintf("%s[%v]", path, key)
+}
+
+func secretMapKeySortValue(key any) string {
+	return fmt.Sprintf("%T:%#v", key, key)
 }
 
 func yamlStringMap(value any) map[string]string {
