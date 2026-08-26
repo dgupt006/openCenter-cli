@@ -34,6 +34,9 @@ resources:
 {{- end }}
 
 
+{{- range autoNamespaceStages }}
+  - ./{{ . }}-namespace.yaml
+{{- end }}
 {{- range autoServices }}
   - ./{{ . }}.yaml
 {{- end }}

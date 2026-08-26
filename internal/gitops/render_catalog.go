@@ -24,6 +24,7 @@ type RenderSpec struct {
 	SingleStage             bool
 	BaseOnly                bool
 	HasOverrideValues       bool
+	NamespaceStage          bool
 	KustomizationName       string
 	EnterpriseRegistry      bool
 	GeneratedResourceFiles  []string
@@ -123,15 +124,15 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			OverrideValuesRenderer: templateRenderer(lokiTemplate),
 		},
 		{
-			ServiceName: "openstack-ccm", DefaultNamespace: "openstack-ccm", HasOverrideValues: true,
+			ServiceName: "openstack-ccm", DefaultNamespace: "openstack-ccm", HasOverrideValues: true, NamespaceStage: true,
 			SourceName: "opencenter-openstack-ccm", SourceGroup: "openstack-ccm", EmitSource: true,
-			BasePath: "applications/base/services/openstack-ccm", ExtraDependencies: []string{"openstack-ccm-override"}, OverrideDependsOn: []string{"sources"},
+			BasePath: "applications/base/services/openstack-ccm", ExtraDependencies: []string{"openstack-ccm-override"}, OverrideDependsOn: []string{"sources", "openstack-ccm-namespace"},
 			OverrideValuesRenderer: templateRenderer(openstackCCMTemplate),
 		},
 		{
-			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true,
+			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true, NamespaceStage: true,
 			SourceName: "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
-			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources"},
+			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources", "openstack-csi-namespace"},
 			OverrideValuesRenderer: templateRenderer(openstackCSITemplate),
 		},
 		{
@@ -141,9 +142,9 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			OverrideValuesRenderer: templateRenderer(tempoTemplate),
 		},
 		{
-			ServiceName: "velero", DefaultNamespace: "velero", HasOverrideValues: true,
+			ServiceName: "velero", DefaultNamespace: "velero", HasOverrideValues: true, NamespaceStage: true,
 			SourceName: "opencenter-velero", SourceGroup: "velero", EmitSource: true,
-			BasePath: "applications/base/services/velero", ExtraDependencies: []string{"velero-override"}, OverrideDependsOn: []string{"sources"},
+			BasePath: "applications/base/services/velero", ExtraDependencies: []string{"velero-override"}, OverrideDependsOn: []string{"sources", "velero-namespace"},
 			OverrideValuesRenderer: veleroRenderer,
 		},
 		{

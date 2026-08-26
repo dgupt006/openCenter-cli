@@ -40,6 +40,7 @@ type autoServiceContext struct {
 	BaseOnly               bool
 	KustomizationName      string
 	HasOverrideValues      bool
+	NamespaceStage         bool
 	EnterpriseRegistry     bool
 	GeneratedResourceFiles []string
 	ExtraDependencies      []string
@@ -223,6 +224,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		BaseOnly:               spec.BaseOnly,
 		KustomizationName:      kustomizationName(serviceName, spec.KustomizationName),
 		HasOverrideValues:      spec.HasOverrideValues,
+		NamespaceStage:         spec.NamespaceStage,
 		EnterpriseRegistry:     spec.EnterpriseRegistry,
 		GeneratedResourceFiles: generatedResourceFiles,
 		ExtraDependencies:      extraDeps,
@@ -301,6 +303,38 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 		Output:  fmt.Sprintf("services/fluxcd/%s.yaml", ctx.ServiceName),
 		Content: content,
 	})
+
+	if ctx.NamespaceStage {
+		namespaceStage, err := renderInlineAutoTemplate(autoFluxNamespaceStageTemplate, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("namespace stage: %w", err)
+		}
+		namespaceKustomization, err := renderInlineAutoTemplate(autoNamespaceKustomizationTemplate, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("namespace kustomization: %w", err)
+		}
+		namespaceResource, err := renderInlineAutoTemplate(autoNamespaceResourceTemplate, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("namespace resource: %w", err)
+		}
+		actions = append(actions,
+			clusterAppAction{
+				Owner:   "auto-service-" + ctx.ServiceName,
+				Output:  fmt.Sprintf("services/fluxcd/%s-namespace.yaml", ctx.ServiceName),
+				Content: namespaceStage,
+			},
+			clusterAppAction{
+				Owner:   "auto-service-" + ctx.ServiceName,
+				Output:  fmt.Sprintf("services/%s/namespace/kustomization.yaml", ctx.ServiceName),
+				Content: namespaceKustomization,
+			},
+			clusterAppAction{
+				Owner:   "auto-service-" + ctx.ServiceName,
+				Output:  fmt.Sprintf("services/%s/namespace/namespace.yaml", ctx.ServiceName),
+				Content: namespaceResource,
+			},
+		)
+	}
 
 	// BaseOnly services have no overlay directory — skip kustomization and override-values.
 	if ctx.BaseOnly {
@@ -634,4 +668,43 @@ resources:
   - "../global/rackspace-registry/"
 {{- end }}
 {{- end }}
+`
+
+const autoFluxNamespaceStageTemplate = `---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: {{ .ServiceName }}-namespace
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: sources
+      namespace: flux-system
+  interval: {{ .FluxInterval }}
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  path: ./applications/overlays/{{ .ClusterName }}/services/{{ .ServiceName }}/namespace
+  prune: true
+  wait: true
+  commonMetadata:
+    labels:
+      app.kubernetes.io/part-of: {{ .ServiceName }}
+      app.kubernetes.io/managed-by: flux
+      opencenter/managed-by: opencenter
+`
+
+const autoNamespaceKustomizationTemplate = `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+`
+
+const autoNamespaceResourceTemplate = `apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
 `

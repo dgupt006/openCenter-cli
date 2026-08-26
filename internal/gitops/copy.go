@@ -253,6 +253,28 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 		return names
 	}
 
+	// autoNamespaceStages returns namespace-stage names for auto-descriptor services
+	// that need their namespace created before their override reconciles.
+	funcMap["autoNamespaceStages"] = func() []string {
+		registry, err := loadClusterDescriptorRegistry()
+		catalog := newBuiltInRenderCatalog()
+		if err != nil {
+			return nil
+		}
+		var names []string
+		for name, svc := range cfg.OpenCenter.Services {
+			if IsServiceDisabled(svc) || IsServiceExternal(svc) || hasExplicitDescriptor(registry, name, serviceKindStandard) {
+				continue
+			}
+			spec, owned := catalog.Lookup(name)
+			if owned && spec.NamespaceStage {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names
+	}
+
 	// autoServiceSourceName returns the source name for an auto-descriptor service.
 	funcMap["autoServiceSourceName"] = func(serviceName string) string {
 		if spec, ok := newBuiltInRenderCatalog().Lookup(serviceName); ok {
