@@ -735,7 +735,7 @@ func defaultServiceMap(clusterFQDN string) ServiceMap {
 		"gateway":                  &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "gateway"}},
 		"gateway-api":              &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "envoy-gateway-system"}},
 		"headlamp":                 &services.HeadlampConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "headlamp"}, Hostname: fmt.Sprintf("dashboard.%s", clusterFQDN)},
-		"keycloak":                 &services.KeycloakConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"}, Hostname: fmt.Sprintf("auth.%s", clusterFQDN)},
+		"keycloak":                 &services.KeycloakConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"}, Hostname: fmt.Sprintf("auth.%s", clusterFQDN), StartOptimized: false, ResourceRequestsCPU: "500m", ResourceLimitsCPU: "2", Instances: 3},
 		"postgres-operator":        &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "postgres-operator"}},
 		"rbac-manager":             &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system"}},
 		"sources":                  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},

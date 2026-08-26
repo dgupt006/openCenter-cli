@@ -20,14 +20,14 @@ type KeycloakConfig struct {
 	RealmAdminEmail    string   `yaml:"realm_admin_email,omitempty" json:"realm_admin_email,omitempty" jsonschema:"description=Admin user email address"`
 
 	// Runtime
-	StartOptimized bool   `yaml:"start_optimized,omitempty" json:"start_optimized,omitempty" jsonschema:"description=Enable production-optimized startup,default=true"`
+	StartOptimized bool   `yaml:"start_optimized,omitempty" json:"start_optimized,omitempty" jsonschema:"description=Enable production-optimized startup,default=false"`
 	CacheEnabled   bool   `yaml:"cache_enabled,omitempty" json:"cache_enabled,omitempty" jsonschema:"description=Enable distributed caching,default=true"`
 	CacheStack     string `yaml:"cache_stack,omitempty" json:"cache_stack,omitempty" jsonschema:"description=Cache stack (kubernetes or ispn),default=kubernetes"`
 
 	// Resources
-	ResourceRequestsCPU    string `yaml:"resource_requests_cpu,omitempty" json:"resource_requests_cpu,omitempty" jsonschema:"description=CPU requests,default=2"`
+	ResourceRequestsCPU    string `yaml:"resource_requests_cpu,omitempty" json:"resource_requests_cpu,omitempty" jsonschema:"description=CPU requests,default=500m"`
 	ResourceRequestsMemory string `yaml:"resource_requests_memory,omitempty" json:"resource_requests_memory,omitempty" jsonschema:"description=Memory requests,default=1250M"`
-	ResourceLimitsCPU      string `yaml:"resource_limits_cpu,omitempty" json:"resource_limits_cpu,omitempty" jsonschema:"description=CPU limits,default=6"`
+	ResourceLimitsCPU      string `yaml:"resource_limits_cpu,omitempty" json:"resource_limits_cpu,omitempty" jsonschema:"description=CPU limits,default=2"`
 	ResourceLimitsMemory   string `yaml:"resource_limits_memory,omitempty" json:"resource_limits_memory,omitempty" jsonschema:"description=Memory limits,default=2250M"`
 
 	// Scaling

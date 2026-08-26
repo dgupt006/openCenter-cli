@@ -28,12 +28,12 @@ opencenter:
       realm_import_enabled: true         # Import realm configuration on startup (default: true)
       realm_groups: []                   # List of realm groups to create
       realm_admin_email:                 # Admin user email address
-      start_optimized: true              # Use optimized startup mode (default: true)
+      start_optimized: false             # Use optimized startup mode (default: false)
       cache_enabled: true                # Enable distributed caching (default: true)
       cache_stack: kubernetes            # Cache discovery mechanism (default: kubernetes)
-      resource_requests_cpu: 2           # CPU request in cores (default: 2)
+      resource_requests_cpu: 500m        # CPU request (default: 500m)
       resource_requests_memory: 1250M    # Memory request (default: 1250M)
-      resource_limits_cpu: 6             # CPU limit in cores (default: 6)
+      resource_limits_cpu: 2             # CPU limit (default: 2)
       resource_limits_memory: 2250M      # Memory limit (default: 2250M)
       instances: 3                       # Number of replicas (default: 3)
       min_replicas: 3                    # HPA minimum replicas (default: 3)

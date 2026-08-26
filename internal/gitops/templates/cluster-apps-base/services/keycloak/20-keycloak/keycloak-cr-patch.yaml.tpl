@@ -8,17 +8,17 @@ metadata:
   namespace: keycloak
 spec:
   # Deployment configuration
-  startOptimized: {{ .OpenCenter.Services.keycloak.StartOptimized | default true }}
-  instances: {{ .OpenCenter.Services.keycloak.Instances | default 3 }}
+  startOptimized: {{ .OpenCenter.Services.keycloak.StartOptimized }}
+  instances: {{ .OpenCenter.Services.keycloak.Instances }}
   
   # Resource limits for production
   resources:
     requests:
       memory: {{ .OpenCenter.Services.keycloak.ResourceRequestsMemory | default "1250M" }}
-      cpu: {{ .OpenCenter.Services.keycloak.ResourceRequestsCPU | default "2" }}
+      cpu: {{ .OpenCenter.Services.keycloak.ResourceRequestsCPU }}
     limits:
       memory: {{ .OpenCenter.Services.keycloak.ResourceLimitsMemory | default "2250M" }}
-      cpu: {{ .OpenCenter.Services.keycloak.ResourceLimitsCPU | default "6" }}
+      cpu: {{ .OpenCenter.Services.keycloak.ResourceLimitsCPU }}
 
   # Database configuration (PostgreSQL)
   db:
