@@ -38,6 +38,7 @@ type autoServiceContext struct {
 	BasePath               string
 	SingleStage            bool
 	BaseOnly               bool
+	OmitTargetNamespace    bool
 	KustomizationName      string
 	HasOverrideValues      bool
 	NamespaceStage         bool
@@ -222,6 +223,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		EmitSource:             spec.EmitSource,
 		SingleStage:            spec.SingleStage,
 		BaseOnly:               spec.BaseOnly,
+		OmitTargetNamespace:    spec.OmitTargetNamespace,
 		KustomizationName:      kustomizationName(serviceName, spec.KustomizationName),
 		HasOverrideValues:      spec.HasOverrideValues,
 		NamespaceStage:         spec.NamespaceStage,
@@ -599,7 +601,9 @@ spec:
     name: {{ .SourceName }}
     namespace: flux-system
   path: {{ .BasePath }}
+{{- if not .OmitTargetNamespace }}
   targetNamespace: {{ .Namespace }}
+{{- end }}
   prune: true
   wait: true
   force: {{ .Force }}

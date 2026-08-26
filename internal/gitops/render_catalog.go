@@ -23,6 +23,7 @@ type RenderSpec struct {
 
 	SingleStage             bool
 	BaseOnly                bool
+	OmitTargetNamespace     bool
 	HasOverrideValues       bool
 	NamespaceStage          bool
 	KustomizationName       string
@@ -150,7 +151,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "olm", DefaultNamespace: "olm",
 			SourceName: "opencenter-olm", SourceGroup: "olm", EmitSource: true,
-			BasePath: "applications/base/services/olm", BaseOnly: true,
+			BasePath: "applications/base/services/olm", BaseOnly: true, OmitTargetNamespace: true,
 		},
 		{
 			ServiceName: "vsphere-csi", DefaultNamespace: "vmware-system-csi", HasOverrideValues: true,
