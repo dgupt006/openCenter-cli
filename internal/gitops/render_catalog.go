@@ -20,6 +20,7 @@ type RenderSpec struct {
 	SourceGroup      string
 	EmitSource       bool
 	BasePath         string
+	PostBaseStages   []postBaseStageSpec
 
 	SingleStage             bool
 	BaseOnly                bool
@@ -37,6 +38,12 @@ type RenderSpec struct {
 
 	OverrideValuesRenderer OverrideValuesRenderer
 	OverlayFilesRenderer   OverlayFilesRenderer
+}
+
+type postBaseStageSpec struct {
+	Name      string
+	Path      string
+	DependsOn []string
 }
 
 type catalogConditionalDependency struct {
@@ -116,7 +123,12 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "kyverno", DefaultNamespace: "kyverno",
 			SourceName: "opencenter-kyverno", SourceGroup: "kyverno", EmitSource: true,
-			BasePath: "applications/base/services/kyverno", BaseOnly: true,
+			BasePath: "applications/base/services/kyverno/policy-engine", BaseOnly: true,
+			PostBaseStages: []postBaseStageSpec{{
+				Name:      "kyverno-default-ruleset",
+				Path:      "applications/base/services/kyverno/default-ruleset",
+				DependsOn: []string{"sources", "kyverno-base"},
+			}},
 		},
 		{
 			ServiceName: "loki", DefaultNamespace: "observability", HasOverrideValues: true,
@@ -269,6 +281,19 @@ func (c RenderCatalog) Validate() error {
 		for _, dependency := range spec.ExtraDependencies {
 			if strings.TrimSpace(dependency) == "" {
 				return fmt.Errorf("render catalog service %q contains an empty dependency", spec.ServiceName)
+			}
+		}
+		for _, stage := range spec.PostBaseStages {
+			if strings.TrimSpace(stage.Name) == "" || strings.TrimSpace(stage.Path) == "" {
+				return fmt.Errorf("render catalog service %q post-base stage must define name and path", spec.ServiceName)
+			}
+			if err := validateCatalogRelativePath(stage.Path); err != nil {
+				return fmt.Errorf("render catalog service %q post-base stage %q: %w", spec.ServiceName, stage.Name, err)
+			}
+			for _, dependency := range stage.DependsOn {
+				if strings.TrimSpace(dependency) == "" {
+					return fmt.Errorf("render catalog service %q post-base stage %q contains an empty dependency", spec.ServiceName, stage.Name)
+				}
 			}
 		}
 	}

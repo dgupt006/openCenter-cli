@@ -38,6 +38,7 @@ type autoServiceContext struct {
 	BasePath               string
 	SingleStage            bool
 	BaseOnly               bool
+	PostBaseStages         []postBaseStageSpec
 	OmitTargetNamespace    bool
 	KustomizationName      string
 	HasOverrideValues      bool
@@ -223,6 +224,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		EmitSource:             spec.EmitSource,
 		SingleStage:            spec.SingleStage,
 		BaseOnly:               spec.BaseOnly,
+		PostBaseStages:         append([]postBaseStageSpec{}, spec.PostBaseStages...),
 		OmitTargetNamespace:    spec.OmitTargetNamespace,
 		KustomizationName:      kustomizationName(serviceName, spec.KustomizationName),
 		HasOverrideValues:      spec.HasOverrideValues,
@@ -299,6 +301,13 @@ func renderAutoServiceActions(ctx autoServiceContext, cfg v2.Config) ([]clusterA
 	content, err := renderInlineAutoTemplate(fluxTmpl, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fluxcd: %w", err)
+	}
+	for _, stage := range ctx.PostBaseStages {
+		stageContent, err := renderPostBaseFluxKustomization(ctx, stage)
+		if err != nil {
+			return nil, fmt.Errorf("post-base stage %q: %w", stage.Name, err)
+		}
+		content += stageContent
 	}
 	actions = append(actions, clusterAppAction{
 		Owner:   "auto-service-" + ctx.ServiceName,
@@ -456,6 +465,44 @@ func kustomizationName(serviceName, override string) string {
 		return override
 	}
 	return serviceName
+}
+
+func renderPostBaseFluxKustomization(ctx autoServiceContext, stage postBaseStageSpec) (string, error) {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, `---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: %s
+  namespace: flux-system
+spec:
+  dependsOn:
+`, stage.Name)
+	for _, dependency := range stage.DependsOn {
+		fmt.Fprintf(&buf, `    - name: %s
+      namespace: flux-system
+`, dependency)
+	}
+	fmt.Fprintf(&buf, `  interval: %s
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: %s
+    namespace: flux-system
+  path: %s
+  targetNamespace: %s
+  prune: true
+  wait: true
+  force: %t
+  suspend: %t
+  commonMetadata:
+    labels:
+      app.kubernetes.io/part-of: %s
+      app.kubernetes.io/managed-by: flux
+      opencenter/managed-by: opencenter
+`, ctx.FluxInterval, ctx.SourceName, stage.Path, ctx.Namespace, ctx.Force, ctx.Suspend, ctx.ServiceName)
+	return buf.String(), nil
 }
 
 func renderInlineAutoTemplate(tmplStr string, ctx autoServiceContext) (string, error) {
