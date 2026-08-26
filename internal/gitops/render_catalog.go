@@ -144,7 +144,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "velero", DefaultNamespace: "velero", HasOverrideValues: true,
 			SourceName: "opencenter-velero", SourceGroup: "velero", EmitSource: true,
 			BasePath: "applications/base/services/velero", ExtraDependencies: []string{"velero-override"}, OverrideDependsOn: []string{"sources"},
-			OverrideValuesRenderer: templateRenderer(veleroTemplate),
+			OverrideValuesRenderer: veleroRenderer,
 		},
 		{
 			ServiceName: "olm", DefaultNamespace: "olm",

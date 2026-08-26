@@ -18,6 +18,7 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
@@ -129,31 +130,120 @@ snapshot:
     replicaCount: 1
 `
 
+type veleroTemplateData struct {
+	BackupStorageLocationName string
+	Provider                  string
+	Bucket                    string
+	Region                    string
+	PluginEnabled             bool
+	PluginName                string
+	PluginImage               string
+	VSphereSnapshotClass      bool
+}
+
+func veleroRenderer(cfg v2.Config) (string, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider))
+	storageType := ""
+	bucket := ""
+	region := ""
+	if service, ok := cfg.OpenCenter.Services["velero"].(*services.VeleroConfig); ok && service != nil {
+		storageType = strings.ToLower(strings.TrimSpace(service.StorageType))
+		bucket = strings.TrimSpace(service.BackupBucket)
+		region = strings.TrimSpace(service.Region)
+	}
+
+	if storageType == "" {
+		switch provider {
+		case "openstack":
+			storageType = "swift"
+		case "gcp":
+			storageType = "gcs"
+		case "azure":
+			storageType = "azure"
+		default:
+			storageType = "s3"
+		}
+	}
+
+	data := veleroTemplateData{
+		BackupStorageLocationName: "default",
+		Bucket:                    bucket,
+		Region:                    region,
+		VSphereSnapshotClass:      provider == "vmware" || provider == "vsphere",
+	}
+
+	switch storageType {
+	case "swift":
+		data.Provider = "community.openstack.org/openstack"
+		data.PluginEnabled = true
+		data.PluginName = "velero-plugin-openstack"
+		data.PluginImage = "lirt/velero-plugin-for-openstack:v0.6.0"
+	case "gcs":
+		data.Provider = "velero.io/gcp"
+		data.PluginEnabled = true
+		data.PluginName = "velero-plugin-gcp"
+		data.PluginImage = "velero/velero-plugin-for-gcp:v1.8.2"
+	case "azure":
+		data.Provider = "velero.io/azure"
+		data.PluginEnabled = true
+		data.PluginName = "velero-plugin-azure"
+		data.PluginImage = "velero/velero-plugin-for-microsoft-azure:v1.10.1"
+	default:
+		data.Provider = "velero.io/aws"
+		data.PluginEnabled = true
+		data.PluginName = "velero-plugin-aws"
+		data.PluginImage = "velero/velero-plugin-for-aws:v1.10.0"
+	}
+
+	if data.Region == "" {
+		if provider == "openstack" && cfg.OpenCenter.Infrastructure.Cloud.OpenStack != nil {
+			data.Region = strings.TrimSpace(cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+		}
+		if data.Region == "" {
+			data.Region = strings.TrimSpace(cfg.OpenCenter.Meta.Region)
+		}
+	}
+	if data.Bucket == "" {
+		data.Bucket = cfg.OpenCenter.Meta.Name + "-velero"
+	}
+
+	t, err := template.New("velero-values").Funcs(sprig.TxtFuncMap()).Parse(veleroTemplate)
+	if err != nil {
+		return "", err
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 const veleroTemplate = `---
-credentials:
-  extraSecretRef: "cloud-credentials"
 configuration:
   features: EnableCSI
   defaultSnapshotMoveData: false
   defaultVolumesToFsBackup: false
   backupStorageLocation:
-    - name: {{ .OpenCenter.Infrastructure.Cloud.OpenStack.Region }}
-      provider: community.openstack.org/openstack
+    - name: {{ .BackupStorageLocationName }}
+      provider: {{ .Provider }}
       default: true
-      bucket: {{ .OpenCenter.Meta.Name }}-velero
+      bucket: {{ .Bucket }}
       config:
-        region: {{ .OpenCenter.Infrastructure.Cloud.OpenStack.Region }}
+        region: {{ .Region }}
   volumeSnapshotLocation: []
+{{- if .PluginEnabled }}
 initContainers:
-  - name: velero-plugin-openstack
-    image: lirt/velero-plugin-for-openstack:v0.6.0
+  - name: {{ .PluginName }}
+    image: {{ .PluginImage }}
     imagePullPolicy: IfNotPresent
     volumeMounts:
       - mountPath: /target
         name: plugins
+{{- end }}
 snapshotsEnabled: true
 backupsEnabled: true
 deployNodeAgent: false
+{{- if .VSphereSnapshotClass }}
 extraObjects:
   - apiVersion: snapshot.storage.k8s.io/v1
     kind: VolumeSnapshotClass
@@ -163,6 +253,7 @@ extraObjects:
         velero.io/csi-volumesnapshot-class: "true"
     driver: csi.vsphere.vmware.com
     deletionPolicy: Delete
+{{- end }}
 `
 
 const lokiTemplate = `{{- $loki := index .OpenCenter.Services "loki" -}}
