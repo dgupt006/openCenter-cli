@@ -9,4 +9,4 @@ spec:
   source: operatorhubio-catalog
   sourceNamespace: olm
   startingCSV: keycloak-operator.v26.4.2
-  installPlanApproval: Manual
+  installPlanApproval: Automatic

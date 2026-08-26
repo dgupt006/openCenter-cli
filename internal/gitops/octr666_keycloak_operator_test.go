@@ -59,7 +59,7 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		"source":              "operatorhubio-catalog",
 		"sourceNamespace":     "olm",
 		"startingCSV":         "keycloak-operator.v26.4.2",
-		"installPlanApproval": "Manual",
+		"installPlanApproval": "Automatic",
 	} {
 		if got := nestedString(subscription, "spec", field); got != want {
 			t.Errorf("Subscription spec.%s = %q, want %q", field, got, want)
@@ -71,7 +71,7 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		"source: operatorhubio-catalog",
 		"sourceNamespace: olm",
 		"startingCSV: keycloak-operator.v26.4.2",
-		"installPlanApproval: Manual",
+		"installPlanApproval: Automatic",
 	)
 
 	entries, err := os.ReadDir(operatorDir)
