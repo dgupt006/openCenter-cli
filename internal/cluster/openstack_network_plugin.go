@@ -161,6 +161,7 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 		"--version", selection.Version,
 		"--namespace", selection.Namespace,
 		"--create-namespace",
+		"--skip-crds",
 		"-f", valuesPath,
 	); err != nil {
 		return fmt.Errorf("helm install Calico %s: %w", selection.Version, err)

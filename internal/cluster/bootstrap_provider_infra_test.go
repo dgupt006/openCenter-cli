@@ -294,8 +294,22 @@ func TestOpenStackNetworkPluginInstallCalicoUsesHelmChart(t *testing.T) {
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "apply --server-side -f https://raw.githubusercontent.com/projectcalico/calico/v"+configuredCalicoVersion+"/manifests/operator-crds.yaml")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo add projectcalico https://docs.tigera.io/calico/charts")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo update projectcalico")
-	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace -f "+valuesPath)
+	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace --skip-crds -f "+valuesPath)
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" -n tigera-operator rollout status deployment/tigera-operator --timeout=5m")
+
+	crdApplyIndex, helmInstallIndex := -1, -1
+	for i, call := range fakeRunner.calls {
+		command := strings.Join(call.args, " ")
+		if call.name == "kubectl" && strings.Contains(command, "apply --server-side -f https://raw.githubusercontent.com/projectcalico/calico/v"+configuredCalicoVersion+"/manifests/operator-crds.yaml") {
+			crdApplyIndex = i
+		}
+		if call.name == "helm" && strings.Contains(command, "upgrade --install calico projectcalico/tigera-operator") {
+			helmInstallIndex = i
+		}
+	}
+	if crdApplyIndex == -1 || helmInstallIndex == -1 || crdApplyIndex >= helmInstallIndex {
+		t.Fatalf("expected Calico CRD apply before Helm install, got CRD apply index %d and Helm install index %d in:\n%s", crdApplyIndex, helmInstallIndex, renderRecordedCommands(fakeRunner.calls))
+	}
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=create tigerastatus/calico --timeout=5m")
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=Available tigerastatus/calico --timeout=10m")
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" -n calico-system wait --for=condition=Ready pods --all --timeout=10m")
