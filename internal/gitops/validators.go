@@ -16,6 +16,7 @@ package gitops
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -537,14 +538,69 @@ func (v *ManifestValidator) hasProperIndentation(content string) bool {
 }
 
 func (v *ManifestValidator) hasProperdependsOnIndentation(content string) bool {
-	// Check for pattern:
-	// dependsOn:
-	//   - name: something
-	//     namespace: something
-	// The list item must be indented with at least 2 spaces
-	// and properties under the list item must be indented further
-	pattern := regexp.MustCompile(`dependsOn:\s*\n {2,}-\s+name:[^\n]*\n {4,}namespace:`)
-	return pattern.MatchString(content)
+	decoder := yaml.NewDecoder(strings.NewReader(content))
+	for {
+		var document yaml.Node
+		if err := decoder.Decode(&document); err != nil {
+			if err == io.EOF {
+				return true
+			}
+			return false
+		}
+		if len(document.Content) == 0 {
+			continue
+		}
+
+		root := document.Content[0]
+		spec, ok := yamlMappingValue(root, "spec")
+		if !ok {
+			continue
+		}
+		dependsOnKey, dependsOn, ok := yamlMappingEntry(spec, "dependsOn")
+		if !ok {
+			continue
+		}
+		if dependsOn.Kind != yaml.SequenceNode || dependsOn.Column <= dependsOnKey.Column {
+			return false
+		}
+
+		for _, dependency := range dependsOn.Content {
+			if dependency.Kind != yaml.MappingNode {
+				return false
+			}
+
+			name, ok := yamlMappingValue(dependency, "name")
+			if !ok || !yamlNonEmptyString(name) {
+				return false
+			}
+
+			namespace, hasNamespace := yamlMappingValue(dependency, "namespace")
+			if hasNamespace && !yamlNonEmptyString(namespace) {
+				return false
+			}
+		}
+	}
+}
+
+func yamlMappingEntry(node *yaml.Node, key string) (*yaml.Node, *yaml.Node, bool) {
+	if node.Kind != yaml.MappingNode {
+		return nil, nil, false
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index], node.Content[index+1], true
+		}
+	}
+	return nil, nil, false
+}
+
+func yamlMappingValue(node *yaml.Node, key string) (*yaml.Node, bool) {
+	_, value, ok := yamlMappingEntry(node, key)
+	return value, ok
+}
+
+func yamlNonEmptyString(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!str" && strings.TrimSpace(node.Value) != ""
 }
 
 func (v *ManifestValidator) hasProperDecryptionIndentation(content string) bool {

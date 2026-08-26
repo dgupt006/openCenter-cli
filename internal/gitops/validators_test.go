@@ -76,12 +76,88 @@ func TestManifestValidator_hasProperdependsOnIndentation(t *testing.T) {
 		want    bool
 	}{
 		{
-			name: "proper dependsOn indentation",
+			name: "dependency with namespace",
 			content: `spec:
   dependsOn:
     - name: sources
       namespace: flux-system`,
 			want: true,
+		},
+		{
+			name: "name-only dependency",
+			content: `spec:
+  dependsOn:
+    - name: sources`,
+			want: true,
+		},
+		{
+			name: "mixed dependencies with and without namespace",
+			content: `spec:
+  dependsOn:
+    - name: sources
+    - name: platform
+      namespace: flux-system`,
+			want: true,
+		},
+		{
+			name: "dependsOn is not a sequence",
+			content: `spec:
+  dependsOn: sources`,
+			want: false,
+		},
+		{
+			name: "dependency is missing name",
+			content: `spec:
+  dependsOn:
+    - namespace: flux-system`,
+			want: false,
+		},
+		{
+			name: "dependency name is not a string",
+			content: `spec:
+  dependsOn:
+    - name: 42`,
+			want: false,
+		},
+		{
+			name: "dependency name is empty",
+			content: `spec:
+  dependsOn:
+    - name: ""`,
+			want: false,
+		},
+		{
+			name: "dependency namespace is empty",
+			content: `spec:
+  dependsOn:
+    - name: sources
+      namespace: ""`,
+			want: false,
+		},
+		{
+			name: "dependency namespace is not a string",
+			content: `spec:
+  dependsOn:
+    - name: sources
+      namespace: 42`,
+			want: false,
+		},
+		{
+			name: "later document cannot be masked by valid first document",
+			content: `---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+spec:
+  dependsOn:
+    - name: sources
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+spec:
+  dependsOn:
+    - name: sources
+    - namespace: flux-system`,
+			want: false,
 		},
 		{
 			name: "improper dependsOn indentation",
