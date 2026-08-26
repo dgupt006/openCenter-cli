@@ -119,7 +119,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "loki", DefaultNamespace: "observability", HasOverrideValues: true,
 			SourceName: "opencenter-observability", SourceGroup: "observability", BasePath: "applications/base/services/observability/loki",
-			ExtraDependencies: []string{"observability-namespace", "loki-override"}, OverrideDependsOn: []string{"sources"},
+			ExtraDependencies: []string{"observability-namespace", "observability-sources", "loki-override"}, OverrideDependsOn: []string{"sources"},
 			OverrideValuesRenderer: templateRenderer(lokiTemplate),
 		},
 		{
@@ -137,7 +137,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "tempo", DefaultNamespace: "observability", HasOverrideValues: true,
 			SourceName: "opencenter-observability", SourceGroup: "observability", BasePath: "applications/base/services/observability/tempo",
-			ExtraDependencies: []string{"observability-namespace", "tempo-override"}, OverrideDependsOn: []string{"sources"},
+			ExtraDependencies: []string{"observability-namespace", "observability-sources", "tempo-override"}, OverrideDependsOn: []string{"sources"},
 			OverrideValuesRenderer: templateRenderer(tempoTemplate),
 		},
 		{
