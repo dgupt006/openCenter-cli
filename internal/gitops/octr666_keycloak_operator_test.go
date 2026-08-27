@@ -27,8 +27,32 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		t.Fatalf("expected one Kustomization document in %s, got %d", kustomizationPath, len(kustomizationDocs))
 	}
 	resources, ok := nestedValue(kustomizationDocs[0], "resources").([]any)
-	if !ok || len(resources) != 1 || resources[0] != "./patch-subscription.yaml" {
-		t.Fatalf("%s resources = %#v, want exactly the Subscription resource", kustomizationPath, resources)
+	if !ok || len(resources) != 2 || resources[0] != "./operator-group.yaml" || resources[1] != "./patch-subscription.yaml" {
+		t.Fatalf("%s resources = %#v, want [./operator-group.yaml, ./patch-subscription.yaml]", kustomizationPath, resources)
+	}
+
+	// Validate the OperatorGroup is correctly scoped (OCTR-671).
+	operatorGroupPath := filepath.Join(operatorDir, "operator-group.yaml")
+	operatorGroupDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, operatorGroupPath)))
+	if err != nil {
+		t.Fatalf("parse %s: %v", operatorGroupPath, err)
+	}
+	if len(operatorGroupDocs) != 1 {
+		t.Fatalf("expected one OperatorGroup document in %s, got %d", operatorGroupPath, len(operatorGroupDocs))
+	}
+	og := operatorGroupDocs[0]
+	if got := og["apiVersion"]; got != "operators.coreos.com/v1" {
+		t.Errorf("OperatorGroup apiVersion = %#v, want operators.coreos.com/v1", got)
+	}
+	if got := og["kind"]; got != "OperatorGroup" {
+		t.Errorf("OperatorGroup kind = %#v, want OperatorGroup", got)
+	}
+	if got := nestedString(og, "metadata", "namespace"); got != "operators" {
+		t.Errorf("OperatorGroup namespace = %q, want operators", got)
+	}
+	targetNamespaces, ok := nestedValue(og, "spec", "targetNamespaces").([]any)
+	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "operators" {
+		t.Errorf("OperatorGroup targetNamespaces = %#v, want [operators]", targetNamespaces)
 	}
 
 	subscriptionPath := filepath.Join(operatorDir, "patch-subscription.yaml")
