@@ -99,7 +99,7 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		t.Fatalf("parse %s: %v", fluxPath, err)
 	}
 	operatorStage := findFluxKustomization(t, fluxDocs, "keycloak-operator")
-	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "olm", "keycloak-postgres")
+	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "olm-base", "keycloak-postgres")
 	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "operators" {
 		t.Errorf("keycloak-operator targetNamespace = %q, want operators", got)
 	}

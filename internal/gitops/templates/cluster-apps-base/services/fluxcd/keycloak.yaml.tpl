@@ -42,7 +42,7 @@ spec:
   dependsOn:
     - name: sources
       namespace: flux-system
-    - name: olm
+    - name: olm-base
       namespace: flux-system
     - name: keycloak-postgres
       namespace: flux-system
