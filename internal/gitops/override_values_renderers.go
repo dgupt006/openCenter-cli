@@ -135,6 +135,10 @@ type veleroTemplateData struct {
 	Provider                  string
 	Bucket                    string
 	Region                    string
+	S3Endpoint                string
+	S3ForcePathStyle          bool
+	S3Insecure                bool
+	CredentialsExistingSecret string
 	PluginEnabled             bool
 	PluginName                string
 	PluginImage               string
@@ -146,10 +150,16 @@ func veleroRenderer(cfg v2.Config) (string, error) {
 	storageType := ""
 	bucket := ""
 	region := ""
+	s3Endpoint := ""
+	s3ForcePathStyle := false
+	s3Insecure := false
 	if service, ok := cfg.OpenCenter.Services["velero"].(*services.VeleroConfig); ok && service != nil {
 		storageType = strings.ToLower(strings.TrimSpace(service.StorageType))
 		bucket = strings.TrimSpace(service.BackupBucket)
 		region = strings.TrimSpace(service.Region)
+		s3Endpoint = strings.TrimSpace(service.S3Endpoint)
+		s3ForcePathStyle = service.S3ForcePathStyle
+		s3Insecure = service.S3Insecure
 	}
 
 	if storageType == "" {
@@ -169,6 +179,10 @@ func veleroRenderer(cfg v2.Config) (string, error) {
 		BackupStorageLocationName: "default",
 		Bucket:                    bucket,
 		Region:                    region,
+		S3Endpoint:                s3Endpoint,
+		S3ForcePathStyle:          s3ForcePathStyle,
+		S3Insecure:                s3Insecure,
+		CredentialsExistingSecret: "velero-cloud-credentials",
 		VSphereSnapshotClass:      provider == "vmware" || provider == "vsphere",
 	}
 
@@ -230,7 +244,17 @@ configuration:
       bucket: {{ .Bucket }}
       config:
         region: {{ .Region }}
+{{- if eq .Provider "velero.io/aws" }}
+        s3Url: {{ .S3Endpoint }}
+        s3ForcePathStyle: {{ .S3ForcePathStyle }}
+        insecureSkipTLSVerify: {{ .S3Insecure }}
+{{- end }}
   volumeSnapshotLocation: []
+{{- if eq .Provider "velero.io/aws" }}
+credentials:
+  useSecret: true
+  existingSecret: {{ .CredentialsExistingSecret }}
+{{- end }}
 {{- if .PluginEnabled }}
 initContainers:
   - name: {{ .PluginName }}

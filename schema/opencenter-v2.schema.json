@@ -2647,6 +2647,15 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
                 "s3_host": {
                   "type": "string"
                 },
@@ -3391,6 +3400,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -4045,6 +4057,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -4133,6 +4148,21 @@
                   "type": "string"
                 },
                 "region": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -4521,6 +4551,15 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
                 "s3_host": {
                   "type": "string"
                 },
@@ -5265,6 +5304,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -5919,6 +5961,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -6007,6 +6052,21 @@
                   "type": "string"
                 },
                 "region": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -6470,6 +6530,15 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
                 "s3_host": {
                   "type": "string"
                 },
@@ -7214,6 +7283,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -7868,6 +7940,9 @@
                 "namespace": {
                   "type": "string"
                 },
+                "s3_credential_id": {
+                  "type": "string"
+                },
                 "s3_endpoint": {
                   "type": "string"
                 },
@@ -7956,6 +8031,21 @@
                   "type": "string"
                 },
                 "region": {
+                  "type": "string"
+                },
+                "s3_credential_id": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -8254,6 +8344,18 @@
           },
           "type": "object"
         },
+        "etcd_backup": {
+          "additionalProperties": false,
+          "properties": {
+            "access_key_id": {
+              "type": "string"
+            },
+            "secret_access_key": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "global": {
           "additionalProperties": false,
           "properties": {
@@ -8436,6 +8538,18 @@
               "type": "string"
             },
             "swift_application_credential_secret": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "velero": {
+          "additionalProperties": false,
+          "properties": {
+            "access_key_id": {
+              "type": "string"
+            },
+            "secret_access_key": {
               "type": "string"
             }
           },

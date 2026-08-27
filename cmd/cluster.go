@@ -103,7 +103,7 @@ Configuration files are stored in organization-based directories:
 	cmd.AddCommand(newClusterUnlockCmd())
 	cmd.AddCommand(newClusterImportCmd())
 	cmd.AddCommand(newClusterMigrateLayoutCmd())
-	cmd.AddCommand(newClusterSyncCmd())
+	cmd.AddCommand(newClusterProviderCmd())
 
 	// Hidden commands (used by generated hooks, not part of public GA surface)
 	validateManifestsCmd := newClusterValidateManifestsCmd()

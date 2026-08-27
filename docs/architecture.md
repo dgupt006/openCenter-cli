@@ -1,3 +1,12 @@
+---
+id: cli-architecture
+title: "Understand the openCenter CLI Architecture"
+sidebar_label: Architecture
+description: Explains the openCenter CLI layers, entry points, package boundaries, runtime flows, and integration points.
+doc_type: explanation
+audience: "contributors, maintainers, code-oriented agents"
+tags: [architecture, cli, go, gitops, providers]
+---
 # Architecture
 
 ## System overview
@@ -43,7 +52,7 @@ The command layer owns argument parsing, prompts, presentation, exit behavior, a
 | `internal/core/validation` | Reusable validation engine and focused validators. |
 | `internal/cluster` | Cluster lifecycle services and service-level result types. |
 | `internal/cluster/orchestration` | Provider capability discovery, prompts, change review, and orchestration contracts. |
-| `internal/cluster/sync/openstack` | OpenStack synchronization use case and its explicit integration dependencies. |
+| `internal/cluster/provider/openstack`, `internal/cluster/storage/openstack` | Typed OpenStack provider planning and explicit one-service storage provisioning with persistence/recovery boundaries. |
 | `internal/cloud` | Provider factory and shared provider-facing infrastructure types. |
 | `internal/cloud/kind`, `internal/cloud/openstack`, `internal/cloud/vmware` | Provider-specific implementations and API integration. |
 | `internal/gitops` | GitOps workspace generation, transactions, checkpoints, dry runs, and embedded assets. |

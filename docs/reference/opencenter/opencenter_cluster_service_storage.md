@@ -1,24 +1,24 @@
 ---
-id: "opencenter-cluster-sync"
-title: "Opencenter_Cluster_Sync"
-sidebar_label: "Opencenter_Cluster_Sync"
-description: "Synchronize cluster configuration from external systems"
+id: "opencenter-cluster-service-storage"
+title: "Opencenter_Cluster_Service_Storage"
+sidebar_label: "Opencenter_Cluster_Service_Storage"
+description: "Manage one service's OpenStack storage"
 doc_type: reference
 audience: "operators, developers"
 tags: [cli, reference]
 ---
-## opencenter cluster sync
+## opencenter cluster service storage
 
-Synchronize cluster configuration from external systems
+Manage one service's OpenStack storage
 
 ```
-opencenter cluster sync [flags]
+opencenter cluster service storage [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for sync
+  -h, --help   help for storage
 ```
 
 ### Options inherited from parent commands
@@ -34,5 +34,6 @@ opencenter cluster sync [flags]
 
 ### SEE ALSO
 
-* [opencenter cluster](opencenter_cluster.md)	 - Manage cluster configurations
-* [opencenter cluster sync openstack](opencenter_cluster_sync_openstack.md)	 - Synchronize a cluster with an OpenStack clouds.yaml profile
+* [opencenter cluster service](opencenter_cluster_service.md)	 - Manage cluster services
+* [opencenter cluster service storage apply](opencenter_cluster_service_storage_apply.md)	 - apply one service's OpenStack storage
+* [opencenter cluster service storage plan](opencenter_cluster_service_storage_plan.md)	 - plan one service's OpenStack storage

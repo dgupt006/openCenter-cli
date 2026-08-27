@@ -51,7 +51,6 @@ docs/getting-started/openstack-first-cluster.md:opencenter.services.keycloak.adm
 docs/getting-started/openstack-first-cluster.md:opencenter.services.kube-prometheus-stack.grafana_admin_password
 docs/getting-started/openstack-first-cluster.md:opencenter.services.loki.retention_days
 docs/getting-started/openstack-first-cluster.md:opencenter.services.velero.s3_bucket
-docs/getting-started/openstack-first-cluster.md:opencenter.services.velero.s3_region
 docs/getting-started/vmware-deployment.md:opencenter.cluster.master_count
 docs/getting-started/vmware-deployment.md:opencenter.cluster.networking
 docs/getting-started/vmware-deployment.md:opencenter.cluster.storage
@@ -62,7 +61,6 @@ docs/getting-started/vmware-deployment.md:opencenter.services.keycloak.admin_pas
 docs/getting-started/vmware-deployment.md:opencenter.services.kube-prometheus-stack.grafana_admin_password
 docs/getting-started/vmware-deployment.md:opencenter.services.loki.retention_days
 docs/getting-started/vmware-deployment.md:opencenter.services.velero.s3_bucket
-docs/getting-started/vmware-deployment.md:opencenter.services.velero.s3_endpoint
 docs/getting-started/vmware-deployment.md:opencenter.services.vsphere-csi.datacenter
 docs/getting-started/vmware-deployment.md:opencenter.services.vsphere-csi.datastore
 docs/getting-started/vmware-deployment.md:opencenter.services.vsphere-csi.vcenter_server
@@ -73,14 +71,11 @@ docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.compressio
 docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.retention_days
 docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_access_key
 docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_bucket
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_endpoint
 docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_secret_key
 docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.schedule
 docs/operations/backup-and-restore.md:opencenter.services.velero.backup_schedule
 docs/operations/backup-and-restore.md:opencenter.services.velero.retention_days
 docs/operations/backup-and-restore.md:opencenter.services.velero.s3_bucket
-docs/operations/backup-and-restore.md:opencenter.services.velero.s3_endpoint
-docs/operations/backup-and-restore.md:opencenter.services.velero.s3_region
 docs/operations/backup-and-restore.md:opencenter.services.velero.volume_snapshot_location
 docs/operations/configure-networking.md:opencenter.cluster.kubernetes.dns_zone_name
 docs/operations/configure-networking.md:opencenter.cluster.kubernetes.loadbalancer_provider

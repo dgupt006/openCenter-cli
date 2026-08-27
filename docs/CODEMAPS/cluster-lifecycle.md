@@ -33,6 +33,7 @@ Existing repositories can enter through `cluster import scan`, `report`, and `ap
 | Configure | `internal/cluster/configure_service.go` and `orchestration/` | Guided provider and capability changes, then persist managed files |
 | Validate | `internal/cluster/validate_service.go` | Load config and produce readiness, provider, service, and GitOps reports |
 | Generate | `internal/cluster/setup_service.go` | Run the live GitOps generation path described below |
+| OpenStack provider/storage operations | `cmd/cluster_provider_openstack.go`, `cmd/cluster_service_storage.go`, and `internal/cluster/{provider,storage}/openstack/` | Plan/apply typed provider changes or provision one service's storage; separate from bootstrap and generation |
 | Bootstrap | `internal/cluster/bootstrap_service.go` | Execute provider-specific resumable infrastructure and cluster steps |
 | Destroy | `internal/cluster/destroy_service.go` | Execute provider-specific teardown steps |
 | Pool/service commands | `cmd/cluster_pool.go`, `cmd/cluster_service.go` | Mutate or inspect declared cluster topology and services |
@@ -51,6 +52,10 @@ Existing repositories can enter through `cluster import scan`, `report`, and `ap
 `PipelineGenerator` remains a supporting `internal/gitops` API for staged generation abstractions. It is not the live top-level path used by `SetupService`.
 
 See [GitOps engine](gitops-engine.md) and [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md).
+
+## OpenStack provider and storage operations
+
+The lifecycle flow exposes two explicit OpenStack operation families outside bootstrap and generation. `cluster provider openstack plan/apply` performs read-only discovery and persists only validated typed provider changes. `cluster service storage plan/apply` provisions exactly one supported service's Swift or S3 storage mapping and sequences remote actions, typed persistence, credential reuse/rotation, and recovery. See [OpenStack provider and storage operations](openstack-provider-storage-operations.md).
 
 ## Bootstrap path
 
@@ -71,7 +76,7 @@ Destroy uses `lifecycleDestroyProvider` implementations; OpenStack has an OpenTo
 
 ## Cross-module boundaries
 
-- `internal/config/v2` is the input contract; lifecycle services do not parse ad hoc YAML.
+- `internal/config/v2` is the input and persistence contract for lifecycle services and the OpenStack provider/storage operations. Provider and storage paths operate on typed v2 values; storage apply adds explicit remote-action and recovery sequencing.
 - `internal/core/paths` resolves organization/cluster identifiers and runtime paths.
 - `internal/core/validation` provides shared validation primitives.
 - `internal/security` supplies sanitized command execution and audit components.
@@ -80,6 +85,7 @@ Destroy uses `lifecycleDestroyProvider` implementations; OpenStack has an OpenTo
 ## Related maps
 
 - [Config system](config-system.md)
+- [OpenStack provider and storage operations](openstack-provider-storage-operations.md)
 - [GitOps engine](gitops-engine.md)
 - [Providers](providers.md)
 - [Secrets management](secrets-management.md)

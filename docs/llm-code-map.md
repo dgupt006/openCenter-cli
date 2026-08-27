@@ -1,3 +1,12 @@
+---
+id: cli-llm-code-map
+title: "Navigate the openCenter CLI Code Map"
+sidebar_label: LLM Code Map
+description: Maps openCenter CLI entry points, package responsibilities, provider/storage operations, data flows, and safe change boundaries.
+doc_type: explanation
+audience: "contributors, maintainers, code-oriented agents"
+tags: [architecture, code-map, cli, packages, providers]
+---
 # LLM Code Map
 
 This map is for humans and automated agents changing openCenter CLI. Read it before moving code across packages. For historical evidence, also read `docs/refactor-audit-report.md`, `docs/dead-code-removal-report.md`, `docs/deduplication-report.md`, and `docs/library-extraction-report.md`.
@@ -37,7 +46,7 @@ The canonical dependency graph is `internal/di.App`, constructed explicitly by `
 | Cluster services | `internal/cluster` | Lifecycle use cases, options, and results. |
 | Provider orchestration | `internal/cluster/orchestration` | Capability contracts, prompts, reviews, and provider coordination. |
 | Provider clients | `internal/cloud` and its provider subpackages | Cloud-specific discovery and mutation. |
-| OpenStack synchronization | `internal/cluster/sync/openstack/service.go` | Use-case service with explicit dependencies and deterministic results. |
+| OpenStack provider/storage operations | `internal/cluster/provider/openstack`, `internal/cluster/storage/openstack` | Typed provider planning plus explicit one-service storage provisioning, credential sequencing, and recovery-aware persistence. |
 | GitOps | `internal/gitops` and `internal/gitops/stages` | Workspace lifecycle, generation order, transactions, checkpoints, and dry-run state. |
 | Templates | `internal/template` | Registry, context, rendering, composition, sandboxing, and dependency resolution. |
 | Service metadata | `internal/services` and `internal/services/descriptors` | Service plugin contracts and embedded descriptors. |

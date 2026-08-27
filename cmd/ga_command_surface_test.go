@@ -79,6 +79,11 @@ func TestGAClusterCommandSurface(t *testing.T) {
 	for _, path := range expectedClusterCommands {
 		requireCommandPath(t, root, path...)
 	}
+	requireCommandPath(t, root, "cluster", "provider", "openstack", "plan")
+	requireCommandPath(t, root, "cluster", "provider", "openstack", "apply")
+	requireCommandPath(t, root, "cluster", "service", "storage", "plan")
+	requireCommandPath(t, root, "cluster", "service", "storage", "apply")
+	requireNoCommandPath(t, root, "cluster", "sync", "openstack")
 	statusCmd := requireCommandPath(t, root, "cluster", "status")
 	if statusCmd.Flags().Lookup("sync") == nil {
 		t.Fatal("expected cluster status to expose --sync")

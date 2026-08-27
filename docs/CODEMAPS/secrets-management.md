@@ -51,6 +51,12 @@ cluster config
 
 This is not the same as secret manifest sync. The SOPS manager handles file-level encryption, `.sops.yaml` generation/validation, Age key storage, and encryption checks. `SetupService` uses an overlay encryption hook before promoting generated application output.
 
+## OpenStack storage credential boundary
+
+`cluster service storage plan/apply` is a separate one-service provisioning path. [`internal/cluster/storage/openstack`](../../internal/cluster/storage/openstack) plans Swift application credentials or project-scoped EC2 credentials, container/bucket actions, typed service wiring, and recovery state. It does not encrypt Kubernetes manifests, update secret-artifact ownership, or run the SOPS manager. Existing complete credential pairs are reused unless `--rotate-credentials` is supplied; dry-run performs preflight only and does not invoke remote mutations.
+
+The resulting credential values can later be consumed by rendering and secret-artifact workflows, but provisioning them here does not itself reconcile the encrypted manifest tree.
+
 ## CLI boundary
 
 The production command surface groups key lifecycle under `secrets keys`: `generate`, `rotate`, `backup`, `validate`, `check`, `revoke`, `reconcile`, and `set-primary`. Manifest operations are `secrets sync` and `secrets validate`; file operations are `secrets encrypt`, `decrypt`, and `status`.
@@ -63,6 +69,7 @@ Backend-oriented commands (`login`, `list`, `describe`, `get`, `set`, `delete`) 
 |---|---|
 | `internal/secretartifacts` | Pure logical-owner to physical-artifact planning, normalization, deterministic merge, and target validation |
 | `internal/secrets` | Sync, validation, key registry, rotation/revocation, reconciliation, hooks, multi-cluster coordination, rollback, and audit calls |
+| `internal/cluster/storage/openstack` | OpenStack storage mappings, credential creation/reuse/rotation, recovery, and typed config persistence; not encrypted manifest sync |
 | `internal/sops` | SOPS/Age encryption engine, key manager, overlay encryption, and repository SOPS configuration |
 | `internal/barbican` | OpenStack Key Manager client used by backend-specific secret flows |
 | `internal/security` | Credential masking, command sanitization, and audit primitives used by secret operations |
@@ -70,6 +77,7 @@ Backend-oriented commands (`login`, `list`, `describe`, `get`, `set`, `delete`) 
 ## Related maps
 
 - [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md) — planner/renderer contract
+- [OpenStack provider and storage operations](openstack-provider-storage-operations.md) — provider and storage credential boundary
 - [GitOps engine](gitops-engine.md) — overlay encryption during generation
 - [Config system](config-system.md) — secret input model and paths
 - [CLI commands](cli-commands.md) — command registration

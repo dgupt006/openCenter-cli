@@ -64,17 +64,15 @@ func main() {
 			os.Stderr.WriteString("Failed to shutdown container: " + shutdownErr.Error() + "\n")
 		}
 
-		// Exit code 3 for missing cluster configuration
 		var cnfErr *v2.ConfigNotFoundError
 		if errors.As(err, &cnfErr) {
 			fmt.Fprintf(os.Stderr, "\nCheck available clusters with: opencenter cluster list\n")
 			fmt.Fprintf(os.Stderr, "Initialize a new cluster with: opencenter cluster init %s\n", cnfErr.ClusterName)
-			os.Exit(3)
 		}
 
 		// Print the error since SilenceErrors is set on the root command
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+		os.Exit(cmd.ExitCode(err))
 	}
 
 	// Shutdown container on successful exit

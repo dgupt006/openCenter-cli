@@ -35,6 +35,7 @@ The renderer plans descriptor-owned and catalog-owned actions, validates output 
 | Map | Scope | Start here when |
 |---|---|---|
 | [CLI commands](cli-commands.md) | Built-in Cobra registration and runtime plugin boundary | You need the command tree or registration path |
+| [OpenStack provider and storage operations](openstack-provider-storage-operations.md) | Typed provider planning, one-service storage provisioning, credential effects, and persistence/recovery boundaries | You need OpenStack provider or storage operation behavior |
 | [Cluster lifecycle](cluster-lifecycle.md) | Init, configure, validate, generate, deploy, destroy, import | You need an end-to-end operation flow |
 | [Config system](config-system.md) | Loading, normalization, references, defaults, validation, persistence | You need config ownership or data shape |
 | [DI container](di-container.md) | Typed app graph and compatibility container | You need constructor or service wiring |
@@ -51,7 +52,8 @@ The renderer plans descriptor-owned and catalog-owned actions, validates output 
 |---|---|---|
 | `cmd/` | Built-in Cobra commands, flags, output, and command orchestration | [CLI commands](cli-commands.md) |
 | `cmd/opencenter-local/` | Separate local-development executable | [Runtime extensions and local development](runtime-extensions-and-local-development.md) |
-| `internal/cluster/` | Cluster lifecycle services and provider bootstrap steps | [Cluster lifecycle](cluster-lifecycle.md) |
+| `internal/cluster/` | Cluster lifecycle services, provider bootstrap steps, and explicit provider/storage operations | [Cluster lifecycle](cluster-lifecycle.md), [OpenStack provider and storage operations](openstack-provider-storage-operations.md) |
+| `internal/cluster/provider/openstack/` and `internal/cluster/storage/openstack/` | Typed provider planning, one-service storage provisioning, credential sequencing, and persistence/recovery | [OpenStack provider and storage operations](openstack-provider-storage-operations.md) |
 | `internal/config/` and `internal/config/v2/` | CLI settings plus authoritative cluster configuration pipeline | [Config system](config-system.md) |
 | `internal/core/paths/` and `internal/core/validation/` | Shared path resolution and validation primitives | [Config system](config-system.md) |
 | `internal/di/` | Typed application graph and legacy container adapter | [DI container](di-container.md) |
@@ -59,6 +61,7 @@ The renderer plans descriptor-owned and catalog-owned actions, validates output 
 | `internal/secretartifacts/` | Logical-secret to physical-artifact planning | [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md) |
 | `internal/secrets/` and `internal/sops/` | Manifest synchronization, key state, SOPS encryption | [Secrets management](secrets-management.md) |
 | `internal/cloud/` and `internal/credentials/` | Provider API/drift implementations and credential extraction | [Providers](providers.md) |
+| `internal/cloud/openstack/profile.go`, `read_only_discovery.go`, and `storage.go` | Profile loading, read-only provider discovery, and storage provisioning adapters | [OpenStack provider and storage operations](openstack-provider-storage-operations.md) |
 | `internal/importer/` | GitOps repository discovery, inference, patching, and reports | [Import, operations, and resilience](import-operations-and-resilience.md) |
 | `internal/operations/` | Drift and backup interfaces/implementations | [Import, operations, and resilience](import-operations-and-resilience.md) |
 | `internal/resilience/` | File/Redis locks, retry/backoff, and circuit breakers | [Import, operations, and resilience](import-operations-and-resilience.md) |
@@ -71,9 +74,9 @@ The renderer plans descriptor-owned and catalog-owned actions, validates output 
 - Commands resolve lifecycle services from the typed app graph; they do not own rendering or provider implementation details.
 - `internal/config/v2` produces the validated config consumed by lifecycle and GitOps code. Shared validation is in `internal/core/validation`.
 - `internal/gitops` owns generated repository output. `internal/secretartifacts` plans secret targets without depending on a backend or renderer; `internal/secrets` materializes and tracks encrypted manifests.
-- Provider config/deploy support, drift detection, and bootstrap are separate capabilities; see [Providers](providers.md).
+- Provider config/deploy support, drift detection, bootstrap, provider planning, and storage provisioning are separate capabilities; see [Providers](providers.md) and [OpenStack provider and storage operations](openstack-provider-storage-operations.md). Provider apply and storage apply persist typed v2 configuration; storage apply additionally sequences remote actions and recovery.
 - External plugins are runtime executables. The generated Cobra reference is built from `cmd.NewBuiltinRootCmd()` and does not load external plugins.
 
 ## Recommended reading order
 
-For a command or workflow change, read [CLI commands](cli-commands.md), [DI container](di-container.md), and [Cluster lifecycle](cluster-lifecycle.md). For generated output, continue with [GitOps engine](gitops-engine.md) and [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md). For operational behavior, read [Providers](providers.md), [Secrets management](secrets-management.md), and [Import, operations, and resilience](import-operations-and-resilience.md).
+For a command or workflow change, read [CLI commands](cli-commands.md), [DI container](di-container.md), and [Cluster lifecycle](cluster-lifecycle.md). For OpenStack provider or storage operations, continue with [OpenStack provider and storage operations](openstack-provider-storage-operations.md) and [Providers](providers.md). For generated output, continue with [GitOps engine](gitops-engine.md) and [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md). For operational behavior, read [Secrets management](secrets-management.md) and [Import, operations, and resilience](import-operations-and-resilience.md).

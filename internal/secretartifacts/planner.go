@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +62,8 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 		{"weave-gitops", cfg.Secrets.WeaveGitOps}, {"grafana", cfg.Secrets.Grafana},
 		{"tempo", cfg.Secrets.Tempo}, {"alert-proxy", cfg.Secrets.AlertProxy},
 		{"vsphere-csi", cfg.Secrets.VSphereCsi},
+		{"etcd-backup", etcdBackupPayload(cfg)},
+		{"velero", veleroPayload(cfg)},
 	}
 	sources := append([]source(nil), fixed...)
 	keys := make([]string, 0, len(cfg.Secrets.ServiceSecrets))
@@ -147,6 +150,32 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func etcdBackupPayload(cfg *v2.Config) map[string]interface{} {
+	service, _ := cfg.OpenCenter.Services["etcd-backup"].(*services.EtcdBackupConfig)
+	if service == nil && strings.TrimSpace(cfg.Secrets.EtcdBackup.AccessKeyID) == "" && strings.TrimSpace(cfg.Secrets.EtcdBackup.SecretAccessKey) == "" {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"ETCDCTL_API": "3", "ETCDCTL_ENDPOINTS": "https://127.0.0.1:2379",
+		"ETCDCTL_CACERT": "/etc/kubernetes/ssl/etcd/ca.crt", "ETCDCTL_CERT": "/etc/kubernetes/ssl/etcd/server.crt",
+		"ETCDCTL_KEY": "/etc/kubernetes/ssl/etcd/server.key",
+		"ACCESS_KEY":  cfg.Secrets.EtcdBackup.AccessKeyID, "SECRET_KEY": cfg.Secrets.EtcdBackup.SecretAccessKey,
+	}
+	if service != nil {
+		payload["S3_HOST"] = service.S3Host
+		payload["S3_REGION"] = service.S3Region
+	}
+	return payload
+}
+
+func veleroPayload(cfg *v2.Config) map[string]interface{} {
+	access, secret := cfg.Secrets.Velero.AccessKeyID, cfg.Secrets.Velero.SecretAccessKey
+	if strings.TrimSpace(access) == "" && strings.TrimSpace(secret) == "" {
+		return nil
+	}
+	return map[string]interface{}{"cloud": fmt.Sprintf("[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n", access, secret)}
 }
 
 func normalizeServiceName(raw string) string {

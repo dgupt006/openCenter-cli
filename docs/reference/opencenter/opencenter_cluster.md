@@ -100,10 +100,10 @@ opencenter cluster [flags]
 * [opencenter cluster migrate-layout](opencenter_cluster_migrate-layout.md)	 - Migrate legacy cluster files into secure GitOps, state, and secrets zones
 * [opencenter cluster normalize](opencenter_cluster_normalize.md)	 - Add missing default fields to a cluster configuration
 * [opencenter cluster pool](opencenter_cluster_pool.md)	 - Manage worker pools
+* [opencenter cluster provider](opencenter_cluster_provider.md)	 - Manage provider configuration
 * [opencenter cluster service](opencenter_cluster_service.md)	 - Manage cluster services
 * [opencenter cluster set](opencenter_cluster_set.md)	 - Set fields in an existing cluster configuration
 * [opencenter cluster status](opencenter_cluster_status.md)	 - Show cluster status information
-* [opencenter cluster sync](opencenter_cluster_sync.md)	 - Synchronize cluster configuration from external systems
 * [opencenter cluster unlock](opencenter_cluster_unlock.md)	 - Unlock a cluster to allow modifications
 * [opencenter cluster use](opencenter_cluster_use.md)	 - Set the active cluster
 * [opencenter cluster validate](opencenter_cluster_validate.md)	 - Validate cluster configuration

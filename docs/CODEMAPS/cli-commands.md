@@ -20,14 +20,14 @@ opencenter
 │   ├── init, configure, edit, set, normalize, export
 │   ├── validate, doctor, generate, deploy, destroy
 │   ├── template (hidden), validate-manifests (hidden)
-│   ├── service {enable, disable, status, options}
+│   ├── service {enable, disable, status, options, storage {plan, apply}}
 │   ├── pool {add, update, scale, remove, list}
 │   ├── drift {detect, reconcile, schedule}
 │   ├── backup {create, restore, list, delete, schedule}
 │   ├── lock, unlock
 │   ├── import {scan, report, apply}
 │   ├── migrate-layout
-│   └── sync {openstack}
+│   └── provider {openstack {plan, apply}}
 ├── settings {view, set, get, reset, path, edit, explain, ide}
 ├── secrets
 │   ├── login, list, describe, get, set, delete
@@ -47,7 +47,9 @@ Cobra also supplies the standard `help` and `completion` commands. Hidden comman
 | Process start | `main.go` | Set build metadata, resolve cluster directory, create the outer process container |
 | App execution | `cmd/root.go:ExecuteWithContext` | Build `di.NewApp`, create `di.NewAppContainer`, and place both graph values in context |
 | Built-ins | `cmd/root.go:NewBuiltinRootCmd` | Register `cluster`, `settings`, `secrets`, `plugins`, `version`, and `shell-init` |
-| Cluster subtree | `cmd/cluster.go:NewClusterCmd` | Register lifecycle, service, pool, drift, backup, import, lock, and sync commands |
+| Cluster subtree | `cmd/cluster.go:NewClusterCmd` | Register lifecycle, service, pool, drift, backup, import, lock, provider, and storage commands |
+| OpenStack provider operations | `cmd/cluster_provider_openstack.go` | Load a profile, perform read-only discovery, plan typed provider changes, and persist validated local patches |
+| OpenStack storage operations | `cmd/cluster_service_storage.go` | Plan and apply one service's storage mapping, remote credentials, typed persistence, and recovery |
 | Runtime extensions | `internal/plugins/loader.go` | Discover and attach external `opencenter-*` executables only in production |
 | Execution | Cobra `ExecuteContext` | Parse flags, run command hooks, resolve services, and return errors to `main.go` |
 
@@ -69,6 +71,8 @@ Command implementations remain in `cmd/`; domain behavior belongs in `internal/*
 ## Boundaries
 
 - `cluster generate` delegates to `internal/cluster.SetupService`; it does not call the supporting `PipelineGenerator` as the live top-level path.
+- `cluster provider openstack plan/apply` performs read-only OpenStack discovery and typed provider planning/persistence. It has no remote mutation capability.
+- `cluster service storage plan/apply` handles one supported service at a time and owns storage preflight, credential/container actions, typed persistence, and recovery; see [OpenStack provider and storage operations](openstack-provider-storage-operations.md).
 - `secrets sync` delegates manifest work to `internal/secrets`; SOPS encryption and key operations are separate concerns.
 - `plugins list` reports discovery; executing a plugin forwards arguments through the security command runner.
 - `cmd/opencenter-local` is a separate executable, not a subcommand of the built-in production tree. See [Runtime extensions and local development](runtime-extensions-and-local-development.md).
@@ -76,6 +80,7 @@ Command implementations remain in `cmd/`; domain behavior belongs in `internal/*
 ## Related maps
 
 - [DI container](di-container.md) — graph construction and command context
+- [OpenStack provider and storage operations](openstack-provider-storage-operations.md) — typed provider planning and explicit one-service storage provisioning
 - [Cluster lifecycle](cluster-lifecycle.md) — command-to-service workflow
 - [Secrets management](secrets-management.md) — secret command boundaries
 - [Runtime extensions and local development](runtime-extensions-and-local-development.md) — plugin discovery and local executable

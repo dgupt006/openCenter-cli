@@ -47,3 +47,4 @@ opencenter cluster service [flags]
 * [opencenter cluster service enable](opencenter_cluster_service_enable.md)	 - Enable a service in the cluster configuration
 * [opencenter cluster service options](opencenter_cluster_service_options.md)	 - Display available configuration options for a service
 * [opencenter cluster service status](opencenter_cluster_service_status.md)	 - Display state of all services in the cluster configuration
+* [opencenter cluster service storage](opencenter_cluster_service_storage.md)	 - Manage one service's OpenStack storage

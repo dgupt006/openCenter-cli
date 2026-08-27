@@ -17,7 +17,7 @@ tags: [deploy, cluster, openstack, gitops, bootstrap]
 * A provisioned Git repository for GitOps (GitHub, Gitea, or similar)
 * A GitHub personal access token (or equivalent) with write access to the repository
 * Infrastructure credentials for your target provider (OpenStack in this example)
-* The `opencenter-rmpk` external plugin installed (for provider-specific sync)
+* An OpenStack `clouds.yaml` profile with read access to images, networks, subnets, and availability zones
 
 ## 1. Initialize the cluster configuration
 
@@ -55,20 +55,31 @@ The output shows cluster metadata, GitOps paths, and environment setup commands.
 
 **Evidence:** `cmd/cluster_use.go`
 
-## 3. Sync provider-specific configuration
+## 3. Plan and apply OpenStack provider settings
 
-For OpenStack clusters, use the `rmpk` plugin to synchronize provider-specific values (images, flavors, networks) into the cluster configuration:
+Use the built-in provider workflow to discover unambiguous images, networks, subnets, and availability zones. Planning performs read-only discovery:
 
 ```bash
-opencenter rmpk cluster sync openstack \
-  --cluster-config opencenter-cloud/.services-2026-02-0d-config.yaml \
-  --cloud flex-dfw-dev \
-  --yes
+opencenter cluster provider openstack plan opencenter-cloud/services-2026-02-0d \
+  --os-cloud flex-dfw-dev
 ```
 
-The `--cloud` flag references an OpenStack cloud entry from your `clouds.yaml`. The `--yes` flag skips confirmation prompts.
+Apply the reviewed typed patch locally:
 
-> `rmpk` is an [external CLI plugin](../concepts/plugin-external-cli.md) discovered at runtime. It must be installed separately.
+```bash
+opencenter cluster provider openstack apply opencenter-cloud/services-2026-02-0d \
+  --os-cloud flex-dfw-dev --yes
+```
+
+Existing populated selections require `--replace`; ambiguous resources require an explicit selector such as `--image-id` or `--network-id`. Provider apply does not create or mutate OpenStack resources.
+
+When a configured service needs OpenStack object storage, provision it explicitly one service at a time:
+
+```bash
+opencenter cluster service storage apply loki \
+  --cluster opencenter-cloud/services-2026-02-0d \
+  --backend swift --os-cloud flex-dfw-dev --yes
+```
 
 ## 4. Set GitOps and secrets configuration
 

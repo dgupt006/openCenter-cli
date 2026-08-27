@@ -18,6 +18,7 @@ package security
 
 import (
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -236,4 +237,17 @@ func (m *DefaultCredentialMasker) GetMaskedCount() int {
 	defer m.mu.RUnlock()
 
 	return m.maskedCount
+}
+
+// MaskSecrets applies repository-standard pattern masking and then masks the exact
+// values supplied by the caller. It is used at boundaries where generated or
+// profile credentials may appear in otherwise unstructured errors and output.
+func MaskSecrets(input string, values ...string) string {
+	result := NewDefaultCredentialMasker().MaskString(input)
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			result = strings.ReplaceAll(result, value, "[redacted]")
+		}
+	}
+	return result
 }

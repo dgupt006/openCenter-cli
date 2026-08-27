@@ -43,6 +43,7 @@ command will fail and provide an example of the correct usage.`,
 	cmd.AddCommand(newClusterServiceDisableCmd())
 	cmd.AddCommand(newClusterServiceStatusCmd())
 	cmd.AddCommand(newClusterServiceOptionsCmd())
+	cmd.AddCommand(newClusterServiceStorageCmd())
 	return cmd
 }
 

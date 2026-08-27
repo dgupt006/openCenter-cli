@@ -20,6 +20,7 @@ The CODEMAPS are concise architecture explanations for contributors and maintain
 
 - [CODEMAPS index](docs/CODEMAPS/INDEX.md)
 - [CLI commands map](docs/CODEMAPS/cli-commands.md)
+- [OpenStack provider and storage operations map](docs/CODEMAPS/openstack-provider-storage-operations.md)
 - [Cluster lifecycle map](docs/CODEMAPS/cluster-lifecycle.md)
 - [Configuration system map](docs/CODEMAPS/config-system.md)
 - [DI container map](docs/CODEMAPS/di-container.md)
@@ -79,7 +80,10 @@ opencenter cluster import scan --repo-path <path>
 opencenter cluster import report
 opencenter cluster import apply
 opencenter cluster migrate-layout --org <organization>
-opencenter cluster sync openstack <organization>/<cluster>
+opencenter cluster provider openstack plan <organization>/<cluster>
+opencenter cluster provider openstack apply <organization>/<cluster>
+opencenter cluster service storage plan <service> --cluster <organization>/<cluster> --backend swift|s3
+opencenter cluster service storage apply <service> --cluster <organization>/<cluster> --backend swift|s3
 ```
 
 Secrets are split between backend CRUD, manifest synchronization, and SOPS/Age file operations:
@@ -114,6 +118,7 @@ Other built-in groups are `settings`, `plugins list`, `version`, and `shell-init
 - `cmd.NewBuiltinRootCmd` creates the deterministic built-in Cobra tree. External `opencenter-*` executables are discovered and attached only after built-ins in the production runtime, using `OPENCENTER_PLUGINS_DIR`, `<config-dir>/plugins`, and `PATH`.
 - The tools-tagged command-reference generator receives `cmd.NewBuiltinRootCmd()`, so generated Cobra reference pages cover built-ins only and never load external plugins.
 - `cluster generate` runs `internal/cluster.SetupService`: config load, `CopyBase`, encrypted application render/promotion, infrastructure render, Flux bridge render, and optional non-Kind OpenTofu provisioning. `PipelineGenerator` is a supporting API, not the live top-level path.
+- `cluster provider openstack plan/apply` uses a selected `clouds.yaml` profile for read-only discovery and validated typed provider persistence; it has no remote mutation capability. `cluster service storage plan/apply` provisions one supported service at a time, reuses or rotates credentials, persists typed service wiring, and retains recovery state for partial failures. `--dry-run` suppresses storage mutations and local persistence. See the [OpenStack provider and storage operations map](docs/CODEMAPS/openstack-provider-storage-operations.md).
 - Rendering uses descriptor coverage, an immutable built-in `RenderCatalog`, owned action validation, atomic workspace writes, and promotion that preserves `custom/`.
 - `internal/secretartifacts` maps logical secret owners to deterministic physical artifacts. `internal/secrets` performs locked transactional manifest sync with encryption, journaling/rollback, ownership hashes, and state. SOPS overlay value encryption is a separate `internal/sops` concern.
 - OpenStack, VMware, Baremetal, and Kind are the current infrastructure provider paths. AWS, GCP, and Azure are rejected planned/unavailable providers.

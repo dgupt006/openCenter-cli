@@ -29,6 +29,12 @@ cluster identifier
 
 `ConfigurationManager` checks its cache before resolving a path and loading from disk. Saves validate, serialize through the public config representation, and use atomic filesystem writes.
 
+## OpenStack provider and storage persistence boundaries
+
+`cluster provider openstack plan/apply` loads the typed v2 configuration, performs read-only profile discovery, validates the prospective typed model, checks for stale source bytes, writes a backup, and atomically persists only local provider changes. It does not create or mutate OpenStack resources.
+
+`cluster service storage plan/apply` also uses typed v2 configuration, but its apply path explicitly sequences container/credential actions around validated persistence. It rechecks the source before writing, retains recovery state when a remote action succeeds but persistence or revocation fails, and reports partial completion to the command layer. See [OpenStack provider and storage operations](openstack-provider-storage-operations.md).
+
 ## Package ownership
 
 | Package | Owns |
@@ -53,7 +59,7 @@ Shared validation belongs to `internal/core/validation`.
 - YAML on disk is decoded through the public v2 decoder rather than a permissive internal-only shape.
 - Reference resolution occurs before provider-region hydration and validation.
 - `ConfigManager`/`ConfigurationManager` caches are an optimization, not a second source of truth.
-- Atomic saves protect cluster config files; generated GitOps files have their own workspace/promotion transaction described in [GitOps engine](gitops-engine.md).
+- Atomic saves protect cluster config files; generated GitOps files have their own workspace/promotion transaction described in [GitOps engine](gitops-engine.md). OpenStack provider and storage operations persist typed v2 models; storage adds remote-action recovery state.
 - `PathResolver` prevents identifier/path ambiguity and keeps organization-aware layouts consistent across commands, local development, import, and secrets.
 
 ## Consumers
@@ -70,6 +76,7 @@ Shared validation belongs to `internal/core/validation`.
 ## Related maps
 
 - [Cluster lifecycle](cluster-lifecycle.md) — config as lifecycle input
+- [OpenStack provider and storage operations](openstack-provider-storage-operations.md) — typed provider persistence and storage recovery boundary
 - [Rendering ownership and secret artifacts](rendering-ownership-and-secret-artifacts.md) — config ownership at render time
 - [Secrets management](secrets-management.md) — config-to-secret synchronization
 - [DI container](di-container.md) — construction of config managers and services

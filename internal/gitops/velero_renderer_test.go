@@ -49,3 +49,18 @@ func TestVeleroRendererOpenStackUsesProviderSafeValues(t *testing.T) {
 	require.NotContains(t, rendered, "csi.vsphere.vmware.com/velero-vsphere-snapshot-class")
 	require.NotContains(t, rendered, "driver: csi.vsphere.vmware.com")
 }
+
+func TestVeleroRendererS3UsesEndpointPathStyleAndExistingSecret(t *testing.T) {
+	cfg := mustNewGitOpsTestConfig("velero-s3-render", "openstack")
+	cfg.OpenCenter.Services["velero"] = &services.VeleroConfig{
+		BackupBucket: "velero-bucket", Region: "RegionOne", StorageType: "s3",
+		S3Endpoint: "https://s3.example", S3ForcePathStyle: true,
+	}
+	spec, ok := newBuiltInRenderCatalog().Lookup("velero")
+	require.True(t, ok)
+	rendered, err := spec.OverrideValuesRenderer(cfg)
+	require.NoError(t, err)
+	require.Contains(t, rendered, "s3Url: https://s3.example")
+	require.Contains(t, rendered, "s3ForcePathStyle: true")
+	require.Contains(t, rendered, "existingSecret: velero-cloud-credentials")
+}

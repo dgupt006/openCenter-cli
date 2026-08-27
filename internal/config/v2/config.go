@@ -108,6 +108,8 @@ type SecretsConfig struct {
 	WeaveGitOps    WeaveGitOpsSecrets `yaml:"weave_gitops,omitempty" json:"weave_gitops,omitempty"`
 	Grafana        GrafanaSecrets     `yaml:"grafana,omitempty" json:"grafana,omitempty"`
 	Tempo          TempoSecrets       `yaml:"tempo,omitempty" json:"tempo,omitempty"`
+	EtcdBackup     EtcdBackupSecrets  `yaml:"etcd_backup,omitempty" json:"etcd_backup,omitempty"`
+	Velero         VeleroSecrets      `yaml:"velero,omitempty" json:"velero,omitempty"`
 	AlertProxy     AlertProxySecrets  `yaml:"alert_proxy,omitempty" json:"alert_proxy,omitempty"`
 	VSphereCsi     VSphereCsiSecrets  `yaml:"vsphere_csi,omitempty" json:"vsphere_csi,omitempty"`
 	ServiceSecrets map[string]any     `yaml:"service_secrets,omitempty" json:"service_secrets,omitempty"`
@@ -201,6 +203,16 @@ type TempoSecrets struct {
 	AccessKey                        string `yaml:"access_key,omitempty" json:"access_key,omitempty"`
 	SecretKey                        string `yaml:"secret_key,omitempty" json:"secret_key,omitempty"`
 	SwiftApplicationCredentialSecret string `yaml:"swift_application_credential_secret,omitempty" json:"swift_application_credential_secret,omitempty"`
+}
+
+type EtcdBackupSecrets struct {
+	AccessKeyID     string `yaml:"access_key_id,omitempty" json:"access_key_id,omitempty"`
+	SecretAccessKey string `yaml:"secret_access_key,omitempty" json:"secret_access_key,omitempty"`
+}
+
+type VeleroSecrets struct {
+	AccessKeyID     string `yaml:"access_key_id,omitempty" json:"access_key_id,omitempty"`
+	SecretAccessKey string `yaml:"secret_access_key,omitempty" json:"secret_access_key,omitempty"`
 }
 
 type AlertProxySecrets struct {

@@ -112,30 +112,20 @@ opencenter cluster set prod-cluster \
 | `opencenter cluster drift reconcile` |
 | `opencenter cluster drift schedule` |
 
-### External Synchronization
+### OpenStack Provider and Storage Operations
 
 | Command | Purpose |
 | --- | --- |
-| `opencenter cluster sync openstack <cluster>` | Discover an OpenStack `clouds.yaml` profile and reconcile cluster networking, images, flavors, storage, and supported service storage wiring |
+| `opencenter cluster provider openstack plan <cluster>` | Discover OpenStack inventory and report typed provider changes without remote mutation |
+| `opencenter cluster provider openstack apply <cluster>` | Persist a validated typed provider patch locally |
+| `opencenter cluster service storage plan <service> --cluster <cluster> --backend swift|s3` | Plan one service's storage mapping, credential, and container actions |
+| `opencenter cluster service storage apply <service> --cluster <cluster> --backend swift|s3` | Apply one service's storage plan with typed persistence and recovery handling |
 
-`cluster sync openstack` is a native replacement for the OpenStack cluster-sync
-workflow previously supplied by the RMPK plugin. It reads the selected profile
-from `--clouds-yaml` (or `OS_CLIENT_CONFIG_FILE` / `~/.config/openstack/clouds.yaml`)
-and requires `--os-cloud` or `OS_CLOUD`.
-
-```bash
-# Inspect planned configuration and credential changes without modifying anything
-opencenter cluster sync openstack acme/prod --os-cloud production --dry-run
-
-# Reconcile selected storage-backed services without an interactive prompt
-opencenter cluster sync openstack acme/prod --os-cloud production \
-  --services loki=swift,tempo=s3 --yes
-```
-
-Existing storage credentials are retained unless `--rotate-creds` is supplied.
-Creating Swift application credentials or S3-compatible EC2 credentials requires
-`auth.user_id` and a project ID in the cloud profile. Use `--no-scope-creds` only
-when unscoped Swift application credentials are explicitly acceptable.
+Provider operations use a selected `clouds.yaml` profile from `--clouds-yaml` (or
+`OS_CLIENT_CONFIG_FILE` / the default OpenStack path) and require `--os-cloud`.
+Provider apply never creates remote resources. Storage apply reuses complete
+credentials by default; use `--rotate-credentials` to replace them. Use
+`--dry-run` to suppress storage mutations and local persistence.
 
 ### Services
 

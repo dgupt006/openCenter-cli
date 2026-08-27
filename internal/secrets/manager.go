@@ -1891,7 +1891,9 @@ func (m *DefaultSecretsManager) generateSecretName(service string) string {
 	// Service-specific secret name overrides where the Helm chart expects
 	// a particular secret name that doesn't match the standard pattern.
 	overrides := map[string]string{
-		"grafana": "grafana-admin-password",
+		"grafana":     "grafana-admin-password",
+		"etcd-backup": "etcd-backup-secrets",
+		"velero":      "velero-cloud-credentials",
 	}
 	if name, ok := overrides[service]; ok {
 		return name

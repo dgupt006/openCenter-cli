@@ -731,8 +731,10 @@ CLUSTER_NAME="e2e-${CI_RUN_ID}"
 bin/opencenter cluster init "$CLUSTER_NAME" --org ci --type openstack --force \
   --config-file testdata/e2e/openstack-e2e.yaml
 
-# 3. Discover OpenStack resources
-bin/opencenter cluster sync openstack "ci/$CLUSTER_NAME" \
+# 3. Plan and apply typed OpenStack provider settings
+bin/opencenter cluster provider openstack plan "ci/$CLUSTER_NAME" \
+  --os-cloud ci
+bin/opencenter cluster provider openstack apply "ci/$CLUSTER_NAME" \
   --os-cloud ci --yes
 
 # 4. Validate (online mode contacts OpenStack APIs)
@@ -828,7 +830,9 @@ jobs:
             --org ci --type openstack --force \
             --config-file testdata/e2e/openstack-e2e.yaml
 
-          bin/opencenter cluster sync openstack "$CLUSTER_ID" \
+          bin/opencenter cluster provider openstack plan "$CLUSTER_ID" \
+            --os-cloud "$OS_CLOUD"
+          bin/opencenter cluster provider openstack apply "$CLUSTER_ID" \
             --os-cloud "$OS_CLOUD" --yes
 
           bin/opencenter cluster validate "$CLUSTER_ID" --validation online
