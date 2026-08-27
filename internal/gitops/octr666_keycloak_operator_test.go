@@ -122,6 +122,24 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse %s: %v", fluxPath, err)
 	}
+
+	// Validate keycloak-namespace stage exists and keycloak-postgres depends on it (OCTR-673).
+	namespaceStage := findFluxKustomization(t, fluxDocs, "keycloak-namespace")
+	if namespaceStage == nil {
+		t.Fatalf("keycloak-namespace Kustomization not found in %s", fluxPath)
+	}
+	postgresStage := findFluxKustomization(t, fluxDocs, "keycloak-postgres")
+	if !hasFluxDependency(t, postgresStage, "keycloak-namespace") {
+		t.Fatalf("keycloak-postgres must depend on keycloak-namespace")
+	}
+
+	// Verify the namespace resource file exists.
+	nsPath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "keycloak", "namespace", "namespace.yaml")
+	nsContent := mustReadFile(t, nsPath)
+	if !strings.Contains(nsContent, "name: keycloak") {
+		t.Errorf("namespace.yaml does not define namespace 'keycloak': %s", nsContent)
+	}
+
 	operatorStage := findFluxKustomization(t, fluxDocs, "keycloak-operator")
 	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "olm-base", "keycloak-postgres")
 	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "operators" {
