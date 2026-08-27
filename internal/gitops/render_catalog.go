@@ -25,6 +25,7 @@ type RenderSpec struct {
 	SingleStage             bool
 	BaseOnly                bool
 	OmitTargetNamespace     bool
+	PrivilegedNamespace     bool
 	HasOverrideValues       bool
 	NamespaceStage          bool
 	KustomizationName       string
@@ -144,6 +145,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		},
 		{
 			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true, NamespaceStage: true,
+			PrivilegedNamespace: true,
 			SourceName: "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
 			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources", "openstack-csi-namespace"},
 			OverrideValuesRenderer: templateRenderer(openstackCSITemplate),

@@ -40,6 +40,7 @@ type autoServiceContext struct {
 	BaseOnly               bool
 	PostBaseStages         []postBaseStageSpec
 	OmitTargetNamespace    bool
+	PrivilegedNamespace    bool
 	KustomizationName      string
 	HasOverrideValues      bool
 	NamespaceStage         bool
@@ -226,6 +227,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		BaseOnly:               spec.BaseOnly,
 		PostBaseStages:         append([]postBaseStageSpec{}, spec.PostBaseStages...),
 		OmitTargetNamespace:    spec.OmitTargetNamespace,
+		PrivilegedNamespace:    spec.PrivilegedNamespace,
 		KustomizationName:      kustomizationName(serviceName, spec.KustomizationName),
 		HasOverrideValues:      spec.HasOverrideValues,
 		NamespaceStage:         spec.NamespaceStage,
@@ -758,4 +760,8 @@ const autoNamespaceResourceTemplate = `apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Namespace }}
+{{- if .PrivilegedNamespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+{{- end }}
 `

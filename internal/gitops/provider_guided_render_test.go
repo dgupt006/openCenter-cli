@@ -657,6 +657,23 @@ func TestRenderClusterAppsOpenStackCSINamespace(t *testing.T) {
 	if svc.Namespace != "openstack-csi" {
 		t.Fatalf("expected openstack-csi service namespace to be 'openstack-csi', got %q", svc.Namespace)
 	}
+
+	// The namespace resource must carry the privileged pod-security label (OCTR-670).
+	nsPath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "openstack-csi", "namespace", "namespace.yaml")
+	nsDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, nsPath)))
+	if err != nil {
+		t.Fatalf("parse %s: %v", nsPath, err)
+	}
+	if len(nsDocs) != 1 {
+		t.Fatalf("expected 1 document in namespace.yaml, got %d", len(nsDocs))
+	}
+	labels, _ := nestedValue(nsDocs[0], "metadata", "labels").(map[string]any)
+	if labels == nil {
+		t.Fatalf("namespace.yaml has no metadata.labels")
+	}
+	if got := labels["pod-security.kubernetes.io/enforce"]; got != "privileged" {
+		t.Errorf("pod-security.kubernetes.io/enforce = %v, want \"privileged\"", got)
+	}
 }
 
 func TestRenderClusterAppsOpenStackCSIStagesAndSecretSettings(t *testing.T) {
