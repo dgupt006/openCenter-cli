@@ -81,14 +81,14 @@ spec:
     name: opencenter-keycloak-config
     namespace: flux-system
   path: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/keycloak/10-operator
-  targetNamespace: operators
+  targetNamespace: keycloak-operator
   prune: true
   wait: true
   healthChecks:
     - apiVersion: apps/v1
       kind: Deployment
       name: keycloak-operator
-      namespace: operators
+      namespace: keycloak-operator
   commonMetadata:
     labels:
       app.kubernetes.io/part-of: keycloak

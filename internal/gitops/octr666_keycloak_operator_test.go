@@ -47,12 +47,12 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 	if got := og["kind"]; got != "OperatorGroup" {
 		t.Errorf("OperatorGroup kind = %#v, want OperatorGroup", got)
 	}
-	if got := nestedString(og, "metadata", "namespace"); got != "operators" {
-		t.Errorf("OperatorGroup namespace = %q, want operators", got)
+	if got := nestedString(og, "metadata", "namespace"); got != "keycloak-operator" {
+		t.Errorf("OperatorGroup namespace = %q, want keycloak-operator", got)
 	}
 	targetNamespaces, ok := nestedValue(og, "spec", "targetNamespaces").([]any)
-	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "operators" {
-		t.Errorf("OperatorGroup targetNamespaces = %#v, want [operators]", targetNamespaces)
+	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "keycloak-operator" {
+		t.Errorf("OperatorGroup targetNamespaces = %#v, want [keycloak-operator]", targetNamespaces)
 	}
 
 	subscriptionPath := filepath.Join(operatorDir, "patch-subscription.yaml")
@@ -74,8 +74,8 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 	if got := nestedString(subscription, "metadata", "name"); got != "keycloak-operator" {
 		t.Errorf("Subscription metadata.name = %q, want keycloak-operator", got)
 	}
-	if got := nestedString(subscription, "metadata", "namespace"); got != "operators" {
-		t.Errorf("Subscription metadata.namespace = %q, want operators", got)
+	if got := nestedString(subscription, "metadata", "namespace"); got != "keycloak-operator" {
+		t.Errorf("Subscription metadata.namespace = %q, want keycloak-operator", got)
 	}
 	for field, want := range map[string]string{
 		"name":                "keycloak-operator",
@@ -142,8 +142,8 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 
 	operatorStage := findFluxKustomization(t, fluxDocs, "keycloak-operator")
 	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "olm-base", "keycloak-postgres")
-	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "operators" {
-		t.Errorf("keycloak-operator targetNamespace = %q, want operators", got)
+	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "keycloak-operator" {
+		t.Errorf("keycloak-operator targetNamespace = %q, want keycloak-operator", got)
 	}
 	healthChecks, ok := nestedValue(operatorStage, "spec", "healthChecks").([]any)
 	if !ok || len(healthChecks) != 1 {
@@ -157,7 +157,7 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"name":       "keycloak-operator",
-		"namespace":  "operators",
+		"namespace":  "keycloak-operator",
 	} {
 		if got := healthCheck[field]; got != want {
 			t.Errorf("keycloak-operator health check %s = %#v, want %q", field, got, want)
