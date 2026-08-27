@@ -4,6 +4,7 @@ golangci-lint = "2.11.4"
 kubectl = "latest"
 kind = "latest"
 helm = "latest"
+sops = "3.13.3"
 "go:golang.org/x/vuln/cmd/govulncheck" = "latest"
 "aqua:gitleaks/gitleaks" = "latest"
 

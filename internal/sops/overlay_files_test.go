@@ -2,6 +2,7 @@ package sops
 
 import (
 	"context"
+	stderrors "errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,8 @@ func TestEncryptServiceOverrideValuesEncryptsSensitiveOverrideValues(t *testing.
 }
 
 func TestEncryptServiceOverrideValuesOnlyEncryptsSelectedOverrides(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
 	tmpDir := t.TempDir()
 	overlayPath := filepath.Join(tmpDir, "overlay")
 	cfg := newSOPSTestConfig("service-overrides", "vsphere", "")
@@ -133,6 +136,8 @@ func (recordingKeyManager) LoadAgeKey(string) (*crypto.AgeKeyPair, error) {
 }
 
 func TestEncryptOverlayFilesConfiguredKeyFailureIsFailClosed(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
 	tmpDir := t.TempDir()
 	cfg := newSOPSTestConfig("configured-key-failure", "baremetal", filepath.Join(tmpDir, "missing-age-key.txt"))
 	manager := NewSOPSManager()
@@ -270,5 +275,85 @@ func TestServiceOverrideValuesFilesToEncrypt(t *testing.T) {
 				t.Fatalf("serviceOverrideValuesFilesToEncrypt() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEncryptOverlayFiles_MissingSOPSBinaryPreservesStructuredError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	tmpDir := t.TempDir()
+	overlayPath := filepath.Join(tmpDir, "overlay")
+	filePath := filepath.Join(overlayPath, "flux-system", "gotk-sync.yaml")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("create overlay directory: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("secret: plaintext\n"), 0o644); err != nil {
+		t.Fatalf("write overlay file: %v", err)
+	}
+
+	manager := NewDefaultSOPSManager(recordingKeyManager{}, NewDefaultEncryptor(nil, nil), nil)
+	err := manager.EncryptOverlayFiles(context.Background(), overlayPath, newSOPSTestConfig("missing-sops", "baremetal", ""))
+	if err == nil {
+		t.Fatal("EncryptOverlayFiles() returned nil with SOPS hidden from PATH")
+	}
+
+	structured, ok := err.(*utilerrors.StructuredError)
+	if !ok {
+		t.Fatalf("EncryptOverlayFiles() error type = %T, want *StructuredError", err)
+	}
+	if structured.Message != "sops binary not found on PATH" {
+		t.Fatalf("EncryptOverlayFiles() message = %q, want missing-binary message", structured.Message)
+	}
+	if structured.Field != filePath {
+		t.Fatalf("EncryptOverlayFiles() field = %q, want %q", structured.Field, filePath)
+	}
+	if !stderrors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("EncryptOverlayFiles() error = %v, want errors.Is(err, exec.ErrNotFound)", err)
+	}
+}
+
+func TestEncryptOverlayFiles_NoEligibleFilesIsNoOp(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	tmpDir := t.TempDir()
+	manager := NewDefaultSOPSManager(
+		recordingKeyManager{},
+		NewDefaultEncryptor(nil, nil),
+		nil,
+	)
+
+	if err := manager.EncryptOverlayFiles(context.Background(), filepath.Join(tmpDir, "overlay"), newSOPSTestConfig("no-files", "baremetal", "")); err != nil {
+		t.Fatalf("EncryptOverlayFiles() with no eligible files = %v, want nil", err)
+	}
+}
+
+func TestEncryptOverlayFiles_NoKeysBeforeSOPSLookup(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	tmpDir := t.TempDir()
+	overlayPath := filepath.Join(tmpDir, "overlay")
+	filePath := filepath.Join(overlayPath, "flux-system", "gotk-sync.yaml")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("create overlay directory: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("secret: plaintext\n"), 0o644); err != nil {
+		t.Fatalf("write overlay file: %v", err)
+	}
+
+	manager := NewDefaultSOPSManager(
+		crypto.NewDefaultKeyManager(filepath.Join(tmpDir, "keys")),
+		NewDefaultEncryptor(nil, nil),
+		nil,
+	)
+	err := manager.EncryptOverlayFiles(context.Background(), overlayPath, newSOPSTestConfig("no-keys", "baremetal", ""))
+	if err == nil {
+		t.Fatal("EncryptOverlayFiles() returned nil without encryption keys")
+	}
+	structured, ok := err.(*utilerrors.StructuredError)
+	if !ok {
+		t.Fatalf("EncryptOverlayFiles() error type = %T, want *StructuredError", err)
+	}
+	if structured.Message != "No age encryption keys available" {
+		t.Fatalf("EncryptOverlayFiles() message = %q, want no-keys message", structured.Message)
 	}
 }

@@ -18,10 +18,14 @@ package sops
 
 import (
 	"context"
+	stderrors "errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	utilerrors "github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 )
 
 func TestDefaultEncryptor_IsFileEncrypted(t *testing.T) {
@@ -214,5 +218,47 @@ func TestCheckSOPSVersion(t *testing.T) {
 		t.Logf("checkSOPSVersion() failed as expected in test environment: %v", err)
 	} else {
 		t.Logf("SOPS version: %s", version)
+	}
+}
+
+func TestDefaultEncryptor_EncryptFile_MissingSOPSBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	filePath := filepath.Join(t.TempDir(), "secret.yaml")
+	if err := os.WriteFile(filePath, []byte("secret: plaintext\n"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	err := NewDefaultEncryptor(nil, nil).EncryptFile(context.Background(), filePath, EncryptionConfig{
+		AgeKeys: []string{"age1fixture"},
+		InPlace: true,
+	})
+	if err == nil {
+		t.Fatal("EncryptFile() returned nil with SOPS hidden from PATH")
+	}
+
+	structured, ok := err.(*utilerrors.StructuredError)
+	if !ok {
+		t.Fatalf("EncryptFile() error type = %T, want *StructuredError", err)
+	}
+	if structured.Type != utilerrors.SOPSError {
+		t.Fatalf("EncryptFile() error type = %q, want %q", structured.Type, utilerrors.SOPSError)
+	}
+	if structured.Field != filePath {
+		t.Fatalf("EncryptFile() error field = %q, want %q", structured.Field, filePath)
+	}
+	if structured.Message != "sops binary not found on PATH" {
+		t.Fatalf("EncryptFile() message = %q, want exact missing-binary message", structured.Message)
+	}
+	if structured.Cause == nil || !stderrors.Is(structured.Cause, exec.ErrNotFound) {
+		t.Fatalf("EncryptFile() cause = %v, want an error matching exec.ErrNotFound", structured.Cause)
+	}
+	if !stderrors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("EncryptFile() error = %v, want errors.Is(err, exec.ErrNotFound)", err)
+	}
+
+	suggestions := strings.Join(structured.Suggestions, "\n")
+	if !strings.Contains(suggestions, "Install SOPS") || !strings.Contains(suggestions, "command -v sops") {
+		t.Fatalf("EncryptFile() suggestions = %v, want install and command -v guidance", structured.Suggestions)
 	}
 }

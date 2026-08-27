@@ -18,9 +18,11 @@ package sops
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -222,6 +224,9 @@ func (m *DefaultSOPSManager) encryptFiles(ctx context.Context, overlayPath strin
 		filePath := existingFiles[0]
 		m.logger.Info("Encrypting file", "file", filePath)
 		if err := m.encryptor.EncryptFile(ctx, filePath, encryptConfig); err != nil {
+			if stderrors.Is(err, exec.ErrNotFound) {
+				return err
+			}
 			return &errors.StructuredError{
 				Type:    errors.SOPSError,
 				Field:   filePath,

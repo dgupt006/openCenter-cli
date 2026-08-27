@@ -18,6 +18,7 @@ package sops
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -134,6 +135,19 @@ func (e *DefaultEncryptor) EncryptFile(ctx context.Context, filePath string, con
 	}
 
 	if err := cmd.Run(); err != nil {
+		if stderrors.Is(err, exec.ErrNotFound) {
+			return &errors.StructuredError{
+				Type:    errors.SOPSError,
+				Field:   filePath,
+				Message: "sops binary not found on PATH",
+				Cause:   err,
+				Suggestions: []string{
+					"Install SOPS: https://getsops.io/docs/#download",
+					"Check that SOPS is on PATH: command -v sops",
+				},
+			}
+		}
+
 		stderrOutput := strings.TrimSpace(stderrBuf.String())
 
 		// Build a diagnostic message with the actual sops output
