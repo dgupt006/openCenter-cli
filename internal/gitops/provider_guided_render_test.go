@@ -746,7 +746,7 @@ func TestRenderClusterAppsOpenStackCSIStagesAndSecretSettings(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s has no secret map: %#v", overridePath, overrideDocs[0])
 	}
-	for field, expected := range map[string]bool{"enabled": true, "hostMount": true, "create": false} {
+	for field, expected := range map[string]bool{"enabled": true, "hostMount": false, "create": true} {
 		actual, ok := secret[field].(bool)
 		if !ok || actual != expected {
 			t.Errorf("%s secret.%s = %#v, want %t", overridePath, field, secret[field], expected)

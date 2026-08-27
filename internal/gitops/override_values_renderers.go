@@ -63,8 +63,8 @@ const openstackCCMTemplate = `cloudConfig:
 
 const openstackCSITemplate = `secret:
   enabled: true
-  hostMount: true
-  create: false
+  hostMount: false
+  create: true
   filename: cloud.conf
   name: cinder-csi-cloud-config
   data:
