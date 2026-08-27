@@ -259,6 +259,8 @@ extraObjects:
 const lokiTemplate = `{{- $loki := index .OpenCenter.Services "loki" -}}
 {{- $storageType := $loki.StorageType | default "s3" -}}
 {{- $bucketName := $loki.BucketName | default (printf "%s-loki" .OpenCenter.Meta.Name) -}}
+global:
+    dnsService: coredns
 loki:
     storage:
         bucketNames:
@@ -290,6 +292,15 @@ loki:
             backoff_config: {}
             disable_dualstack: false
 {{- end }}
+    schemaConfig:
+        configs:
+            - from: "2024-04-01"
+              store: tsdb
+              object_store: {{ $storageType }}
+              schema: v13
+              index:
+                  prefix: loki_index_
+                  period: 24h
 `
 
 const tempoTemplate = `{{- $tempo := index .OpenCenter.Services "tempo" -}}

@@ -137,6 +137,14 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 	if !strings.Contains(overrideValues, "container_name: loki-container") {
 		t.Fatalf("expected swift container name in Loki values:\n%s", overrideValues)
 	}
+	// OCTR-674: schemaConfig.object_store must match storage type.
+	if !strings.Contains(overrideValues, "object_store: swift") {
+		t.Fatalf("expected schemaConfig object_store: swift in Loki values:\n%s", overrideValues)
+	}
+	// OCTR-674: global.dnsService must be set to coredns.
+	if !strings.Contains(overrideValues, "dnsService: coredns") {
+		t.Fatalf("expected global.dnsService: coredns in Loki values:\n%s", overrideValues)
+	}
 }
 
 func TestRenderClusterAppsTempoSwift(t *testing.T) {
