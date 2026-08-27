@@ -256,12 +256,11 @@ Feature: Cluster use, listing, and inspection
     And stdout should contain "Active cluster: cluster-b"
 
   # ---------------------------------------------------------------------------
-  # Preflight / Doctor
+  # Local doctor audit
   # ---------------------------------------------------------------------------
 
   @preflight
-  Scenario: Preflight runs for the selected cluster
-    Given I run "opencenter cluster use dev --config-dir <<tmp>>/conf"
-    And the exit code should be 0
+  Scenario: Doctor audits local binaries without a selected cluster
     When I run "opencenter cluster doctor --config-dir <<tmp>>/conf"
-    Then stdout should contain "Doctor checks complete."
+    Then stdout should contain "BINARY"
+    And stdout should contain "RESULT:"

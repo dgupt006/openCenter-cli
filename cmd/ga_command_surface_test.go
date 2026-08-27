@@ -168,12 +168,13 @@ func TestGAClusterParentHelpShowsWorkflowAndGAExamples(t *testing.T) {
      opencenter cluster init prod --org acme
   2. Complete provider-specific settings
      opencenter cluster configure acme/prod
-  3. Validate config and prerequisites
+  3. Audit local prerequisites (independent of cluster configuration)
+     opencenter cluster doctor
+  4. Validate cluster configuration
      opencenter cluster validate acme/prod
-     opencenter cluster doctor acme/prod
-  4. Generate GitOps assets
+  5. Generate GitOps assets
      opencenter cluster generate acme/prod
-  5. Deploy the cluster
+  6. Deploy the cluster
      opencenter cluster deploy acme/prod`
 	if !strings.Contains(help, expectedWorkflow) {
 		t.Fatalf("expected GA workflow block in cluster help, got:\n%s", help)

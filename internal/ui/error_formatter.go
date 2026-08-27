@@ -516,7 +516,7 @@ func (f *DefaultErrorFormatter) initializeErrorRegistry() {
 		Description: "An error occurred while communicating with the OpenStack API.",
 		Fix:         "Verify OpenStack credentials and connectivity:",
 		FixCommand:  "openstack server list",
-		Hint:        "Run preflight checks: opencenter cluster doctor {cluster}",
+		Hint:        "Run the local prerequisite audit: opencenter cluster doctor",
 		DocsURL:     "https://docs.opencenter.cloud/errors/E5001",
 		Severity:    SeverityCritical,
 	}

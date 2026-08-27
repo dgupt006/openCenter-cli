@@ -9,10 +9,19 @@ tags: [reference]
 ---
 ## opencenter cluster doctor
 
-Check local tools, credentials, and provider readiness
+Audit local executable prerequisites
+
+### Synopsis
+
+Audit the local host's required executables without loading cluster configuration,
+resolving an active cluster, contacting a provider, or changing state.
+
+The audit checks a fixed all-provider catalog. tofu or terraform satisfies the
+OpenTofu row, and podman or docker satisfies the container row. The openstack
+CLI and external age executable are intentionally not checked.
 
 ```
-opencenter cluster doctor [name] [flags]
+opencenter cluster doctor [flags]
 ```
 
 ### Options

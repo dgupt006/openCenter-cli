@@ -110,7 +110,9 @@ func (Config) JSONSchema() *jsonschema.Schema {
 }
 ```
 
-## Step 3: Implement Preflight Checks
+## Step 3: Implement Provider Bootstrap Preflight Checks
+
+Provider-specific credential and connectivity checks belong to the provider's deployment/bootstrap path, not to `opencenter cluster doctor`. The doctor command is a fixed, cluster-independent local binary audit: it checks `git`, `kubectl`, `helm`, `flux`, `sops`, `tofu|terraform`, `kind`, `podman|docker`, `ssh`, `ssh-keyscan`, and `ssh-keygen`; it excludes `openstack` and external `age`, and returns exit code 1 when rows are missing.
 
 Create `internal/cloud/mycloud/preflight.go`:
 
@@ -431,12 +433,10 @@ Feature: MyCloud Provider Support
     And the configuration should have provider "mycloud"
     And the configuration should have mycloud.region "us-east-1"
 
-  Scenario: Validate MyCloud credentials
-    Given I have a cluster configuration with provider "mycloud"
-    And I have set mycloud.api_key to "invalid-key"
-    When I run "opencenter cluster doctor test"
-    Then the command should fail
-    And the error should contain "authentication failed"
+  Scenario: Audit local prerequisites
+    When I run "opencenter cluster doctor"
+    Then stdout should contain "BINARY"
+    And stdout should contain "RESULT:"
 ```
 
 ## Step 8: Update Documentation
@@ -531,7 +531,7 @@ opencenter cluster set prod \
 
 ```bash
 opencenter cluster validate prod
-opencenter cluster doctor prod
+opencenter cluster doctor
 ```
 
 ## Step 5: Deploy Cluster
@@ -557,9 +557,8 @@ mise run build
 # Validate
 ./bin/opencenter cluster validate mycloud-test
 
-# Run preflight (requires real credentials)
-export MYCLOUD_API_KEY="your-test-key"
-./bin/opencenter cluster doctor mycloud-test
+# Run the cluster-independent local binary audit (no provider credentials required)
+./bin/opencenter cluster doctor
 
 # Generate infrastructure
 ./bin/opencenter cluster generate mycloud-test

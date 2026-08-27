@@ -168,9 +168,9 @@ This is the authoritative, append-only execution record for the current checkout
 
 - **Objective:** Verify prerequisites through the generated CLI.
 - **Preconditions:** D01 complete.
-- **Exact CLI command:** `./bin/opencenter cluster doctor <resolved-cluster>` with supported flags.
+- **Exact CLI command:** `./bin/opencenter cluster doctor` for the cluster-independent local binary audit.
 - **Supporting evidence:** Generated CLI help and doctor implementation.
-- **Expected result:** Exit 0 and provider prerequisites pass.
+- **Expected result:** Exit 0 and every catalog row is present.
 - **Validation gate:** No failed mandatory check.
 - **Recovery procedure:** Use generated-CLI diagnostics; fix a CLI defect through tests and `mise` rebuild if it cannot express a required check.
 - **Status:** NOT STARTED

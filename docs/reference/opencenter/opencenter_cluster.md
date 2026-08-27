@@ -24,12 +24,13 @@ Common Workflow:
      opencenter cluster init prod --org acme
   2. Complete provider-specific settings
      opencenter cluster configure acme/prod
-  3. Validate config and prerequisites
+  3. Audit local prerequisites (independent of cluster configuration)
+     opencenter cluster doctor
+  4. Validate cluster configuration
      opencenter cluster validate acme/prod
-     opencenter cluster doctor acme/prod
-  4. Generate GitOps assets
+  5. Generate GitOps assets
      opencenter cluster generate acme/prod
-  5. Deploy the cluster
+  6. Deploy the cluster
      opencenter cluster deploy acme/prod
 
 Configuration files are stored in organization-based directories:
@@ -87,7 +88,7 @@ opencenter cluster [flags]
 * [opencenter cluster deploy](opencenter_cluster_deploy.md)	 - Deploy a cluster from its openCenter configuration
 * [opencenter cluster describe](opencenter_cluster_describe.md)	 - Describe cluster configuration, paths, locks, and state
 * [opencenter cluster destroy](opencenter_cluster_destroy.md)	 - Destroy a cluster
-* [opencenter cluster doctor](opencenter_cluster_doctor.md)	 - Check local tools, credentials, and provider readiness
+* [opencenter cluster doctor](opencenter_cluster_doctor.md)	 - Audit local executable prerequisites
 * [opencenter cluster drift](opencenter_cluster_drift.md)	 - Detect and reconcile infrastructure drift
 * [opencenter cluster edit](opencenter_cluster_edit.md)	 - Edit a cluster configuration in your preferred editor
 * [opencenter cluster env](opencenter_cluster_env.md)	 - Export cluster environment variables

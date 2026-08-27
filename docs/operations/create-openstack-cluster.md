@@ -360,17 +360,16 @@ Run `opencenter cluster validate` after changing services to catch missing requi
 
 For the full configuration options per service, see the [Platform Services Reference](../reference/platform-services.md).
 
-### 5. Run preflight checks and validate the config
+### 5. Audit local prerequisites and validate the config
 
 ```bash
-opencenter cluster doctor prod-cluster
+opencenter cluster doctor
 opencenter cluster validate prod-cluster
 ```
 
-Current behavior is worth knowing:
+`cluster doctor` is a cluster-independent, read-only host audit. It checks the fixed ordered catalog `git`, `kubectl`, `helm`, `flux`, `sops`, `tofu|terraform`, `kind`, `podman|docker`, `ssh`, `ssh-keyscan`, and `ssh-keygen`. Each row is `PRESENT` or `MISSING`; either executable satisfies a grouped row. It does not load cluster configuration, resolve an active cluster, run provider or network checks, or check the `openstack` CLI or external `age` executable. Missing rows produce exit code 1; use `--output json` or `--output yaml` for the complete structured report.
 
-* `cluster doctor` checks that `git` and `kubectl` are on `PATH`. For OpenStack clusters, it also checks for the `openstack` CLI and warns if `auth_url` is empty. Talos deployment support uses native Go APIs instead of `talosctl`.
-* `cluster validate` validates the v2 config shape and required provider fields such as `project_id`, `image_id`, and `network_id`. It performs schema validation, required field validation, and cross-field dependency validation.
+`cluster validate` validates the v2 config shape and required provider fields such as `project_id`, `image_id`, and `network_id`. It performs schema validation, required field validation, and cross-field dependency validation.
 
 Additional `cluster validate` flags:
 
@@ -382,7 +381,7 @@ Additional `cluster validate` flags:
 | `--generate-debug-config` | Generate a complete config for debugging |
 | `--output-dir` | Directory to save debug config (defaults to current directory) |
 
-`cluster doctor` does **not** authenticate to Keystone, so keep using the OpenStack CLI for the real connectivity check:
+The local doctor audit does not authenticate to Keystone. Use the OpenStack CLI for the real connectivity check:
 
 ```bash
 openstack token issue

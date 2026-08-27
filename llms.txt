@@ -39,7 +39,7 @@ Use an explicit `organization/cluster` identifier where possible.
 opencenter cluster init <name> --org <organization>
 opencenter cluster configure <organization>/<cluster>
 opencenter cluster validate <organization>/<cluster>
-opencenter cluster doctor <organization>/<cluster>
+opencenter cluster doctor
 opencenter cluster generate <organization>/<cluster>
 opencenter cluster deploy <organization>/<cluster>
 opencenter cluster destroy <organization>/<cluster>

@@ -18,6 +18,6 @@ This package contains functions for performing preflight checks and other operat
 
 # When to use
 
-This package is used internally by opencenter to ensure that the environment is correctly configured for OpenStack. It is invoked as part of the `cluster doctor` command.
+This package is used internally by opencenter for OpenStack discovery, storage, and bootstrap validation. Its bootstrap preflight helper is not part of the cluster-independent `cluster doctor` command.
 */
 package openstack

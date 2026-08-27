@@ -16,56 +16,128 @@ package cmd
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
-	"github.com/opencenter-cloud/opencenter-cli/internal/cloud/openstack"
-	"github.com/opencenter-cloud/opencenter-cli/internal/config"
-	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/spf13/cobra"
 )
 
+type doctorExecutableLookup func(string) (string, error)
+
+type doctorBinaryCheck struct {
+	binary     string
+	candidates []string
+}
+
+type doctorCheckResult struct {
+	Binary string `json:"binary" yaml:"binary"`
+	Status string `json:"status" yaml:"status"`
+}
+
+type doctorReport struct {
+	Status  string              `json:"status" yaml:"status"`
+	Present int                 `json:"present" yaml:"present"`
+	Missing int                 `json:"missing" yaml:"missing"`
+	Checks  []doctorCheckResult `json:"checks" yaml:"checks"`
+}
+
+var doctorBinaryCatalog = []doctorBinaryCheck{
+	{binary: "git", candidates: []string{"git"}},
+	{binary: "kubectl", candidates: []string{"kubectl"}},
+	{binary: "helm", candidates: []string{"helm"}},
+	{binary: "flux", candidates: []string{"flux"}},
+	{binary: "sops", candidates: []string{"sops"}},
+	{binary: "tofu|terraform", candidates: []string{"tofu", "terraform"}},
+	{binary: "kind", candidates: []string{"kind"}},
+	{binary: "podman|docker", candidates: []string{"podman", "docker"}},
+	{binary: "ssh", candidates: []string{"ssh"}},
+	{binary: "ssh-keyscan", candidates: []string{"ssh-keyscan"}},
+	{binary: "ssh-keygen", candidates: []string{"ssh-keygen"}},
+}
+
 func newClusterDoctorCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "doctor [name]",
-		Short: "Check local tools, credentials, and provider readiness",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			// Resolve cluster name from args or active cluster
-			name, err := resolveClusterNameForCommand(cmd, args, true)
-			if err != nil {
+	return newClusterDoctorCmdWithLookup(exec.LookPath)
+}
+
+func newClusterDoctorCmdWithLookup(lookup doctorExecutableLookup) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Audit local executable prerequisites",
+		Long: `Audit the local host's required executables without loading cluster configuration,
+resolving an active cluster, contacting a provider, or changing state.
+
+The audit checks a fixed all-provider catalog. tofu or terraform satisfies the
+OpenTofu row, and podman or docker satisfies the container row. The openstack
+CLI and external age executable are intentionally not checked.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts := getGlobalOptions(cmd)
+			if opts.Output == "" {
+				opts.Output = OutputText
+			}
+			report := runClusterDoctor(lookup)
+
+			if opts.Output == OutputText {
+				writeClusterDoctorText(cmd, report, opts.Quiet)
+			} else if err := writeStructuredOutput(cmd, opts.Output, report); err != nil {
 				return err
-			}
-			cfg, err := loadConfig(ctx, name)
-			if err != nil {
-				return err
-			}
-			// Tools: git, kubectl
-			check := func(bin string) string {
-				if _, err := exec.LookPath(bin); err == nil {
-					return "OK"
-				}
-				return "MISSING"
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "git: %s\n", check("git"))
-			fmt.Fprintf(cmd.OutOrStdout(), "kubectl: %s\n", check("kubectl"))
-			// Provider-specific checks
-			switch cfg.OpenCenter.Infrastructure.Provider {
-			case "openstack", "":
-				messages := openstack.PreflightOpenStack(cfg.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL)
-				for _, m := range messages {
-					fmt.Fprintln(cmd.OutOrStdout(), m)
-				}
-			default:
-				// Unknown provider; no checks
-			}
-			// Update stage and status
-			if err := config.UpdateStatus(name, v2.StagePreflight, v2.StatusSuccess); err != nil {
-				// Don't fail the command if status update fails, just warn
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to update cluster status: %v\n", err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Doctor checks complete.")
+			if report.Missing > 0 {
+				return NewExitError(1, "cluster doctor found missing binaries", nil)
+			}
 			return nil
 		},
 	}
+	markReadOnlyCommand(cmd)
+	return cmd
+}
+
+func runClusterDoctor(lookup doctorExecutableLookup) doctorReport {
+	report := doctorReport{Checks: make([]doctorCheckResult, 0, len(doctorBinaryCatalog))}
+	for _, check := range doctorBinaryCatalog {
+		status := "missing"
+		for _, candidate := range check.candidates {
+			if _, err := lookup(candidate); err == nil {
+				status = "present"
+				break
+			}
+		}
+		report.Checks = append(report.Checks, doctorCheckResult{Binary: check.binary, Status: status})
+		if status == "present" {
+			report.Present++
+		} else {
+			report.Missing++
+		}
+	}
+	if report.Missing == 0 {
+		report.Status = "present"
+	} else {
+		report.Status = "missing"
+	}
+	return report
+}
+
+func writeClusterDoctorText(cmd *cobra.Command, report doctorReport, quiet bool) {
+	result := doctorResultText(report)
+	if quiet {
+		fmt.Fprintln(cmd.OutOrStdout(), result)
+		return
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "BINARY             STATUS")
+	for _, check := range report.Checks {
+		fmt.Fprintf(cmd.OutOrStdout(), "%-18s %s\n", check.Binary, strings.ToUpper(check.Status))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", result)
+}
+
+func doctorResultText(report doctorReport) string {
+	if report.Missing == 0 {
+		return "RESULT: ALL BINARIES PRESENT"
+	}
+	word := "BINARY"
+	if report.Missing != 1 {
+		word = "BINARIES"
+	}
+	return fmt.Sprintf("RESULT: MISSING %d %s", report.Missing, word)
 }

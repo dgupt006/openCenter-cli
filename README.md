@@ -110,7 +110,7 @@ opencenter cluster use <name>                  # Set active cluster
 opencenter cluster active                      # Show active cluster
 opencenter cluster status <name>               # Show cluster status
 opencenter cluster describe <name>             # Detailed cluster description
-opencenter cluster doctor <name>               # Check tools and readiness
+opencenter cluster doctor                    # Audit local prerequisite binaries
 
 # Configuration
 opencenter cluster set <name> <path=value>     # Update configuration value

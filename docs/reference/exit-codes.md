@@ -78,6 +78,16 @@ echo $?  # Output: 1
 **📌 NOTE**\
 Most error conditions currently return exit code 1. Use `--output json` on supported commands to get structured error details for programmatic handling.
 
+### Cluster doctor missing binaries
+
+`opencenter cluster doctor` is a local, cluster-independent audit. It returns exit code `1` when one or more catalog rows are missing, after rendering the complete text, JSON, or YAML report. The audit does not load configuration or contact a provider.
+
+```bash
+opencenter cluster doctor --output json
+code=$?
+# code is 0 when all rows are present, otherwise 1
+```
+
 ### 3 - Configuration Not Found
 
 The specified cluster configuration does not exist.
