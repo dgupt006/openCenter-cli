@@ -1,268 +1,153 @@
-# opencenter
+# openCenter CLI
 
-> opencenter is a configuration-first CLI for Kubernetes cluster configuration, GitOps repository generation, deployment, validation, and SOPS-backed secret workflows.
+> openCenter CLI turns a declarative Kubernetes cluster configuration into validated GitOps assets and provider-specific lifecycle operations. It supports OpenStack, VMware, Baremetal, and Kind as the current infrastructure providers, with SOPS/Age secrets handling, Flux-oriented repository generation, import tooling, drift/backup operations, and resumable bootstrap.
 
-## Current GA Command Surface
+This file is a concise navigation guide for code-oriented readers and language models. It is curated documentation, not an automatically generated artifact. Exact command flags belong to the command reference and generated per-command pages.
 
-Use this file as a compact command reference for language-model consumers. The generated Cobra reference in `docs/reference/opencenter/` is the source of truth for exact flags.
+## Start here
 
-### Global Flags
+- [Documentation home](docs/index.md) — lifecycle-oriented documentation index.
+- [Documentation README](docs/README.md) — repository layout, frontmatter, editing rules, and site map.
+- [Project README](README.md) — project summary, quick start, and common workflows.
+- [CLI commands reference](docs/reference/cli-commands.md) — current built-in command groups and global flags.
+- [Configuration schema](docs/reference/configuration-schema.md) — schema `2.0`, fields, and validation rules.
+- [Infrastructure providers](docs/reference/providers.md) — current provider capability boundaries.
+- [File locations](docs/reference/file-locations.md) — config, state, cache, secrets, and GitOps paths.
 
-These root flags are available where they make sense:
+## Architecture maps
+
+The CODEMAPS are concise architecture explanations for contributors and maintainers. Read the index first; all maps are included here deliberately.
+
+- [CODEMAPS index](docs/CODEMAPS/INDEX.md)
+- [CLI commands map](docs/CODEMAPS/cli-commands.md)
+- [Cluster lifecycle map](docs/CODEMAPS/cluster-lifecycle.md)
+- [Configuration system map](docs/CODEMAPS/config-system.md)
+- [DI container map](docs/CODEMAPS/di-container.md)
+- [GitOps engine map](docs/CODEMAPS/gitops-engine.md)
+- [Providers map](docs/CODEMAPS/providers.md)
+- [Secrets management map](docs/CODEMAPS/secrets-management.md)
+- [Rendering ownership and secret artifacts map](docs/CODEMAPS/rendering-ownership-and-secret-artifacts.md)
+- [Runtime extensions and local development map](docs/CODEMAPS/runtime-extensions-and-local-development.md)
+- [Import, operations, and resilience map](docs/CODEMAPS/import-operations-and-resilience.md)
+
+## Verified command capabilities
+
+Use an explicit `organization/cluster` identifier where possible.
 
 ```bash
-opencenter --config-dir ~/.config/opencenter --log-level info --output json cluster list
-opencenter --quiet cluster active
-opencenter --dry-run cluster generate my-cluster
-opencenter --yes cluster destroy my-cluster
+opencenter cluster init <name> --org <organization>
+opencenter cluster configure <organization>/<cluster>
+opencenter cluster validate <organization>/<cluster>
+opencenter cluster doctor <organization>/<cluster>
+opencenter cluster generate <organization>/<cluster>
+opencenter cluster deploy <organization>/<cluster>
+opencenter cluster destroy <organization>/<cluster>
 ```
 
-Supported output formats are `text`, `json`, and `yaml`. Structured output is intended for commands that return inspectable data, such as listing, status, validation, and secrets inspection.
-
-## Cluster Lifecycle
-
-Create a cluster configuration:
+Configuration and day-2 operations:
 
 ```bash
-opencenter cluster init my-cluster
-opencenter cluster init my-cluster --org myorg
-opencenter cluster init vmware-cluster --type vmware --org production
-opencenter cluster init dev-cluster --type kind
-```
-
-Open the guided provider configuration workflow:
-
-```bash
-opencenter cluster configure myorg/my-cluster --guided
-```
-
-Validate configuration:
-
-```bash
-opencenter cluster validate myorg/my-cluster
-opencenter cluster validate myorg/my-cluster --manifests
-opencenter cluster validate myorg/my-cluster --output json
-```
-
-Generate GitOps assets:
-
-```bash
-opencenter cluster generate myorg/my-cluster
-opencenter cluster generate myorg/my-cluster --render-only
-```
-
-Deploy or restart deployment:
-
-```bash
-opencenter cluster deploy myorg/my-cluster
-opencenter cluster deploy myorg/my-cluster --restart
-```
-
-Destroy a cluster:
-
-```bash
-opencenter cluster destroy myorg/my-cluster
-opencenter cluster destroy myorg/my-cluster --force --remove-files
-```
-
-Inspect lifecycle state:
-
-```bash
-opencenter cluster status myorg/my-cluster
-opencenter cluster status myorg/my-cluster --paths
-opencenter cluster status myorg/my-cluster --output json
-opencenter cluster status myorg/my-cluster --sync
-opencenter cluster describe myorg/my-cluster
-opencenter cluster doctor myorg/my-cluster
-```
-
-## Active Cluster Context
-
-Use an explicit `org/name` when possible. For repeated work, set and inspect the active cluster:
-
-```bash
-opencenter cluster use myorg/my-cluster
-opencenter cluster active
 opencenter cluster list
-eval "$(opencenter cluster env)"
+opencenter cluster use <organization>/<cluster>
+opencenter cluster active
+opencenter cluster status <organization>/<cluster>
+opencenter cluster describe <organization>/<cluster>
+opencenter cluster set <organization>/<cluster> <path=value>...
+opencenter cluster edit <organization>/<cluster>
+opencenter cluster normalize <organization>/<cluster>
+opencenter cluster export <organization>/<cluster>
+opencenter cluster service enable <service>
+opencenter cluster service disable <service>
+opencenter cluster service status
+opencenter cluster service options <service>
+opencenter cluster pool add <pool>
+opencenter cluster pool update <pool>
+opencenter cluster pool scale <pool>
+opencenter cluster pool remove <pool>
+opencenter cluster pool list
+opencenter cluster drift detect <organization>/<cluster>
+opencenter cluster drift reconcile <organization>/<cluster>
+opencenter cluster drift schedule <organization>/<cluster>
+opencenter cluster backup create <organization>/<cluster>
+opencenter cluster backup list <organization>/<cluster>
+opencenter cluster backup restore <backup-id>
+opencenter cluster backup delete <backup-id>
+opencenter cluster backup schedule <organization>/<cluster>
+opencenter cluster lock <organization>/<cluster>
+opencenter cluster unlock <organization>/<cluster>
+opencenter cluster import scan --repo-path <path>
+opencenter cluster import report
+opencenter cluster import apply
+opencenter cluster migrate-layout --org <organization>
+opencenter cluster sync openstack <organization>/<cluster>
 ```
 
-If a command reports that no active cluster is set, either run `opencenter cluster use <org/name>` or pass `<org/name>` to the command that failed.
-
-## Configuration Management
-
-Patch one or more fields with dot-path assignments:
-
-```bash
-opencenter cluster set myorg/my-cluster opencenter.meta.env=staging
-opencenter cluster set myorg/my-cluster opencenter.gitops.repository.url=https://github.com/acme/platform.git
-```
-
-Edit, normalize, and export effective configuration:
-
-```bash
-opencenter cluster edit myorg/my-cluster
-opencenter cluster normalize myorg/my-cluster
-opencenter cluster export myorg/my-cluster --output-file effective-config.yaml
-```
-
-The per-cluster YAML remains the source of truth. Generated assets should be treated as outputs of `cluster generate`.
-
-## Service Management
-
-Enable, disable, and inspect platform services:
-
-```bash
-opencenter cluster service enable cert-manager --cluster myorg/my-cluster
-opencenter cluster service enable keycloak --managed --param realm=platform
-opencenter cluster service disable harbor --cluster myorg/my-cluster
-opencenter cluster service status --cluster myorg/my-cluster
-opencenter cluster service options cert-manager
-```
-
-## Secrets
-
-Secret operations are grouped under `secrets`. Key lifecycle commands are nested under `secrets keys`:
-
-```bash
-opencenter secrets keys generate
-opencenter secrets keys list
-opencenter secrets keys rotate myorg/my-cluster --type sops
-opencenter secrets keys check
-opencenter secrets keys backup
-opencenter secrets keys validate
-opencenter secrets keys revoke --user admin@example.com
-```
-
-Encryption and sync operations:
-
-```bash
-opencenter secrets encrypt
-opencenter secrets decrypt
-opencenter secrets status
-opencenter secrets sync myorg/my-cluster
-opencenter secrets sync --all --org myorg
-opencenter secrets validate myorg/my-cluster
-```
-
-Backend operations (Barbican/file backends):
+Secrets are split between backend CRUD, manifest synchronization, and SOPS/Age file operations:
 
 ```bash
 opencenter secrets login
 opencenter secrets list
-opencenter secrets describe my-secret
-opencenter secrets get my-secret
-opencenter secrets set my-secret
-opencenter secrets delete my-secret
+opencenter secrets describe <name>
+opencenter secrets get <name>
+opencenter secrets set <name>
+opencenter secrets delete <name>
+opencenter secrets sync <organization>/<cluster>
+opencenter secrets validate <organization>/<cluster>
+opencenter secrets encrypt
+opencenter secrets decrypt
+opencenter secrets status
+opencenter secrets keys generate
+opencenter secrets keys rotate
+opencenter secrets keys backup
+opencenter secrets keys validate
+opencenter secrets keys check
+opencenter secrets keys revoke
+opencenter secrets keys reconcile
+opencenter secrets keys set-primary
 ```
 
-SOPS Age encryption is configured during cluster initialization. Keep private keys and token files outside Git.
+Other built-in groups are `settings`, `plugins list`, `version`, and `shell-init`; standard Cobra `help` and `completion` are also available.
 
-## Drift Detection
+## Runtime and generation facts
 
-Detect and reconcile infrastructure drift:
+- `main.go` calls `cmd.ExecuteWithContext`; the canonical production dependency graph is `di.NewApp` in `internal/di/app.go`, adapted for compatibility with `di.NewAppContainer`.
+- `cmd.NewBuiltinRootCmd` creates the deterministic built-in Cobra tree. External `opencenter-*` executables are discovered and attached only after built-ins in the production runtime, using `OPENCENTER_PLUGINS_DIR`, `<config-dir>/plugins`, and `PATH`.
+- The tools-tagged command-reference generator receives `cmd.NewBuiltinRootCmd()`, so generated Cobra reference pages cover built-ins only and never load external plugins.
+- `cluster generate` runs `internal/cluster.SetupService`: config load, `CopyBase`, encrypted application render/promotion, infrastructure render, Flux bridge render, and optional non-Kind OpenTofu provisioning. `PipelineGenerator` is a supporting API, not the live top-level path.
+- Rendering uses descriptor coverage, an immutable built-in `RenderCatalog`, owned action validation, atomic workspace writes, and promotion that preserves `custom/`.
+- `internal/secretartifacts` maps logical secret owners to deterministic physical artifacts. `internal/secrets` performs locked transactional manifest sync with encryption, journaling/rollback, ownership hashes, and state. SOPS overlay value encryption is a separate `internal/sops` concern.
+- OpenStack, VMware, Baremetal, and Kind are the current infrastructure provider paths. AWS, GCP, and Azure are rejected planned/unavailable providers.
 
-```bash
-opencenter cluster drift detect myorg/my-cluster
-opencenter cluster drift reconcile myorg/my-cluster
-opencenter cluster drift schedule myorg/my-cluster
-```
+## Concepts and design
 
-## Backup and Restore
+- [Architecture](docs/concepts/architecture.md) — system components and design patterns.
+- [Configuration lifecycle](docs/concepts/configuration-lifecycle.md) — initialization through deployment and updates.
+- [GitOps workflow](docs/concepts/gitops-workflow.md) — generated repository structure and Flux reconciliation.
+- [Security model](docs/concepts/security-model.md) — defense-in-depth controls, SOPS, validation, and audit logging.
+- [Drift detection](docs/concepts/drift-detection.md) — drift rationale and operational behavior.
+- [Configuration precedence](docs/reference/configuration-precedence.md) — override order.
+- [Validation rules](docs/reference/validation-rules.md) — validation lookup.
+- [GitOps configuration](docs/reference/gitops-configuration.md) — repository and Flux settings.
 
-```bash
-opencenter cluster backup create myorg/my-cluster
-opencenter cluster backup list myorg/my-cluster
-opencenter cluster backup restore <backup-id>
-opencenter cluster backup delete <backup-id>
-opencenter cluster backup schedule myorg/my-cluster
-```
+## Operations and providers
 
-## Import
+- [Manage secrets](docs/operations/manage-secrets.md) — operator procedure for secret workflows.
+- [Backup and restore](docs/operations/backup-and-restore.md) — operator procedure for backups.
+- [Troubleshoot deployment](docs/operations/troubleshoot-deployment.md) — deployment diagnostics.
+- [Provider overview](docs/providers/README.md) — provider-oriented navigation.
+- [VMware guide](docs/providers/vmware.md) — VMware deployment details.
+- [Create a Kind cluster](docs/operations/create-kind-cluster.md) — local Kind workflow.
+- [Import and migration](docs/operations/migrate-clusters.md) — migration procedure.
 
-Import existing clusters into openCenter management:
+## Contributing and development
 
-```bash
-opencenter cluster import scan --repo-path ./gitops-repo
-opencenter cluster import report
-opencenter cluster import apply
-```
+- [Codebase organization](docs/contributing/code-structure.md) — package layout and ownership.
+- [Development setup](docs/contributing/development-setup.md) — toolchain and build setup.
+- [Testing guide](docs/contributing/testing-guide.md) — unit, BDD, property, and integration tests.
+- [Renderer contract](docs/contributing/rendering-contract.md) — descriptor and ownership rules.
+- [Adding providers](docs/contributing/adding-providers.md) — provider extension workflow; verify current capability boundaries before implementation.
+- [Adding services](docs/contributing/adding-services.md) — service extension workflow.
+- [Build system](docs/contributing/build-system.md) — repository build and tooling.
+- [Release process](docs/contributing/release-process.md) — release workflow.
 
-## Cluster Operations
-
-Lock, unlock, and migrate:
-
-```bash
-opencenter cluster lock myorg/my-cluster
-opencenter cluster unlock myorg/my-cluster
-opencenter cluster migrate-layout --org myorg
-```
-
-## CLI Settings
-
-Manage CLI-level settings (defaults, paths, IDE integration):
-
-```bash
-opencenter settings view
-opencenter settings set cluster_defaults.provider openstack
-opencenter settings get paths.clustersDir
-opencenter settings path
-opencenter settings edit
-opencenter settings reset
-opencenter settings explain
-opencenter settings explain cluster-defaults
-opencenter settings ide
-```
-
-## Plugins
-
-Discover and use external CLI plugins:
-
-```bash
-opencenter plugins list
-```
-
-External plugins are executables named `opencenter-<name>` discovered in `OPENCENTER_PLUGINS_DIR`, `<config-dir>/plugins`, or `PATH`.
-
-## Shell Integration
-
-```bash
-eval "$(opencenter shell-init --shell zsh)"
-```
-
-Enables session-scoped active cluster tracking and prompt integration.
-
-## Providers
-
-Supported infrastructure providers include OpenStack, VMware, Kind, and Baremetal as GA providers. AWS, GCP, and Azure have experimental support depending on the configured workflow.
-
-OpenStack and Kind workflows support full generation and deployment through the CLI. VMware workflows expect pre-provisioned VMs and provider-specific configuration before generation.
-
-## GitOps
-
-Cluster generation creates or updates the local GitOps workspace configured in:
-
-```yaml
-opencenter:
-  gitops:
-    repository:
-      url: https://github.com/acme/platform.git
-      branch: main
-      local_dir: ./gitops
-```
-
-Run `cluster generate` after configuration changes, then `cluster deploy` when ready to apply the lifecycle workflow.
-
-## Troubleshooting
-
-Common checks:
-
-```bash
-opencenter cluster validate myorg/my-cluster
-opencenter cluster status myorg/my-cluster --paths
-opencenter cluster doctor myorg/my-cluster
-opencenter secrets validate myorg/my-cluster
-opencenter cluster drift detect myorg/my-cluster
-```
-
-Use `--output json` or `--output yaml` on supported read-only commands when automation needs structured data.
+The per-command reference is refreshed with `go run -tags tools ./cmd/docs`; it is intentionally built from the built-in Cobra tree. No generator automatically maintains this `llms.txt` file.

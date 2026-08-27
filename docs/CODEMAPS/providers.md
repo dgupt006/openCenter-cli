@@ -1,139 +1,66 @@
-# Providers Codemap
+---
+id: providers-map
+title: "Explain Provider Capability Boundaries"
+sidebar_label: Providers
+description: Distinguishes provider configuration, generation, bootstrap, drift detection, and destruction capabilities without conflating planned providers with supported implementations.
+doc_type: explanation
+audience: "contributors, maintainers, operators"
+tags: [providers, openstack, vmware, baremetal, kind]
+---
+# Providers
 
-**Last Updated:** 2026-05-19  
-**Entry Point:** `internal/cloud/` factory pattern  
-**Packages:** `internal/cloud`, `internal/credentials`, `internal/operations`, `internal/localdev`
+Provider support is split across three boundaries: configuration and generation in `internal/config/v2` and `internal/gitops`, lifecycle bootstrap in `internal/cluster`, and cloud-state drift interfaces in `internal/cloud`. A provider may participate in one boundary without implementing another.
 
-## Architecture
+## Capability matrix
 
-```mermaid
-graph TD
-    Factory[CloudProviderFactory] --> OS[OpenStack<br/>drift + deploy]
-    Factory --> VMW[VMware<br/>drift + deploy]
-    Factory --> Kind[Kind<br/>lifecycle only]
-```
+| Provider | Config/generate | Bootstrap/deploy | Drift provider | Current boundary |
+|---|---:|---:|---:|---|
+| OpenStack | Yes | Yes | Yes | `internal/cloud/openstack`, shared infrastructure bootstrap, OpenTofu |
+| VMware/vSphere | Yes | Yes | Yes | `internal/cloud/vmware`, shared infrastructure bootstrap with vSphere credentials |
+| Baremetal | Yes | Yes | No cloud drift implementation | Shared infrastructure bootstrap with static-node validation; no OpenStack/vSphere credentials |
+| Kind | Yes | Yes | No | `internal/cloud/kind` lifecycle plus `kindBootstrapProvider`; local development integration |
+| AWS | Config types may exist | Rejected by active bootstrap routing | Not registered as a supported drift provider | Planned/unavailable |
+| GCP | Config types may exist | Rejected by active bootstrap routing | Not registered as a supported drift provider | Planned/unavailable |
+| Azure | Config types may exist | Rejected by active bootstrap routing | Not registered as a supported drift provider | Planned/unavailable |
 
-## Cloud Provider Interface (Drift Detection)
+The active bootstrap validator rejects providers outside OpenStack, VMware, Baremetal, and Kind.
+
+## Drift interface
+
+`internal/cloud.CloudProvider` defines:
 
 ```go
-type CloudProvider interface {
-    GetCurrentState(ctx context.Context, cfg v2.Config) (*InfrastructureState, error)
-    DetectDrift(ctx context.Context, desired, actual *InfrastructureState) (*DriftReport, error)
-    ReconcileDrift(ctx context.Context, drift *DriftReport) error
-}
+GetCurrentState(ctx, cfg) (*InfrastructureState, error)
+DetectDrift(ctx, desired, actual) (*DriftReport, error)
+ReconcileDrift(ctx, drift) error
 ```
 
-### State Types
+`CloudProviderFactory` is a registry for drift-capable implementations. It is separate from lifecycle deploy providers: Kind deployment is wired directly into cluster lifecycle, while OpenStack and VMware expose provider APIs for state comparison and reconciliation.
 
-| Type | Fields |
-|------|--------|
-| `InfrastructureState` | Servers, Networks, SecurityGroups, LoadBalancers, Volumes, FloatingIPs |
-| `DriftReport` | DriftItems (list), Summary |
-| `DriftItem` | ResourceType, Field, Expected, Actual, Severity, Reconcilable, Message |
-| `DriftSummary` | TotalDrifts, ReconcilableCount |
+## Bootstrap routing
 
-Severity levels: `SeverityInfo`, `SeverityWarning`, `SeverityCritical`
+`internal/cluster/bootstrap_provider.go` defines the lifecycle provider contract:
 
-## Provider Implementations
-
-### OpenStack (`internal/cloud/openstack/`)
-
-**Capabilities:** Drift detection + reconciliation  
-**API Client:** gophercloud  
-**Resources monitored:**
-- Compute (servers, metadata)
-- Network (networks, subnets, ports, security groups/rules)
-- Load Balancers
-- Block Storage (volumes)
-- Floating IPs
-
-**Reconciliation:** Server metadata updates, security group rule CRUD.
-
-### VMware (`internal/cloud/vmware/`)
-
-**Capabilities:** Drift detection + deploy (via shared `bootstrap_provider_infra.go`)  
-**API Client:** govmomi (vSphere)  
-**Deploy flow:** OpenTofu provisions VMs → Kubespray installs K8s → FluxCD bootstrap  
-**Preflight checks:** vSphere credentials validation, bastion SSH connectivity, static node reachability
-
-### Kind (`internal/cloud/kind/`)
-
-**Capabilities:** Lifecycle only (not a drift provider)  
-**Key Functions:**
-- `CreateCluster(name, config)` — creates Kind cluster
-- `DeleteCluster(name)` — deletes Kind cluster
-- `ExportKubeconfig(name)` — exports kubeconfig
-- `WaitReady(name, timeout)` — waits for API server
-- `ClusterExists(name)` — checks existence
-- `APIReady(name)` — checks API health
-
-**Implementation:** Shells out to `kind` and `kubectl` via `security.CommandRunner`
-
-## Credentials (`internal/credentials/`)
-
-Extracts cloud provider credentials from cluster configuration:
-
-| File | Provider | Extracts |
-|------|----------|----------|
-| `openstack.go` | OpenStack | Application credentials, auth URL, region, project |
-| `aws.go` | AWS | Access key, secret key, region, session token |
-| `extractor.go` | Generic | Credential extraction interface |
-
-## Operations (`internal/operations/`)
-
-Operational components built on top of providers:
-
-| Component | Purpose |
-|-----------|---------|
-| Drift Detector | Periodic drift detection using CloudProvider interface |
-| Backup Manager | Cluster config backup/restore |
-| Disaster Recovery | Recovery workflows |
-
-## Local Development (`internal/localdev/`)
-
-Local development environment management:
-
-| Subpackage | Purpose |
-|-----------|---------|
-| `gitops/` | Local Gitea + FluxCD for development |
-| Kind integration | Local Kind clusters with registry |
-
-## Integration Points
-
-```mermaid
-graph TD
-    drift[cmd/cluster_drift.go] --> factory[CloudProviderFactory.GetProvider]
-    factory --> detect[provider.DetectDrift / ReconcileDrift]
-
-    deployKind[cmd/cluster_deploy.go - Kind] --> kindCreate[cloud/kind.CreateCluster]
-    kindCreate --> kindWait[WaitReady → ExportKubeconfig]
-
-    deployCloud["cmd/cluster_deploy.go - OpenStack/VMware/Baremetal"] --> bootstrap[cluster.BootstrapService]
-    bootstrap --> infra[bootstrap_provider_infra.go]
-    infra --> tofu[OpenTofu init/plan/apply]
-    tofu --> kubespray[Kubespray → wait ready]
-
-    destroyKind[cmd/cluster_destroy.go - Kind] --> kindDelete[cloud/kind.DeleteCluster]
-    destroyOS[cmd/cluster_destroy.go - OpenStack] --> tofuDestroy[openstack_destroy_provider → OpenTofu destroy]
+```go
+BuildSteps(cfg, clusterPaths, opts) ([]bootstrapStep, error)
 ```
 
-## Supported Providers Matrix
+`openstackBootstrapProvider` is shared by OpenStack, VMware, and Baremetal. `buildProviderBootstrapEnvironment` extracts only the credentials relevant to the selected provider and validates prerequisites. `kindBootstrapProvider` handles Kind-specific create/readiness and local Flux steps. Bootstrap state makes these ordered plans resumable through `--step` and `--from-step`.
 
-| Provider | Init | Configure | Validate | Generate | Deploy | Drift | Destroy |
-|----------|------|-----------|----------|----------|--------|-------|---------|
-| OpenStack | ✅ | ✅ (guided) | ✅ (online) | ✅ | ✅ | ✅ | ✅ |
-| VMware | ✅ | ❌ | ✅ (offline) | ✅ | ✅ | ✅ | ❌ |
-| Kind | ✅ | ❌ | ✅ (offline) | ✅ | ✅ | ❌ | ✅ |
-| Baremetal | ✅ | ❌ | ✅ (offline) | ✅ | ✅ | ❌ | ❌ |
-| AWS | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+## Supporting packages
 
-**Notes:**
-- VMware/Baremetal deploy shares the same bootstrap infrastructure as OpenStack (`bootstrap_provider_infra.go`)
-- `tofu` binary is preferred; falls back to `terraform` if `tofu` is not on PATH
-- Deploy no longer auto-commits to the GitOps repository
+| Package | Boundary |
+|---|---|
+| `internal/credentials` | Extract provider credentials from validated configuration; it does not deploy resources |
+| `internal/tofu` | Invoke OpenTofu/Terraform for infrastructure provisioning where the lifecycle path requires it |
+| `internal/cloud/openstack` | OpenStack discovery, state collection, drift comparison, and supported reconciliation |
+| `internal/cloud/vmware` | vSphere state and drift implementation |
+| `internal/cloud/kind` | Kind create/delete/readiness and kubeconfig operations |
+| `internal/cluster/orchestration` | Guided provider configuration and capability handlers |
+| `internal/localdev` | Local Kind/Gitea/Flux workflow services, not a cloud provider abstraction |
 
-## Related Areas
+## Related maps
 
-- [Cluster Lifecycle](cluster-lifecycle.md) — uses providers for bootstrap/destroy
-- [Config System](config-system.md) — provider-specific config types and validation
-- [GitOps Engine](gitops-engine.md) — provider-specific infrastructure templates
+- [Cluster lifecycle](cluster-lifecycle.md) — bootstrap and destroy callers
+- [Config system](config-system.md) — provider config and validation
+- [Import, operations, and resilience](import-operations-and-resilience.md) — drift and backup operations

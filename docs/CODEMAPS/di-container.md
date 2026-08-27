@@ -1,153 +1,67 @@
-# DI Container Codemap
+---
+id: di-container-map
+title: "Explain the Application Dependency Graph"
+sidebar_label: DI Container
+description: Explains how the openCenter CLI constructs its typed application graph, adapts it for commands, and separates canonical wiring from legacy compatibility.
+doc_type: explanation
+audience: "contributors, maintainers"
+tags: [dependency-injection, runtime, services, security, wiring]
+---
+# Dependency injection and runtime wiring
 
-**Last Updated:** 2026-05-11  
-**Entry Point:** `internal/di/setup.go` → `SetupContainer()`  
-**Package:** `internal/di`
+The canonical application graph is the explicit constructor chain in `internal/di/app.go:NewApp`. It returns a typed `di.App`; `di.NewAppContainer` provides the compatibility `Container` interface used by older command code.
 
-## Architecture
+## Runtime wiring
 
-```mermaid
-graph TD
-    main[main.go] --> setup[di.SetupContainer]
-    setup --> container[DIContainer - reflection-based]
-    setup --> singletons[Registers all singletons]
-    setup --> iface[Returns Container interface]
-
-    root[cmd/root.go] --> app[di.NewApp]
-    app --> typed[Builds typed App struct]
-    app --> adapter[di.NewAppContainer → Container adapter]
+```text
+main.go
+  -> resolve cluster base directory
+  -> di.SetupContainer (outer process container/context bridge)
+  -> cmd.ExecuteWithContext
+       -> di.NewApp(baseDir)
+       -> di.NewAppContainer(app)
+       -> context{AppKey, ContainerKey}
+       -> NewBuiltinRootCmd
+       -> production-only LoadExternalPlugins
+       -> Cobra ExecuteContext
 ```
 
-Two approaches coexist:
-1. **`App` struct** (preferred) — explicit constructor chaining, type-safe
-2. **`DIContainer`** (legacy) — reflection-based, resolves by parameter types
+The second executable, `cmd/opencenter-local/main.go`, has its own small Cobra root and does not use the production app graph; it constructs local-development services directly.
 
-## Key Types
+## Typed graph
 
-### Container Interface
+`NewApp` constructs, in dependency order:
 
-```go
-type Container interface {
-    Register(name string, constructor interface{}) error
-    Resolve(name string) (interface{}, error)
-    ResolveAs(name string, target interface{}) error
-    Singleton(name string, constructor interface{}) error
-    Initialize() error
-    Shutdown() error
-}
-```
+1. Error handler and filesystem.
+2. `PathResolver` and logger.
+3. Configuration manager and shared `ValidationEngine`.
+4. Error formatting and security components: audit logger, input validator, credential masker, command sanitizer, and command runner.
+5. Lifecycle services: `InitService`, `ConfigureService`, `ValidateService`, `SetupService`, and `BootstrapService`.
 
-### App Struct (Typed DI)
+The resulting `di.App` exposes these components as typed fields. Commands retrieve it with `cmd.GetApp(ctx)` and use `cmd.GetContainer(ctx)` only where the compatibility interface is still required.
 
-```go
-type App struct {
-    ErrorHandler      *util.ErrorHandler
-    FileSystem        fs.FileSystem
-    PathResolver      *paths.PathResolver
-    Logger            *logrus.Logger
-    ConfigManager     *config.ConfigurationManager
-    ValidationEngine  *validation.ValidationEngine
-    ErrorFormatter    *ui.ErrorFormatter
-    AuditLogger       security.AuditLogger
-    InputValidator    *security.InputValidator
-    CredentialMasker  *security.CredentialMasker
-    CommandSanitizer  *security.CommandSanitizer
-    CommandRunner     security.CommandRunner
-    InitService       *cluster.InitService
-    ConfigureService  *cluster.ConfigureService
-    ValidateService   *cluster.ValidateService
-    SetupService      *cluster.SetupService
-    BootstrapService  *cluster.BootstrapService
-}
-```
+## Ownership table
 
-## Provider Functions
+| Component | Provider | Consumer boundary |
+|---|---|---|
+| Filesystem and paths | `internal/util/fs`, `internal/core/paths` | Config, lifecycle, GitOps, secrets, operations |
+| Config manager | `internal/config` / `internal/config/v2` | Lifecycle and command helpers |
+| Validation engine | `internal/core/validation` | Config and lifecycle readiness |
+| Security services | `internal/security` | Commands and external-process boundaries |
+| Lifecycle services | `internal/cluster` | Cobra command handlers |
+| GitOps renderer | `internal/gitops` | `SetupService` and rendering tests |
 
-| Function | Returns | Purpose |
-|----------|---------|---------|
-| `ProvideLogger()` | `*logrus.Logger` | Structured logging |
-| `ProvidePathResolver(baseDir)` | `*paths.PathResolver` | Cluster path resolution |
-| `ProvideConfigManager()` | `*config.ConfigurationManager` | Config loading/saving |
-| `ProvideValidationEngine()` | `*validation.ValidationEngine` | Registers all validators |
-| `ProvideAuditLogger()` | `security.AuditLogger` | HMAC-signed audit log |
-| `ProvideInputValidator()` | `*security.InputValidator` | User input sanitization |
-| `ProvideCredentialMasker()` | `*security.CredentialMasker` | Log credential masking |
-| `ProvideCommandSanitizer()` | `*security.CommandSanitizer` | Shell command sanitization |
-| `ProvideCommandRunner()` | `security.CommandRunner` | Safe command execution |
-| `ProvideInitService()` | `*cluster.InitService` | Cluster initialization |
-| `ProvideValidateService()` | `*cluster.ValidateService` | Config validation |
-| `ProvideConfigureService()` | `*cluster.ConfigureService` | Guided configuration |
-| `ProvideSetupService()` | `*cluster.SetupService` | GitOps generation |
-| `ProvideBootstrapService()` | `*cluster.BootstrapService` | Cluster deployment |
+## Legacy container boundary
 
-## Validation Engine Registration
+`internal/di` still contains the reflection-based `Container` and `SetupContainer` implementation for compatibility and process shutdown. It is not the source of truth for the command-critical graph. Do not add new service wiring to the legacy registry when the typed `App` can express the dependency.
 
-`ProvideValidationEngine()` registers these validators:
-- `ClusterNameValidator` — name format rules
-- `OrganizationNameValidator` — org name rules
-- `ConfigValidator` — structural config validation
-- `FileValidator` — file existence/permission checks
-- `SecurityValidator` — security policy enforcement
+## Shutdown
 
-## Dependency Graph
+The outer process container is shut down by `main.go` after command execution or before exiting on a command error. Components that own external resources must preserve the container's shutdown semantics; command code should return errors rather than terminate the process itself.
 
-```mermaid
-graph TD
-    Logger --> PathResolver
-    PathResolver --> ConfigManager
-    ConfigManager --> InitService
-    ConfigManager --> ConfigureService
-    ConfigManager --> ValidateService
-    ConfigManager --> SetupService
-    ConfigManager --> BootstrapService
-    PathResolver --> AuditLogger
-    Logger --> ValidationEngine
-    Logger --> InputValidator
-    Logger --> CredentialMasker
-    Logger --> CommandSanitizer
-    CommandSanitizer --> CommandRunner
-    Logger --> ErrorHandler
-    ErrorHandler --> ErrorFormatter
-```
+## Related maps
 
-## DIContainer (Reflection-Based)
-
-- Automatic dependency resolution by matching constructor parameter types
-- Circular dependency detection via `initOrder` tracking
-- Thread-safe with `sync.RWMutex`
-- Singleton caching (lazy initialization on first resolve)
-- Graceful shutdown calling `Shutdown()` on components that implement it
-
-## Usage in Commands
-
-```go
-// Preferred: typed access via App
-app := cmd.GetApp(ctx)
-result, err := app.InitService.Init(ctx, opts)
-
-// Legacy: interface-based access via Container
-container := cmd.GetContainer(ctx)
-svc, _ := container.Resolve("initService")
-```
-
-## Security Components
-
-| Component | Package | Purpose |
-|-----------|---------|---------|
-| `AuditLogger` | `internal/security` | HMAC-signed tamper-evident audit log |
-| `InputValidator` | `internal/security` | Validates/sanitizes user input |
-| `CredentialMasker` | `internal/security` | Masks secrets in log output |
-| `CommandSanitizer` | `internal/security` | Prevents command injection |
-| `CommandRunner` | `internal/security` | Executes shell commands safely |
-
-## Observability (`internal/observability/`)
-
-- Structured logging with credential masking
-- Log shipping configuration
-- Migration utilities for log format changes
-
-## Related Areas
-
-- [CLI Commands](cli-commands.md) — commands resolve services from container
-- [Cluster Lifecycle](cluster-lifecycle.md) — lifecycle services are DI-managed
-- [Config System](config-system.md) — ConfigManager is a DI singleton
+- [CLI commands](cli-commands.md) — command registration and context use
+- [Config system](config-system.md) — configuration dependencies
+- [Cluster lifecycle](cluster-lifecycle.md) — graph consumers
+- [Runtime extensions and local development](runtime-extensions-and-local-development.md) — separate local executable and plugin boundary
