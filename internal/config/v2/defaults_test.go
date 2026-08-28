@@ -1,6 +1,8 @@
 package v2
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -96,6 +98,47 @@ func TestRenderFullTemplateYAMLRoundTrip(t *testing.T) {
 
 	if _, err := loader.LoadFromBytes(data); err != nil {
 		t.Fatalf("LoadFromBytes() error = %v", err)
+	}
+}
+
+func TestNewV2DefaultOpenStackRegionUsesCatalogCase(t *testing.T) {
+	t.Setenv("OPENCENTER_CONFIG_DIR", t.TempDir())
+
+	cfg, err := NewV2Default("catalog-case", "openstack")
+	if err != nil {
+		t.Fatalf("NewV2Default() error = %v", err)
+	}
+	if cfg.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("Meta.Region = %q, want DFW3", cfg.OpenCenter.Meta.Region)
+	}
+	openStack := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+	if openStack.Region != "DFW3" {
+		t.Fatalf("Cloud.OpenStack.Region = %q, want DFW3", openStack.Region)
+	}
+	if openStack.AuthURL != "https://keystone.api.dfw3.rackspacecloud.com/v3/" {
+		t.Fatalf("OpenStack auth URL = %q, want lowercase catalog hostname", openStack.AuthURL)
+	}
+	if cfg.OpenCenter.Cluster.ClusterFQDN != "catalog-case.dfw3.k8s.opencenter.cloud" {
+		t.Fatalf("ClusterFQDN = %q, want lowercase DNS hostname", cfg.OpenCenter.Cluster.ClusterFQDN)
+	}
+}
+
+func TestNewV2DefaultPreservesPersistedRegionCase(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("OPENCENTER_CONFIG_DIR", configDir)
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("cluster_defaults:\n  region: dFw3\n"), 0o600); err != nil {
+		t.Fatalf("write persisted defaults: %v", err)
+	}
+
+	cfg, err := NewV2Default("persisted-case", "openstack")
+	if err != nil {
+		t.Fatalf("NewV2Default() error = %v", err)
+	}
+	if cfg.OpenCenter.Meta.Region != "dFw3" {
+		t.Fatalf("Meta.Region = %q, want persisted casing dFw3", cfg.OpenCenter.Meta.Region)
+	}
+	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "dFw3" {
+		t.Fatalf("Cloud.OpenStack.Region = %q, want persisted casing dFw3", cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
 	}
 }
 

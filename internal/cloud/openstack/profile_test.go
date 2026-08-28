@@ -12,7 +12,7 @@ func TestLoadProfileRetainsAuthRegionAndTLSInputs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clouds.yaml")
 	contents := `clouds:
   prod:
-    region_name: RegionOne
+    region_name: DFW3
     interface: internal
     cacert: /etc/openstack/ca.pem
     cert: /etc/openstack/client.pem
@@ -35,7 +35,7 @@ func TestLoadProfileRetainsAuthRegionAndTLSInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.AuthURL != "https://identity.example/v3" || profile.Region != "RegionOne" || profile.Interface != "internal" || !profile.Insecure {
+	if profile.AuthURL != "https://identity.example/v3" || profile.Region != "DFW3" || profile.Interface != "internal" || !profile.Insecure {
 		t.Fatalf("profile metadata not retained: %#v", profile)
 	}
 	if profile.CACert != "/etc/openstack/ca.pem" || profile.Cert != "/etc/openstack/client.pem" || profile.Key != "/etc/openstack/client.key" || profile.Verify == nil || *profile.Verify {

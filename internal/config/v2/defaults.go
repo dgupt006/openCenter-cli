@@ -107,7 +107,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 		organization = defaultOrganization
 	}
 
-	clusterFQDN := fmt.Sprintf("%s.%s.%s", name, region, defaultBaseDomain)
+	clusterFQDN := fmt.Sprintf("%s.%s.%s", name, strings.ToLower(region), defaultBaseDomain)
 	sshKeyBase := fmt.Sprintf("%s-%s-%s", name, environment, region)
 	sshKeyPath := filepath.ToSlash(filepath.Join("secrets", "ssh", sshKeyBase))
 	sopsAgeKeyPath := filepath.ToSlash(filepath.Join("secrets", "age", "keys", fmt.Sprintf("%s-key.txt", name)))

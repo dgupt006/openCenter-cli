@@ -382,6 +382,30 @@ func TestInitService_createDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestInitServiceApplyOverridesMigratesLegacySJC3CaseInsensitively(t *testing.T) {
+	t.Setenv("OPENCENTER_CONFIG_DIR", t.TempDir())
+	pathResolver := paths.NewPathResolver(t.TempDir())
+	configManager, err := config.NewConfigManager("")
+	if err != nil {
+		t.Fatalf("NewConfigManager() error = %v", err)
+	}
+	initService := NewInitService(pathResolver, setupValidationEngine(t), configManager)
+	cfg := &v2.Config{}
+	cfg.OpenCenter.Meta.Region = "SJC3"
+	configMap := map[string]any{
+		"opencenter": map[string]any{
+			"meta": map[string]any{},
+		},
+	}
+
+	if err := initService.applyOverrides(cfg, configMap, InitOptions{}); err != nil {
+		t.Fatalf("applyOverrides() error = %v", err)
+	}
+	if cfg.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("migrated Meta.Region = %q, want DFW3", cfg.OpenCenter.Meta.Region)
+	}
+}
+
 func TestInitService_generateKeys(t *testing.T) {
 	// Create temporary directory for test
 	tmpDir := t.TempDir()
