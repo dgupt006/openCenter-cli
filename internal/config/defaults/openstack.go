@@ -79,7 +79,7 @@ func newOpenStackDFW3Defaults() ProviderDefaults {
 	return &openstackDefaults{
 		imageIDs: map[string]string{
 			"22": "b2c3d4e5-2345-6789-01bc-def123456789", // Ubuntu 22.04
-			"24": "799dcf97-3656-4361-8187-13ab1b295e33", // Ubuntu 24.04
+			"24": "6e3967a7-904a-49c6-870e-d5014c827944", // Ubuntu 24.04
 		},
 		availabilityZones: []string{"az1", "az2", "az3"},
 		ntpServers: []string{
