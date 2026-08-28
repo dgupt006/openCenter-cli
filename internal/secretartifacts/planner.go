@@ -144,7 +144,15 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 	sort.Strings(paths)
 	result := make([]Artifact, 0, len(paths))
 	for _, rel := range paths {
-		result = append(result, *byPath[rel])
+		artifact := byPath[rel]
+		// Skip artifacts targeting disabled services from fixed legacy blocks.
+		// Dynamic service_secrets entries are validated strictly by ValidateTargets;
+		// fixed blocks are filtered here so secrets sync never materializes files
+		// that cluster generate would later reject.
+		if !isTargetServiceEnabled(cfg, artifact.TargetService) {
+			continue
+		}
+		result = append(result, *artifact)
 	}
 	if err := ValidateTargets(cfg, result); err != nil {
 		return nil, err
@@ -301,4 +309,33 @@ func targetRoot(cfg *v2.Config, target string) string {
 		return "managed-services"
 	}
 	return "services"
+}
+
+// isTargetServiceEnabled checks whether the target service is enabled in the
+// cluster configuration. Returns true if the service is not found (conservative
+// default — let ValidateTargets handle missing-service errors downstream).
+func isTargetServiceEnabled(cfg *v2.Config, target string) bool {
+	if cfg == nil {
+		return true
+	}
+	if len(cfg.OpenCenter.Services) == 0 && len(cfg.OpenCenter.ManagedServices) == 0 && len(cfg.OpenCenter.LegacyManaged) == 0 {
+		return true
+	}
+	for raw, value := range cfg.OpenCenter.Services {
+		if normalizeServiceName(raw) == target {
+			return serviceEnabled(value)
+		}
+	}
+	managed := cfg.OpenCenter.ManagedServices
+	if len(managed) == 0 {
+		managed = cfg.OpenCenter.LegacyManaged
+	}
+	for raw, value := range managed {
+		if normalizeServiceName(raw) == target {
+			return serviceEnabled(value)
+		}
+	}
+	// Service not found in config — don't filter it here, let ValidateTargets
+	// handle the "targets missing service" error.
+	return true
 }
