@@ -68,8 +68,8 @@ func TestPlanDefaultGrafanaSecretContainsUserAndPassword(t *testing.T) {
 func TestPlanIncludesEtcdBackupAndVeleroWorkloadSecrets(t *testing.T) {
 	cfg := &v2.Config{
 		OpenCenter: v2.OpenCenterConfig{Services: map[string]any{
-			"etcd-backup": &services.EtcdBackupConfig{S3Host: "s3.example", S3Region: "RegionOne"},
-			"velero":      &services.VeleroConfig{},
+			"etcd-backup": &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true}, S3Host: "s3.example", S3Region: "RegionOne"},
+			"velero":      &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true}},
 		}},
 		Secrets: v2.SecretsConfig{
 			EtcdBackup: v2.EtcdBackupSecrets{AccessKeyID: "etcd-access", SecretAccessKey: "etcd-secret"},
