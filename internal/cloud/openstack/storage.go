@@ -17,20 +17,21 @@ import (
 
 // StorageAdapter is the only OpenStack surface used by the one-service storage flow.
 type StorageAdapter interface {
-	Preflight(context.Context, string, string) (StoragePreflight, error)
+	Preflight(context.Context, string, string, bool) (StoragePreflight, error)
 	EnsureContainer(context.Context, ContainerRequest) error
 	CreateAppCredential(context.Context, AppCredentialRequest) (AppCredential, error)
-	DeleteAppCredential(context.Context, string) error
+	DeleteAppCredential(context.Context, string, string) error
 	CreateEC2Credentials(context.Context, EC2CredentialRequest) (EC2Credentials, error)
-	DeleteEC2Credentials(context.Context, string) error
+	DeleteEC2Credentials(context.Context, string, string) error
 }
 
 type StoragePreflight struct {
-	Endpoint   string `json:"endpoint" yaml:"endpoint"`
-	S3Endpoint string `json:"s3_endpoint,omitempty" yaml:"s3_endpoint,omitempty"`
-	AuthURL    string `json:"auth_url" yaml:"auth_url"`
-	Region     string `json:"region" yaml:"region"`
-	ProjectID  string `json:"project_id" yaml:"project_id"`
+	Endpoint          string `json:"endpoint" yaml:"endpoint"`
+	S3Endpoint        string `json:"s3_endpoint,omitempty" yaml:"s3_endpoint,omitempty"`
+	AuthURL           string `json:"auth_url" yaml:"auth_url"`
+	Region            string `json:"region" yaml:"region"`
+	ProjectID         string `json:"project_id" yaml:"project_id"`
+	CredentialOwnerID string `json:"-" yaml:"-"`
 }
 
 type ContainerRequest struct {
@@ -45,6 +46,7 @@ type AccessRule struct {
 }
 
 type AppCredentialRequest struct {
+	UserID      string
 	Name        string
 	Description string
 	AccessRules []AccessRule
@@ -56,6 +58,7 @@ type AppCredential struct {
 }
 
 type EC2CredentialRequest struct {
+	UserID      string
 	ProjectID   string
 	ProjectName string
 	UserName    string
@@ -76,7 +79,7 @@ func NewStorageAdapter(profile Profile) *GophercloudStorageAdapter {
 	return &GophercloudStorageAdapter{Profile: profile}
 }
 
-func (a *GophercloudStorageAdapter) Preflight(ctx context.Context, backend, explicitS3Endpoint string) (StoragePreflight, error) {
+func (a *GophercloudStorageAdapter) Preflight(ctx context.Context, backend, explicitS3Endpoint string, resolveOwner bool) (StoragePreflight, error) {
 	if backend != "swift" && backend != "s3" {
 		return StoragePreflight{}, fmt.Errorf("unsupported OpenStack storage backend %q", backend)
 	}
@@ -93,6 +96,15 @@ func (a *GophercloudStorageAdapter) Preflight(ctx context.Context, backend, expl
 		projectID = discoveredID
 	}
 	result := StoragePreflight{Endpoint: client.Endpoint, AuthURL: a.Profile.AuthURL, Region: a.Profile.Region, ProjectID: projectID}
+	if resolveOwner {
+		result.CredentialOwnerID = strings.TrimSpace(a.Profile.UserID)
+		if result.CredentialOwnerID == "" {
+			result.CredentialOwnerID, err = authenticatedUserID(provider)
+			if err != nil {
+				return StoragePreflight{}, fmt.Errorf("resolve storage credential owner: %w", err)
+			}
+		}
+	}
 	if backend == "s3" {
 		result.S3Endpoint = strings.TrimSpace(explicitS3Endpoint)
 		if result.S3Endpoint == "" {
@@ -159,8 +171,9 @@ func (a *GophercloudStorageAdapter) EnsureContainer(ctx context.Context, req Con
 }
 
 func (a *GophercloudStorageAdapter) CreateAppCredential(ctx context.Context, req AppCredentialRequest) (AppCredential, error) {
-	if strings.TrimSpace(a.Profile.UserID) == "" {
-		return AppCredential{}, fmt.Errorf("cloud profile must specify auth.user_id for application credential creation")
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		return AppCredential{}, fmt.Errorf("credential owner user ID is required for application credential creation")
 	}
 	provider, err := a.Profile.provider(ctx)
 	if err != nil {
@@ -174,7 +187,7 @@ func (a *GophercloudStorageAdapter) CreateAppCredential(ctx context.Context, req
 	for _, rule := range req.AccessRules {
 		rules = append(rules, applicationcredentials.AccessRule{Service: rule.Service, Method: rule.Method, Path: rule.Path})
 	}
-	credential, err := applicationcredentials.Create(identity, a.Profile.UserID, applicationcredentials.CreateOpts{
+	credential, err := applicationcredentials.Create(identity, userID, applicationcredentials.CreateOpts{
 		Name: req.Name, Description: req.Description, AccessRules: rules,
 	}).Extract()
 	if err != nil {
@@ -183,9 +196,10 @@ func (a *GophercloudStorageAdapter) CreateAppCredential(ctx context.Context, req
 	return AppCredential{ID: credential.ID, Secret: credential.Secret}, nil
 }
 
-func (a *GophercloudStorageAdapter) DeleteAppCredential(ctx context.Context, id string) error {
-	if strings.TrimSpace(a.Profile.UserID) == "" {
-		return fmt.Errorf("cloud profile must specify auth.user_id for application credential deletion")
+func (a *GophercloudStorageAdapter) DeleteAppCredential(ctx context.Context, id, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("credential owner user ID is required for application credential deletion")
 	}
 	provider, err := a.Profile.provider(ctx)
 	if err != nil {
@@ -195,12 +209,13 @@ func (a *GophercloudStorageAdapter) DeleteAppCredential(ctx context.Context, id 
 	if err != nil {
 		return a.maskError(fmt.Errorf("create identity client: %w", err))
 	}
-	return a.maskError(applicationcredentials.Delete(identity, a.Profile.UserID, id).ExtractErr())
+	return a.maskError(applicationcredentials.Delete(identity, userID, id).ExtractErr())
 }
 
 func (a *GophercloudStorageAdapter) CreateEC2Credentials(ctx context.Context, req EC2CredentialRequest) (EC2Credentials, error) {
-	if strings.TrimSpace(a.Profile.UserID) == "" {
-		return EC2Credentials{}, fmt.Errorf("cloud profile must specify auth.user_id for EC2 credential creation")
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		return EC2Credentials{}, fmt.Errorf("credential owner user ID is required for EC2 credential creation")
 	}
 	if strings.TrimSpace(req.ProjectID) == "" {
 		return EC2Credentials{}, fmt.Errorf("project ID is required for EC2 credential creation")
@@ -213,7 +228,7 @@ func (a *GophercloudStorageAdapter) CreateEC2Credentials(ctx context.Context, re
 	if err != nil {
 		return EC2Credentials{}, a.maskError(fmt.Errorf("create identity client: %w", err))
 	}
-	credential, err := ec2credentials.Create(identity, a.Profile.UserID, ec2credentials.CreateOpts{TenantID: req.ProjectID}).Extract()
+	credential, err := ec2credentials.Create(identity, userID, ec2credentials.CreateOpts{TenantID: req.ProjectID}).Extract()
 	if err != nil {
 		return EC2Credentials{}, a.maskError(fmt.Errorf("create EC2 credential: %w", err))
 	}
@@ -224,9 +239,10 @@ func (a *GophercloudStorageAdapter) CreateEC2Credentials(ctx context.Context, re
 	return EC2Credentials{ID: credential.Access, AccessKeyID: credential.Access, Secret: credential.Secret, Endpoint: s3Endpoint, Region: a.Profile.Region, ProjectID: req.ProjectID}, nil
 }
 
-func (a *GophercloudStorageAdapter) DeleteEC2Credentials(ctx context.Context, id string) error {
-	if strings.TrimSpace(a.Profile.UserID) == "" {
-		return fmt.Errorf("cloud profile must specify auth.user_id for EC2 credential deletion")
+func (a *GophercloudStorageAdapter) DeleteEC2Credentials(ctx context.Context, id, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("credential owner user ID is required for EC2 credential deletion")
 	}
 	provider, err := a.Profile.provider(ctx)
 	if err != nil {
@@ -236,7 +252,7 @@ func (a *GophercloudStorageAdapter) DeleteEC2Credentials(ctx context.Context, id
 	if err != nil {
 		return a.maskError(fmt.Errorf("create identity client: %w", err))
 	}
-	return a.maskError(ec2credentials.Delete(identity, a.Profile.UserID, id).ExtractErr())
+	return a.maskError(ec2credentials.Delete(identity, userID, id).ExtractErr())
 }
 
 func (a *GophercloudStorageAdapter) maskError(err error) error {

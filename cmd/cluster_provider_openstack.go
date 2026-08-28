@@ -20,17 +20,18 @@ import (
 )
 
 type providerOpenStackFlags struct {
-	cloudName         string
-	cloudsYAML        string
-	imageID           string
-	windowsImageID    string
-	networkID         string
-	externalNetworkID string
-	subnetID          string
-	availabilityZone  string
-	replace           bool
-	importAuth        bool
-	importTLS         bool
+	cloudName             string
+	cloudsYAML            string
+	imageID               string
+	windowsImageID        string
+	networkID             string
+	externalNetworkID     string
+	subnetID              string
+	availabilityZone      string
+	createInternalNetwork bool
+	replace               bool
+	importAuth            bool
+	importTLS             bool
 }
 
 func newClusterProviderOpenStackCmd() *cobra.Command {
@@ -63,6 +64,7 @@ func newClusterProviderOpenStackOperationCmd(operation string, mutating bool) *c
 	cmd.Flags().StringVar(&flags.externalNetworkID, "external-network-id", "", "external network ID")
 	cmd.Flags().StringVar(&flags.subnetID, "subnet-id", "", "internal subnet ID")
 	cmd.Flags().StringVar(&flags.availabilityZone, "availability-zone", "", "availability zone")
+	cmd.Flags().BoolVar(&flags.createInternalNetwork, "create-internal-network", false, "let OpenTofu create and manage the internal network and subnet")
 	cmd.Flags().BoolVar(&flags.replace, "replace", false, "allow replacing populated provider selections")
 	cmd.Flags().BoolVar(&flags.importAuth, "import-auth", false, "write application credential fields from the selected profile")
 	cmd.Flags().BoolVar(&flags.importTLS, "import-tls", false, "persist selected profile TLS settings")
@@ -97,6 +99,14 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack == nil {
 		return NewExitError(2, "cluster OpenStack provider configuration is missing", nil)
 	}
+	if flags.createInternalNetwork {
+		if strings.TrimSpace(flags.networkID) != "" || strings.TrimSpace(flags.subnetID) != "" {
+			return NewExitError(2, "--create-internal-network cannot be combined with --network-id or --subnet-id", nil)
+		}
+		if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Networking != nil && strings.TrimSpace(cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Networking.VLAN.ID) != "" {
+			return NewExitError(2, "--create-internal-network cannot be used when networking.vlan.id is set", nil)
+		}
+	}
 	cloudsPath := strings.TrimSpace(flags.cloudsYAML)
 	if cloudsPath == "" {
 		cloudsPath = cloudopenstack.DefaultCloudsYAMLPath()
@@ -108,7 +118,7 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	if flags.importAuth && (strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "") {
 		return NewExitError(2, "--import-auth requires an application credential ID and secret; name-only application credentials cannot be persisted", nil)
 	}
-	snapshot, err := cloudopenstack.NewProfileDiscovery(profile).Discover(cmd.Context())
+	snapshot, err := cloudopenstack.NewProfileDiscovery(profile).DiscoverWithOptions(cmd.Context(), cloudopenstack.DiscoveryOptions{SkipInternalNetworkAndSubnet: flags.createInternalNetwork})
 	if err != nil {
 		return fmt.Errorf("discover OpenStack provider inventory: %w", err)
 	}
@@ -119,7 +129,7 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	result, prospective, err := provideropenstack.Plan(cmd.Context(), cfg, snapshot, provideropenstack.Options{
 		ImageID: flags.imageID, WindowsImageID: flags.windowsImageID, NetworkID: flags.networkID,
 		ExternalNetworkID: flags.externalNetworkID, SubnetID: flags.subnetID, AvailabilityZone: flags.availabilityZone,
-		Replace: flags.replace, ImportAuth: authImport, ImportTLS: flags.importTLS,
+		CreateInternalNetwork: flags.createInternalNetwork, Replace: flags.replace, ImportAuth: authImport, ImportTLS: flags.importTLS,
 	})
 	if err != nil {
 		return NewExitError(2, "invalid OpenStack provider selection", err)
@@ -202,6 +212,9 @@ func writeProviderOpenStackOutput(cmd *cobra.Command, format OutputFormat, resul
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "OpenStack provider %s for %s: %s\n", result.Operation, result.Cluster, result.Status)
 	fmt.Fprintf(cmd.OutOrStdout(), "Cloud profile: %s\n", result.CloudProfile)
+	if result.InternalNetworkMode != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "Internal network mode: %s\n", result.InternalNetworkMode)
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Changes:")
 	for _, change := range result.Changes {
 		fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s -> %s\n", change.Path, change.Old, change.New)

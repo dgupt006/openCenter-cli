@@ -71,7 +71,9 @@ opencenter cluster provider openstack apply opencenter-cloud/services-2026-02-0d
   --os-cloud flex-dfw-dev --yes
 ```
 
-Existing populated selections require `--replace`; ambiguous resources require an explicit selector such as `--image-id` or `--network-id`. Provider apply does not create or mutate OpenStack resources.
+Populated provider values are preserved as authoritative unless an explicit selector or import requests a different value; conflicting explicit replacements require `--replace`. Blank or placeholder values are filled from unambiguous discovery, and ambiguous resources require an explicit selector such as `--image-id` or `--network-id`. Provider apply does not create or mutate OpenStack resources.
+
+If the internal network and subnet should be created and managed by generated OpenTofu, pass `--create-internal-network` to both provider plan and apply. This bypasses internal network/subnet ambiguity, clears their top-level and nested mirrors, and reports `internal_network_mode: tofu-managed`; use `--replace` when existing internal selections must be cleared. The flag cannot be combined with `--network-id` or `--subnet-id`, and is incompatible with a configured `networking.vlan.id`.
 
 When a configured service needs OpenStack object storage, provision it explicitly one service at a time:
 

@@ -57,11 +57,20 @@ type DiscoverySnapshot struct {
 // flavor matching or availability-zone enumeration by default.
 type ProfileDiscovery struct{ Profile Profile }
 
+// DiscoveryOptions controls optional inventory reads.
+type DiscoveryOptions struct {
+	SkipInternalNetworkAndSubnet bool
+}
+
 func NewProfileDiscovery(profile Profile) *ProfileDiscovery {
 	return &ProfileDiscovery{Profile: profile}
 }
 
 func (d *ProfileDiscovery) Discover(ctx context.Context) (*DiscoverySnapshot, error) {
+	return d.DiscoverWithOptions(ctx, DiscoveryOptions{})
+}
+
+func (d *ProfileDiscovery) DiscoverWithOptions(ctx context.Context, opts DiscoveryOptions) (*DiscoverySnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -85,13 +94,21 @@ func (d *ProfileDiscovery) Discover(ctx context.Context) (*DiscoverySnapshot, er
 	if err != nil {
 		return nil, err
 	}
-	networkItems, externalItems, err := listProfileNetworks(networkClient)
+	var networkItems, externalItems []Resource
+	if opts.SkipInternalNetworkAndSubnet {
+		externalItems, err = listProfileExternalNetworks(networkClient)
+	} else {
+		networkItems, externalItems, err = listProfileNetworks(networkClient)
+	}
 	if err != nil {
 		return nil, err
 	}
-	subnetItems, err := listProfileSubnets(networkClient)
-	if err != nil {
-		return nil, err
+	var subnetItems []Subnet
+	if !opts.SkipInternalNetworkAndSubnet {
+		subnetItems, err = listProfileSubnets(networkClient)
+		if err != nil {
+			return nil, err
+		}
 	}
 	projectID, projectName, projectDomain, scopeErr := authenticatedProjectScope(provider)
 	if scopeErr != nil {
@@ -177,6 +194,41 @@ func authenticatedProjectScope(provider *gophercloud.ProviderClient) (string, st
 	}
 }
 
+// authenticatedUserID returns the user ID embedded in the already-authenticated
+// Keystone v3 token. It intentionally performs no identity API lookup.
+func authenticatedUserID(provider *gophercloud.ProviderClient) (string, error) {
+	if provider == nil || provider.GetAuthResult() == nil {
+		return "", fmt.Errorf("authenticated Keystone token is unavailable; cannot derive user ID")
+	}
+
+	var (
+		user *tokens3.User
+		err  error
+	)
+	switch result := provider.GetAuthResult().(type) {
+	case tokens3.CreateResult:
+		user, err = result.ExtractUser()
+	case *tokens3.CreateResult:
+		user, err = result.ExtractUser()
+	case tokens3.GetResult:
+		user, err = result.ExtractUser()
+	case *tokens3.GetResult:
+		user, err = result.ExtractUser()
+	default:
+		return "", fmt.Errorf("unsupported authenticated Keystone result %T for user ID derivation", provider.GetAuthResult())
+	}
+	if err != nil {
+		return "", fmt.Errorf("extract Keystone v3 token user: %w", err)
+	}
+	if user == nil {
+		return "", fmt.Errorf("Keystone v3 token user is absent")
+	}
+	if strings.TrimSpace(user.ID) == "" {
+		return "", fmt.Errorf("Keystone v3 token user ID is blank")
+	}
+	return strings.TrimSpace(user.ID), nil
+}
+
 func listProfileImages(client *gophercloud.ServiceClient) ([]Resource, error) {
 	pages, err := images.List(client, images.ListOpts{}).AllPages()
 	if err != nil {
@@ -209,18 +261,9 @@ func listProfileNetworks(client *gophercloud.ServiceClient) ([]Resource, []Resou
 	for _, item := range items {
 		all = append(all, Resource{ID: item.ID, Name: item.Name})
 	}
-	external := true
-	externalPages, err := networks.List(client, networkexternal.ListOptsExt{ListOptsBuilder: networks.ListOpts{}, External: &external}).AllPages()
+	externalResult, err := listProfileExternalNetworks(client)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list OpenStack external networks: %w", err)
-	}
-	externalItems, err := networks.ExtractNetworks(externalPages)
-	if err != nil {
-		return nil, nil, fmt.Errorf("extract OpenStack external networks: %w", err)
-	}
-	externalResult := make([]Resource, 0, len(externalItems))
-	for _, item := range externalItems {
-		externalResult = append(externalResult, Resource{ID: item.ID, Name: item.Name})
+		return nil, nil, err
 	}
 	sortResources(all)
 	sortResources(externalResult)
@@ -235,6 +278,24 @@ func listProfileNetworks(client *gophercloud.ServiceClient) ([]Resource, []Resou
 		}
 	}
 	return internal, externalResult, nil
+}
+
+func listProfileExternalNetworks(client *gophercloud.ServiceClient) ([]Resource, error) {
+	external := true
+	externalPages, err := networks.List(client, networkexternal.ListOptsExt{ListOptsBuilder: networks.ListOpts{}, External: &external}).AllPages()
+	if err != nil {
+		return nil, fmt.Errorf("list OpenStack external networks: %w", err)
+	}
+	externalItems, err := networks.ExtractNetworks(externalPages)
+	if err != nil {
+		return nil, fmt.Errorf("extract OpenStack external networks: %w", err)
+	}
+	result := make([]Resource, 0, len(externalItems))
+	for _, item := range externalItems {
+		result = append(result, Resource{ID: item.ID, Name: item.Name})
+	}
+	sortResources(result)
+	return result, nil
 }
 
 func listProfileSubnets(client *gophercloud.ServiceClient) ([]Subnet, error) {

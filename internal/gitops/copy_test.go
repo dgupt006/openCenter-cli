@@ -865,3 +865,46 @@ func TestRenderClusterFluxBridgePreservesFluxSystemDir(t *testing.T) {
 		t.Fatalf("sentinel content changed: got %q", string(got))
 	}
 }
+
+func containsTerraformAssignment(content, key, value string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key) && strings.Contains(trimmed, fmt.Sprintf("= %q", value)) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRenderInfrastructureClusterOpenStackNovaIncludesSelectedSubnet(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		network string
+		subnet  string
+		wantNet string
+		wantSub string
+	}{
+		{name: "explicit selections", network: "network-123", subnet: "subnet-123", wantNet: "network-123", wantSub: "subnet-123"},
+		{name: "tofu managed blank selections", wantNet: "", wantSub: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := t.TempDir()
+			cfg := newDefault("openstack-subnet-render")
+			cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+			cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Networking.NetworkID = tc.network
+			cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Networking.SubnetID = tc.subnet
+			if err := RenderInfrastructureCluster(cfg); err != nil {
+				t.Fatalf("RenderInfrastructureCluster returned error: %v", err)
+			}
+			mainTF := filepath.Join(dst, "infrastructure", "clusters", cfg.ClusterName(), "main.tf")
+			data, err := os.ReadFile(mainTF)
+			if err != nil {
+				t.Fatalf("failed to read rendered main.tf: %v", err)
+			}
+			content := string(data)
+			if !containsTerraformAssignment(content, "network_id", tc.wantNet) || !containsTerraformAssignment(content, "subnet_id", tc.wantSub) {
+				t.Fatalf("rendered Nova network wiring missing: want network_id=%q and subnet_id=%q\ncontent:\n%s", tc.wantNet, tc.wantSub, content)
+			}
+		})
+	}
+}

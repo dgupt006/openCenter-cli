@@ -292,6 +292,7 @@ module "openstack-nova" {
   image_id_windows              = local.image_id_windows
   router_external_network_id    = local.router_external_network_id
   network_id                    = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Networking.NetworkID | default "" }}"
+  subnet_id                     = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Networking.SubnetID | default "" }}"
   vlan_id                       = local.vlan_id
   vrrp_enabled                  = local.vrrp_enabled
   vrrp_ip                       = local.vrrp_ip

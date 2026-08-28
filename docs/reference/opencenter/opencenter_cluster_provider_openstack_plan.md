@@ -20,6 +20,7 @@ opencenter cluster provider openstack plan <cluster> [flags]
 ```
       --availability-zone string     availability zone
       --clouds-yaml string           path to clouds.yaml
+      --create-internal-network      let OpenTofu create and manage the internal network and subnet
       --external-network-id string   external network ID
   -h, --help                         help for plan
       --image-id string              Linux image ID

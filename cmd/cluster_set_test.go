@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	testhelpers "github.com/opencenter-cloud/opencenter-cli/internal/testing"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func TestClusterSetUpdatesExplicitField(t *testing.T) {
@@ -125,6 +128,175 @@ func TestClusterSetRejectsMissingAssignmentAfterClusterName(t *testing.T) {
 	}
 }
 
+func TestClusterSetSwitchesTokenToSSH(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	_, clusterPaths := saveKindConfigForCommandTest(t, dir, "token-to-ssh", "opencenter")
+
+	privateKey := filepath.Join(dir, "keys", "id_ed25519")
+	publicKey := privateKey + ".pub"
+	cmd := newClusterSetCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"token-to-ssh",
+		"opencenter.gitops.repository.url=ssh://git@github.com/acme/platform.git",
+		"opencenter.gitops.auth.token=null",
+		"opencenter.gitops.auth.ssh.private_key=" + privateKey,
+		"opencenter.gitops.auth.ssh.public_key=" + publicKey,
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster set token-to-ssh failed: %v", err)
+	}
+
+	updated := loadV2ConfigForTest(t, clusterPaths.ConfigPath)
+	if updated.OpenCenter.GitOps.Repository.URL != "ssh://git@github.com/acme/platform.git" {
+		t.Fatalf("repository URL = %q", updated.OpenCenter.GitOps.Repository.URL)
+	}
+	if updated.OpenCenter.GitOps.Auth.Token != nil {
+		t.Fatalf("expected token auth to be nil, got %#v", updated.OpenCenter.GitOps.Auth.Token)
+	}
+	if updated.OpenCenter.GitOps.Auth.SSH == nil {
+		t.Fatal("expected SSH auth to be allocated")
+	}
+	if updated.OpenCenter.GitOps.Auth.SSH.PrivateKey != privateKey {
+		t.Fatalf("private key = %q, want %q", updated.OpenCenter.GitOps.Auth.SSH.PrivateKey, privateKey)
+	}
+	if updated.OpenCenter.GitOps.Auth.SSH.PublicKey != publicKey {
+		t.Fatalf("public key = %q, want %q", updated.OpenCenter.GitOps.Auth.SSH.PublicKey, publicKey)
+	}
+}
+
+func TestClusterSetFailureAfterAssignmentDoesNotPersist(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "failed-set", "opencenter")
+	resolver := paths.NewPathResolver(filepath.Join(dir, "clusters"))
+	testhelpers.SaveConfigWithPathResolver(t, cfg, resolver)
+	if err := os.Remove(clusterPaths.ConfigPath + ".backup"); err != nil {
+		t.Fatalf("remove setup backup: %v", err)
+	}
+	before, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		t.Fatalf("read original config: %v", err)
+	}
+
+	cmd := newClusterSetCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"failed-set",
+		"opencenter.gitops.repository.url=ssh://git@github.com/acme/platform.git",
+		"opencenter.gitops.auth.token=not-null",
+	})
+
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unsupported field type") {
+		t.Fatalf("expected non-null pointer assignment error, got: %v", err)
+	}
+
+	after, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config after failed set: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("failed set changed config:\n--- before\n%s\n--- after\n%s", before, after)
+	}
+	if _, err := os.Stat(clusterPaths.ConfigPath + ".backup"); !os.IsNotExist(err) {
+		t.Fatalf("failed set created backup, stat error = %v", err)
+	}
+}
+
+func TestClusterSetDryRunPointerSwitchDoesNotPersist(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "dry-run-pointer", "opencenter")
+	resolver := paths.NewPathResolver(filepath.Join(dir, "clusters"))
+	testhelpers.SaveConfigWithPathResolver(t, cfg, resolver)
+	if err := os.Remove(clusterPaths.ConfigPath + ".backup"); err != nil {
+		t.Fatalf("remove setup backup: %v", err)
+	}
+	before, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		t.Fatalf("read original config: %v", err)
+	}
+
+	privateKey := filepath.Join(dir, "keys", "id_ed25519")
+	cmd := newClusterSetRootForTest()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"cluster", "set", "dry-run-pointer",
+		"opencenter.gitops.repository.url=ssh://git@github.com/acme/platform.git",
+		"opencenter.gitops.auth.token=null",
+		"opencenter.gitops.auth.ssh.private_key=" + privateKey,
+		"opencenter.gitops.auth.ssh.public_key=" + privateKey + ".pub",
+		"--dry-run",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster set --dry-run pointer switch failed: %v", err)
+	}
+
+	after, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config after dry-run: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("dry-run changed config:\n--- before\n%s\n--- after\n%s", before, after)
+	}
+	if _, err := os.Stat(clusterPaths.ConfigPath + ".backup"); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created backup, stat error = %v", err)
+	}
+}
+
+func TestClusterSetStringNullRemainsLiteral(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "literal-null", "opencenter")
+	resolver := paths.NewPathResolver(filepath.Join(dir, "clusters"))
+	testhelpers.SaveConfigWithPathResolver(t, cfg, resolver)
+
+	cmd := newClusterSetCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"literal-null", "opencenter.meta.env=null"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster set string null failed: %v", err)
+	}
+
+	data, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var updated v2.Config
+	if err := yaml.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if updated.OpenCenter.Meta.Env != "null" {
+		t.Fatalf("env = %q, want literal null", updated.OpenCenter.Meta.Env)
+	}
+}
+
+func TestSetReflectValueRejectsNonNullPointer(t *testing.T) {
+	token := &v2.GitOpsTokenAuth{Provider: "github", Token: "original"}
+	before := *token
+
+	err := setReflectValue(reflect.ValueOf(&token).Elem(), "replacement")
+	if err == nil || !strings.Contains(err.Error(), "unsupported field type") {
+		t.Fatalf("expected unsupported field type error, got: %v", err)
+	}
+	if *token != before {
+		t.Fatalf("non-null pointer assignment changed value: before=%#v after=%#v", before, *token)
+	}
+}
+
 func newClusterSetRootForTest() *cobra.Command {
 	root := &cobra.Command{
 		Use: "opencenter",
@@ -133,6 +305,7 @@ func newClusterSetRootForTest() *cobra.Command {
 		},
 	}
 	addGlobalFlags(root)
+
 	cluster := &cobra.Command{Use: "cluster"}
 	cluster.AddCommand(newClusterSetCmd())
 	root.AddCommand(cluster)

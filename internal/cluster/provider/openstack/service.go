@@ -26,15 +26,16 @@ type AuthImport struct {
 }
 
 type Options struct {
-	ImageID           string
-	WindowsImageID    string
-	NetworkID         string
-	ExternalNetworkID string
-	SubnetID          string
-	AvailabilityZone  string
-	Replace           bool
-	ImportAuth        *AuthImport
-	ImportTLS         bool
+	ImageID               string
+	WindowsImageID        string
+	NetworkID             string
+	ExternalNetworkID     string
+	SubnetID              string
+	AvailabilityZone      string
+	CreateInternalNetwork bool
+	Replace               bool
+	ImportAuth            *AuthImport
+	ImportTLS             bool
 }
 
 type Change struct {
@@ -55,6 +56,7 @@ type Result struct {
 	Cluster                 string      `json:"cluster" yaml:"cluster"`
 	Provider                string      `json:"provider" yaml:"provider"`
 	CloudProfile            string      `json:"cloud_profile" yaml:"cloud_profile"`
+	InternalNetworkMode     string      `json:"internal_network_mode,omitempty" yaml:"internal_network_mode,omitempty"`
 	Changes                 []Change    `json:"changes" yaml:"changes"`
 	Selections              []Selection `json:"selections" yaml:"selections"`
 	Warnings                []string    `json:"warnings" yaml:"warnings"`
@@ -76,6 +78,12 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 	}
 	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack == nil {
 		return result, cfg, fmt.Errorf("openstack provider configuration is missing")
+	}
+	if err := validateCreateInternalNetworkOptions(cfg.OpenCenter.Infrastructure.Cloud.OpenStack, opts); err != nil {
+		return result, cfg, err
+	}
+	if opts.CreateInternalNetwork {
+		result.InternalNetworkMode = "tofu-managed"
 	}
 	if snapshot == nil {
 		return result, cfg, fmt.Errorf("OpenStack discovery snapshot cannot be nil")
@@ -101,15 +109,28 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		changes = append(changes, Change{Path: path, Old: redact(currentValue, sensitive), New: redact(desired, sensitive)})
 	}
 
-	set("opencenter.infrastructure.cloud.openstack.auth_url", &osCfg.AuthURL, snapshot.AuthURL, false)
-	set("opencenter.infrastructure.cloud.openstack.region", &osCfg.Region, snapshot.Region, false)
-	set("opencenter.infrastructure.cloud.openstack.project_id", &osCfg.ProjectID, snapshot.ProjectID, false)
-	set("opencenter.infrastructure.cloud.openstack.project_name", &osCfg.ProjectName, snapshot.ProjectName, false)
-	set("opencenter.infrastructure.cloud.openstack.tenant_name", &osCfg.TenantName, snapshot.ProjectName, false)
-	set("opencenter.infrastructure.cloud.openstack.domain", &osCfg.Domain, snapshot.DomainName, false)
-	set("opencenter.infrastructure.cloud.openstack.user_domain_name", &osCfg.UserDomainName, snapshot.UserDomainName, false)
-	set("opencenter.infrastructure.cloud.openstack.project_domain_name", &osCfg.ProjectDomainName, snapshot.ProjectDomainName, false)
-	set("opencenter.infrastructure.cloud.openstack.domain_name", &osCfg.DomainName, snapshot.DomainName, false)
+	setDerived := func(path string, current *string, desired string) {
+		currentValue := strings.TrimSpace(*current)
+		desired = strings.TrimSpace(desired)
+		if desired == "" || currentValue == desired {
+			return
+		}
+		if !isPlaceholder(currentValue) && !opts.Replace {
+			return
+		}
+		*current = desired
+		changes = append(changes, Change{Path: path, Old: currentValue, New: desired})
+	}
+
+	setDerived("opencenter.infrastructure.cloud.openstack.auth_url", &osCfg.AuthURL, snapshot.AuthURL)
+	setDerived("opencenter.infrastructure.cloud.openstack.region", &osCfg.Region, snapshot.Region)
+	setDerived("opencenter.infrastructure.cloud.openstack.project_id", &osCfg.ProjectID, snapshot.ProjectID)
+	setDerived("opencenter.infrastructure.cloud.openstack.project_name", &osCfg.ProjectName, snapshot.ProjectName)
+	setDerived("opencenter.infrastructure.cloud.openstack.tenant_name", &osCfg.TenantName, snapshot.ProjectName)
+	setDerived("opencenter.infrastructure.cloud.openstack.domain", &osCfg.Domain, snapshot.DomainName)
+	setDerived("opencenter.infrastructure.cloud.openstack.user_domain_name", &osCfg.UserDomainName, snapshot.UserDomainName)
+	setDerived("opencenter.infrastructure.cloud.openstack.project_domain_name", &osCfg.ProjectDomainName, snapshot.ProjectDomainName)
+	setDerived("opencenter.infrastructure.cloud.openstack.domain_name", &osCfg.DomainName, snapshot.DomainName)
 	if opts.ImportTLS {
 		if snapshot.CA != "" {
 			set("opencenter.infrastructure.cloud.openstack.ca", &osCfg.CA, snapshot.CA, false)
@@ -129,7 +150,7 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		set("opencenter.infrastructure.cloud.openstack.application_credential_secret", &osCfg.ApplicationCredentialSecret, opts.ImportAuth.ApplicationCredentialSecret, true)
 	}
 
-	if resourceConflict(osCfg.ImageID, opts.ImageID, snapshot.Images, opts.Replace) {
+	if resourceConflict(osCfg.ImageID, opts.ImageID, snapshot.Images, opts.Replace, true) {
 		blocked = true
 		result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.image_id is populated with %q; use --replace or --image-id", osCfg.ImageID))
 	}
@@ -146,7 +167,7 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		set("opencenter.infrastructure.cloud.openstack.image_id", &osCfg.ImageID, selected.ID, false)
 		set("opencenter.infrastructure.cloud.openstack.image_name", &osCfg.ImageName, selected.Name, false)
 	}
-	if resourceConflict(osCfg.ImageIDWindows, opts.WindowsImageID, snapshot.WindowsImages, opts.Replace) {
+	if resourceConflict(osCfg.ImageIDWindows, opts.WindowsImageID, snapshot.WindowsImages, opts.Replace, true) {
 		blocked = true
 		result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.image_id_windows is populated with %q; use --replace or --windows-image-id", osCfg.ImageIDWindows))
 	}
@@ -158,27 +179,33 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 	} else if ok {
 		set("opencenter.infrastructure.cloud.openstack.image_id_windows", &osCfg.ImageIDWindows, selected.ID, false)
 	}
-	internalNetworks := filterInternalNetworks(snapshot.Networks, snapshot.ExternalNetworks)
-	if resourceConflict(osCfg.NetworkID, opts.NetworkID, internalNetworks, opts.Replace) {
-		blocked = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.network_id is populated with %q; use --replace or --network-id", osCfg.NetworkID))
+	if opts.CreateInternalNetwork {
+		if !clearInternalNetworkSelections(osCfg, opts.Replace, &changes, &result.Warnings) {
+			blocked = true
+		}
+	} else {
+		internalNetworks := filterInternalNetworks(snapshot.Networks, snapshot.ExternalNetworks)
+		if resourceConflict(osCfg.NetworkID, opts.NetworkID, internalNetworks, opts.Replace, true) {
+			blocked = true
+			result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.network_id is populated with %q; use --replace or --network-id", osCfg.NetworkID))
+		}
+		if unresolvedSelection(osCfg.NetworkID, opts.NetworkID, internalNetworks) {
+			blocked = true
+			result.Warnings = append(result.Warnings, "no viable internal network was discovered; specify --network-id")
+		}
+		if selected, ok, ambiguous, err := chooseResource("network", osCfg.NetworkID, opts.NetworkID, internalNetworks, opts.Replace); err != nil {
+			return result, cfg, err
+		} else if ambiguous {
+			result.Selections = append(result.Selections, Selection{Field: "network", Candidates: sortedResourceCopy(internalNetworks)})
+			blocked = true
+		} else if ok {
+			set("opencenter.infrastructure.cloud.openstack.network_id", &osCfg.NetworkID, selected.ID, false)
+			set("opencenter.infrastructure.cloud.openstack.network_name", &osCfg.NetworkName, selected.Name, false)
+			ensureNetworking(osCfg)
+			set("opencenter.infrastructure.cloud.openstack.networking.network_id", &osCfg.Networking.NetworkID, selected.ID, false)
+		}
 	}
-	if unresolvedSelection(osCfg.NetworkID, opts.NetworkID, internalNetworks) {
-		blocked = true
-		result.Warnings = append(result.Warnings, "no viable internal network was discovered; specify --network-id")
-	}
-	if selected, ok, ambiguous, err := chooseResource("network", osCfg.NetworkID, opts.NetworkID, internalNetworks, opts.Replace); err != nil {
-		return result, cfg, err
-	} else if ambiguous {
-		result.Selections = append(result.Selections, Selection{Field: "network", Candidates: sortedResourceCopy(internalNetworks)})
-		blocked = true
-	} else if ok {
-		set("opencenter.infrastructure.cloud.openstack.network_id", &osCfg.NetworkID, selected.ID, false)
-		set("opencenter.infrastructure.cloud.openstack.network_name", &osCfg.NetworkName, selected.Name, false)
-		ensureNetworking(osCfg)
-		set("opencenter.infrastructure.cloud.openstack.networking.network_id", &osCfg.Networking.NetworkID, selected.ID, false)
-	}
-	if resourceConflict(osCfg.RouterExternalNetworkID, opts.ExternalNetworkID, snapshot.ExternalNetworks, opts.Replace) {
+	if resourceConflict(osCfg.RouterExternalNetworkID, opts.ExternalNetworkID, snapshot.ExternalNetworks, opts.Replace, false) {
 		blocked = true
 		result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.router_external_network_id is populated with %q; use --replace or --external-network-id", osCfg.RouterExternalNetworkID))
 	}
@@ -202,40 +229,42 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		set("opencenter.infrastructure.cloud.openstack.networking.floating_ip_pool", &osCfg.Networking.FloatingIPPool, selected.Name, false)
 	}
 
-	subnetCandidates := snapshot.Subnets
-	if strings.TrimSpace(osCfg.NetworkID) != "" {
-		filtered := make([]cloudopenstack.Subnet, 0, len(subnetCandidates))
-		for _, subnet := range subnetCandidates {
-			if subnet.NetworkID == osCfg.NetworkID {
-				filtered = append(filtered, subnet)
+	if !opts.CreateInternalNetwork {
+		subnetCandidates := snapshot.Subnets
+		if strings.TrimSpace(osCfg.NetworkID) != "" {
+			filtered := make([]cloudopenstack.Subnet, 0, len(subnetCandidates))
+			for _, subnet := range subnetCandidates {
+				if subnet.NetworkID == osCfg.NetworkID {
+					filtered = append(filtered, subnet)
+				}
 			}
+			subnetCandidates = filtered
 		}
-		subnetCandidates = filtered
-	}
-	subnetResources := make([]cloudopenstack.Resource, 0, len(subnetCandidates))
-	for _, subnet := range subnetCandidates {
-		subnetResources = append(subnetResources, subnet.Resource)
-	}
-	if resourceConflict(osCfg.SubnetID, opts.SubnetID, subnetResources, opts.Replace) {
-		blocked = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.subnet_id is populated with %q; use --replace or --subnet-id", osCfg.SubnetID))
-	}
-	if unresolvedSelection(osCfg.SubnetID, opts.SubnetID, subnetResources) {
-		blocked = true
-		result.Warnings = append(result.Warnings, "no viable subnet was discovered; specify --subnet-id")
-	}
-	if selected, ok, ambiguous, err := chooseResource("subnet", osCfg.SubnetID, opts.SubnetID, subnetResources, opts.Replace); err != nil {
-		return result, cfg, err
-	} else if ambiguous {
-		result.Selections = append(result.Selections, Selection{Field: "subnet", Candidates: sortedResourceCopy(subnetResources)})
-		blocked = true
-	} else if ok {
-		set("opencenter.infrastructure.cloud.openstack.subnet_id", &osCfg.SubnetID, selected.ID, false)
-		ensureNetworking(osCfg)
-		set("opencenter.infrastructure.cloud.openstack.networking.subnet_id", &osCfg.Networking.SubnetID, selected.ID, false)
+		subnetResources := make([]cloudopenstack.Resource, 0, len(subnetCandidates))
+		for _, subnet := range subnetCandidates {
+			subnetResources = append(subnetResources, subnet.Resource)
+		}
+		if resourceConflict(osCfg.SubnetID, opts.SubnetID, subnetResources, opts.Replace, true) {
+			blocked = true
+			result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.subnet_id is populated with %q; use --replace or --subnet-id", osCfg.SubnetID))
+		}
+		if unresolvedSelection(osCfg.SubnetID, opts.SubnetID, subnetResources) {
+			blocked = true
+			result.Warnings = append(result.Warnings, "no viable subnet was discovered; specify --subnet-id")
+		}
+		if selected, ok, ambiguous, err := chooseResource("subnet", osCfg.SubnetID, opts.SubnetID, subnetResources, opts.Replace); err != nil {
+			return result, cfg, err
+		} else if ambiguous {
+			result.Selections = append(result.Selections, Selection{Field: "subnet", Candidates: sortedResourceCopy(subnetResources)})
+			blocked = true
+		} else if ok {
+			set("opencenter.infrastructure.cloud.openstack.subnet_id", &osCfg.SubnetID, selected.ID, false)
+			ensureNetworking(osCfg)
+			set("opencenter.infrastructure.cloud.openstack.networking.subnet_id", &osCfg.Networking.SubnetID, selected.ID, false)
+		}
 	}
 	if snapshot.AvailabilityZonesAvailable {
-		if resourceConflict(osCfg.AvailabilityZone, opts.AvailabilityZone, snapshot.AvailabilityZones, opts.Replace) {
+		if resourceConflict(osCfg.AvailabilityZone, opts.AvailabilityZone, snapshot.AvailabilityZones, opts.Replace, true) {
 			blocked = true
 			result.Warnings = append(result.Warnings, fmt.Sprintf("opencenter.infrastructure.cloud.openstack.availability_zone is populated with %q; use --replace or --availability-zone", osCfg.AvailabilityZone))
 		}
@@ -274,8 +303,48 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 	return result, prospective, nil
 }
 
-func resourceConflict(current, explicit string, candidates []cloudopenstack.Resource, replace bool) bool {
-	if replace || strings.TrimSpace(explicit) != "" || isPlaceholder(current) {
+func validateCreateInternalNetworkOptions(cfg *v2.OpenStackCloudConfig, opts Options) error {
+	if !opts.CreateInternalNetwork {
+		return nil
+	}
+	if strings.TrimSpace(opts.NetworkID) != "" || strings.TrimSpace(opts.SubnetID) != "" {
+		return fmt.Errorf("--create-internal-network cannot be combined with --network-id or --subnet-id")
+	}
+	if cfg.Networking != nil && strings.TrimSpace(cfg.Networking.VLAN.ID) != "" {
+		return fmt.Errorf("--create-internal-network cannot be used when networking.vlan.id is set")
+	}
+	return nil
+}
+
+func clearInternalNetworkSelections(cfg *v2.OpenStackCloudConfig, replace bool, changes *[]Change, warnings *[]string) bool {
+	populated := strings.TrimSpace(cfg.NetworkID) != "" || strings.TrimSpace(cfg.NetworkName) != "" || strings.TrimSpace(cfg.SubnetID) != ""
+	if cfg.Networking != nil {
+		populated = populated || strings.TrimSpace(cfg.Networking.NetworkID) != "" || strings.TrimSpace(cfg.Networking.SubnetID) != ""
+	}
+	if populated && !replace {
+		*warnings = append(*warnings, "internal network selections are populated; use --replace with --create-internal-network to clear them")
+		return false
+	}
+	clear := func(path string, current *string) {
+		old := strings.TrimSpace(*current)
+		if old == "" {
+			return
+		}
+		*current = ""
+		*changes = append(*changes, Change{Path: path, Old: old, New: ""})
+	}
+	clear("opencenter.infrastructure.cloud.openstack.network_id", &cfg.NetworkID)
+	clear("opencenter.infrastructure.cloud.openstack.network_name", &cfg.NetworkName)
+	clear("opencenter.infrastructure.cloud.openstack.subnet_id", &cfg.SubnetID)
+	if cfg.Networking != nil {
+		clear("opencenter.infrastructure.cloud.openstack.networking.network_id", &cfg.Networking.NetworkID)
+		clear("opencenter.infrastructure.cloud.openstack.networking.subnet_id", &cfg.Networking.SubnetID)
+	}
+	return true
+}
+
+func resourceConflict(current, explicit string, candidates []cloudopenstack.Resource, replace, preserveCurrent bool) bool {
+	if replace || preserveCurrent || strings.TrimSpace(explicit) != "" || isPlaceholder(current) {
 		return false
 	}
 	for _, candidate := range candidates {

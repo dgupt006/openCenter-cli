@@ -425,6 +425,12 @@ func setFieldValue(field reflect.Value, value string) error {
 // setReflectValue converts string value to the field's type and sets it.
 func setReflectValue(field reflect.Value, value string) error {
 	switch field.Kind() {
+	case reflect.Ptr:
+		if value == "null" {
+			field.SetZero()
+			return nil
+		}
+		return fmt.Errorf("unsupported field type: %s", field.Type())
 	case reflect.String:
 		field.SetString(value)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

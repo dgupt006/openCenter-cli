@@ -18,34 +18,40 @@ import (
 
 type fakeAdapter struct {
 	preflight                                                                  cloudopenstack.StoragePreflight
+	preflightErr                                                               error
 	preflightCalls, containers, appCreates, appDeletes, ec2Creates, ec2Deletes int
+	appUserID, ec2UserID, appDeleteUserID, ec2DeleteUserID                     string
 	app                                                                        cloudopenstack.AppCredential
 	ec2                                                                        cloudopenstack.EC2Credentials
 	revokeErr                                                                  error
 }
 
-func (f *fakeAdapter) Preflight(context.Context, string, string) (cloudopenstack.StoragePreflight, error) {
+func (f *fakeAdapter) Preflight(_ context.Context, _ string, _ string, _ bool) (cloudopenstack.StoragePreflight, error) {
 	f.preflightCalls++
-	return f.preflight, nil
+	return f.preflight, f.preflightErr
 }
 func (f *fakeAdapter) EnsureContainer(context.Context, cloudopenstack.ContainerRequest) error {
 	f.containers++
 	return nil
 }
-func (f *fakeAdapter) CreateAppCredential(context.Context, cloudopenstack.AppCredentialRequest) (cloudopenstack.AppCredential, error) {
+func (f *fakeAdapter) CreateAppCredential(_ context.Context, req cloudopenstack.AppCredentialRequest) (cloudopenstack.AppCredential, error) {
 	f.appCreates++
+	f.appUserID = req.UserID
 	return f.app, nil
 }
-func (f *fakeAdapter) DeleteAppCredential(context.Context, string) error {
+func (f *fakeAdapter) DeleteAppCredential(_ context.Context, _ string, userID string) error {
 	f.appDeletes++
+	f.appDeleteUserID = userID
 	return f.revokeErr
 }
-func (f *fakeAdapter) CreateEC2Credentials(context.Context, cloudopenstack.EC2CredentialRequest) (cloudopenstack.EC2Credentials, error) {
+func (f *fakeAdapter) CreateEC2Credentials(_ context.Context, req cloudopenstack.EC2CredentialRequest) (cloudopenstack.EC2Credentials, error) {
 	f.ec2Creates++
+	f.ec2UserID = req.UserID
 	return f.ec2, nil
 }
-func (f *fakeAdapter) DeleteEC2Credentials(context.Context, string) error {
+func (f *fakeAdapter) DeleteEC2Credentials(_ context.Context, _ string, userID string) error {
 	f.ec2Deletes++
+	f.ec2DeleteUserID = userID
 	return f.revokeErr
 }
 
@@ -101,7 +107,7 @@ func testConfig(t *testing.T) *v2.Config {
 }
 
 func testAdapter() *fakeAdapter {
-	return &fakeAdapter{preflight: cloudopenstack.StoragePreflight{Endpoint: "https://swift.example/v1/AUTH_project-1", S3Endpoint: "https://s3.example", AuthURL: "https://identity.example/v3", Region: "RegionOne", ProjectID: "project-1"}, app: cloudopenstack.AppCredential{ID: "app-1", Secret: "app-secret"}, ec2: cloudopenstack.EC2Credentials{ID: "ec2-1", AccessKeyID: "access-1", Secret: "ec2-secret", Endpoint: "https://s3.example", Region: "RegionOne", ProjectID: "project-1"}}
+	return &fakeAdapter{preflight: cloudopenstack.StoragePreflight{Endpoint: "https://swift.example/v1/AUTH_project-1", S3Endpoint: "https://s3.example", AuthURL: "https://identity.example/v3", Region: "RegionOne", ProjectID: "project-1", CredentialOwnerID: "owner-1"}, app: cloudopenstack.AppCredential{ID: "app-1", Secret: "app-secret"}, ec2: cloudopenstack.EC2Credentials{ID: "ec2-1", AccessKeyID: "access-1", Secret: "ec2-secret", Endpoint: "https://s3.example", Region: "RegionOne", ProjectID: "project-1"}}
 }
 
 func TestValidateOptionsMappings(t *testing.T) {
@@ -186,7 +192,7 @@ func TestApplyCreatesAndPersistsRecoverySafely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != StatusApplied || adapter.ec2Creates != 1 || !fs.backup || !fs.recovery || !fs.removed {
+	if result.Status != StatusApplied || adapter.ec2Creates != 1 || adapter.ec2UserID != "owner-1" || !fs.backup || !fs.recovery || !fs.removed {
 		t.Fatalf("result=%+v adapter=%+v fs=%+v", result, adapter, fs)
 	}
 	if strings.Contains(string(fs.data), "ec2-secret") == false {
@@ -223,7 +229,7 @@ func TestApplyRotationKeepsReplacementWhenRevokeFails(t *testing.T) {
 	if err == nil || result.Status != StatusPartial {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if adapter.appCreates != 1 || adapter.appDeletes != 1 || result.Recovery == nil || result.Recovery.PersistenceState != "persisted-revoke-failed" || len(result.Warnings) == 0 {
+	if adapter.appCreates != 1 || adapter.appDeletes != 1 || adapter.appUserID != "owner-1" || adapter.appDeleteUserID != "owner-1" || result.Recovery == nil || result.Recovery.PersistenceState != "persisted-revoke-failed" || len(result.Warnings) == 0 {
 		t.Fatalf("rotation lifecycle incomplete: result=%+v adapter=%+v", result, adapter)
 	}
 	if !strings.Contains(string(fs.data), "app-secret") {
@@ -352,5 +358,29 @@ func TestRecoveryReservationIsExclusive(t *testing.T) {
 	}
 	if err := fs.WriteRecovery(path, state); err == nil {
 		t.Fatal("second recovery reservation succeeded")
+	}
+}
+
+func TestApplyOwnerPreflightFailureHasNoMutations(t *testing.T) {
+	cfg := testConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	adapter := testAdapter()
+	adapter.preflightErr = errors.New("resolve storage credential owner: Keystone v3 token user ID is blank")
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "loki", Backend: "swift", Cluster: "prod"}, Adapter: adapter, FileSystem: fs,
+	})
+	if err == nil || result.Status == StatusPartial {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if adapter.containers != 0 || adapter.appCreates != 0 || adapter.ec2Creates != 0 || adapter.appDeletes != 0 || adapter.ec2Deletes != 0 {
+		t.Fatalf("remote mutations occurred: adapter=%+v", adapter)
+	}
+	if fs.recovery || fs.backup || fs.atomic || fs.removed {
+		t.Fatalf("local mutations occurred: fs=%+v", fs)
 	}
 }

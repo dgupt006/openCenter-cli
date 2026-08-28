@@ -178,7 +178,12 @@ func Plan(ctx context.Context, input PlanInput) (PlanOutput, error) {
 	if err := validateContainerForBackend(container, input.Options.Backend); err != nil {
 		return PlanOutput{}, err
 	}
-	preflight, err := input.Adapter.Preflight(ctx, input.Options.Backend, input.Options.S3Endpoint)
+	complete, partial := credentialState(input.Options.Service, input.Options.Backend, serviceCfg, input.Config.Secrets)
+	resolveOwner := !complete || input.Options.RotateCredentials
+	if partial && !input.Options.RotateCredentials {
+		resolveOwner = false
+	}
+	preflight, err := input.Adapter.Preflight(ctx, input.Options.Backend, input.Options.S3Endpoint, resolveOwner)
 	if err != nil {
 		return PlanOutput{}, fmt.Errorf("OpenStack storage preflight failed: %w", redactError(err, input.Config))
 	}
@@ -193,7 +198,6 @@ func Plan(ctx context.Context, input PlanInput) (PlanOutput, error) {
 		return PlanOutput{}, fmt.Errorf("OpenStack storage preflight returned no usable storage endpoint")
 	}
 	preflight.Endpoint = storageEndpoint
-	complete, partial := credentialState(input.Options.Service, input.Options.Backend, serviceCfg, input.Config.Secrets)
 	prospective, err := cloneConfig(input.Config)
 	if err != nil {
 		return PlanOutput{}, fmt.Errorf("clone configuration for plan: %w", err)
@@ -281,11 +285,11 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 		var createErr error
 		if input.Options.Backend == "swift" {
 			var created cloudopenstack.AppCredential
-			created, createErr = input.Adapter.CreateAppCredential(ctx, cloudopenstack.AppCredentialRequest{Name: result.Service + "-" + result.Backend, Description: "OpenCenter storage credential for " + result.Service, AccessRules: scopedRules(planned.Result.Container, planned.Preflight.ProjectID)})
+			created, createErr = input.Adapter.CreateAppCredential(ctx, cloudopenstack.AppCredentialRequest{UserID: planned.Preflight.CredentialOwnerID, Name: result.Service + "-" + result.Backend, Description: "OpenCenter storage credential for " + result.Service, AccessRules: scopedRules(planned.Result.Container, planned.Preflight.ProjectID)})
 			createdType, createdID, createdSecret = "application", created.ID, created.Secret
 		} else {
 			var created cloudopenstack.EC2Credentials
-			created, createErr = input.Adapter.CreateEC2Credentials(ctx, cloudopenstack.EC2CredentialRequest{ProjectID: planned.Preflight.ProjectID, ProjectName: cfg.OpenCenter.Meta.Name, UserName: result.Service + "-s3-user"})
+			created, createErr = input.Adapter.CreateEC2Credentials(ctx, cloudopenstack.EC2CredentialRequest{UserID: planned.Preflight.CredentialOwnerID, ProjectID: planned.Preflight.ProjectID, ProjectName: cfg.OpenCenter.Meta.Name, UserName: result.Service + "-s3-user"})
 			createdType, createdID, createdAccess, createdSecret = "ec2", created.ID, created.AccessKeyID, created.Secret
 		}
 		if createErr != nil {
@@ -335,9 +339,9 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	if rotate && oldID != "" {
 		var revokeErr error
 		if input.Options.Backend == "swift" {
-			revokeErr = input.Adapter.DeleteAppCredential(ctx, oldID)
+			revokeErr = input.Adapter.DeleteAppCredential(ctx, oldID, planned.Preflight.CredentialOwnerID)
 		} else {
-			revokeErr = input.Adapter.DeleteEC2Credentials(ctx, oldID)
+			revokeErr = input.Adapter.DeleteEC2Credentials(ctx, oldID, planned.Preflight.CredentialOwnerID)
 		}
 		if revokeErr != nil {
 			result.Status = StatusPartial

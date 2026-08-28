@@ -91,7 +91,7 @@ func TestPlanBlocksAmbiguousSelectionWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestPlanRequiresReplaceForPopulatedConflict(t *testing.T) {
+func TestPlanRequiresReplaceForExplicitConflictingSelection(t *testing.T) {
 	cfg, err := v2.NewV2Default("prod", "openstack")
 	if err != nil {
 		t.Fatal(err)
@@ -105,20 +105,87 @@ func TestPlanRequiresReplaceForPopulatedConflict(t *testing.T) {
 		AvailabilityZones: []cloudopenstack.Resource{{ID: "zone", Name: "zone"}},
 	}
 
-	result, _, err := Plan(context.Background(), cfg, snapshot, Options{})
+	result, _, err := Plan(context.Background(), cfg, snapshot, Options{ImageID: "new-image"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != StatusBlocked || len(result.Warnings) == 0 {
-		t.Fatalf("result = %#v, want conflict block", result)
+		t.Fatalf("result = %#v, want explicit replacement block", result)
 	}
 
-	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{Replace: true})
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{ImageID: "new-image", Replace: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != StatusPlanned || prospective.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID != "new-image" {
 		t.Fatalf("replace did not apply conflict: result=%#v cfg=%q", result, prospective.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID)
+	}
+}
+
+func TestPlanPreservesPopulatedClusterValuesDuringCreateInternalNetworkImport(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		AuthURL:                     "https://identity.example/v3",
+		Region:                      "dfw3",
+		ProjectID:                   "project-1",
+		ProjectDomainName:           "default",
+		ImageID:                     "799dcf97-3656-4361-8187-13ab1b295e33",
+		ImageIDWindows:              "windows-current",
+		AvailabilityZone:            "existing-zone",
+		ApplicationCredentialID:     "app-id",
+		ApplicationCredentialSecret: "app-secret",
+		RouterExternalNetworkID:     "external-current",
+		FloatingNetworkID:           "external-current",
+		FloatingIPPool:              "PUBLICNET",
+		ExternalNetworkName:         "PUBLICNET",
+		Networking: &v2.OpenStackNetworkingConfig{
+			FloatingNetworkID:       "external-current",
+			RouterExternalNetworkID: "external-current",
+			FloatingIPPool:          "PUBLICNET",
+		},
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		AuthURL:                    "https://identity.example/v3",
+		Region:                     "RegionOne",
+		ProjectID:                  "project-1",
+		ProjectDomainName:          "Default",
+		Images:                     []cloudopenstack.Resource{{ID: "discovered-linux", Name: "Ubuntu"}},
+		WindowsImages:              []cloudopenstack.Resource{{ID: "discovered-windows", Name: "Windows"}},
+		ExternalNetworks:           []cloudopenstack.Resource{{ID: "external-current", Name: "PUBLICNET"}},
+		AvailabilityZonesAvailable: true,
+		AvailabilityZones:          []cloudopenstack.Resource{{ID: "discovered-zone", Name: "zone"}},
+	}
+
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{
+		CreateInternalNetwork: true,
+		ImportAuth:            &AuthImport{ApplicationCredentialID: "app-id", ApplicationCredentialSecret: "app-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusPlanned && result.Status != StatusNoOp {
+		t.Fatalf("result = %#v, want planned or no-op tofu-managed result", result)
+	}
+	if len(result.Selections) != 0 {
+		t.Fatalf("preserved values unexpectedly produced selections: %#v", result)
+	}
+	for _, change := range result.Changes {
+		if change.Path != "opencenter.infrastructure.cloud.openstack.availability_zones" {
+			t.Fatalf("preserved values unexpectedly produced change: %#v", result.Changes)
+		}
+	}
+	warnings := strings.Join(result.Warnings, " ")
+	for _, unwanted := range []string{"image_id", "image_id_windows", "project_domain_name", "region", "availability_zone", "--replace", "--image-id", "--availability-zone"} {
+		if strings.Contains(warnings, unwanted) {
+			t.Fatalf("warning %q unexpectedly present: %s", unwanted, warnings)
+		}
+	}
+	osCfg := prospective.OpenCenter.Infrastructure.Cloud.OpenStack
+	if osCfg.Region != "dfw3" || osCfg.ProjectDomainName != "default" || osCfg.ImageID != "799dcf97-3656-4361-8187-13ab1b295e33" || osCfg.ImageIDWindows != "windows-current" || osCfg.AvailabilityZone != "existing-zone" {
+		t.Fatalf("populated cluster values were not preserved: %#v", osCfg)
 	}
 }
 
@@ -211,6 +278,28 @@ func TestPlanExcludesExternalNetworksFromInternalSelection(t *testing.T) {
 	}
 	if result.Status != StatusBlocked || prospective.OpenCenter.Infrastructure.Cloud.OpenStack.NetworkID != "" {
 		t.Fatalf("external-only inventory selected an internal network: result=%#v config=%#v", result, prospective.OpenCenter.Infrastructure.Cloud.OpenStack)
+	}
+}
+
+func TestPlanRequiresDiscoveryMatchForExistingExternalNetwork(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		ImageID:                 "image",
+		RouterExternalNetworkID: "external-current",
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		Images:           []cloudopenstack.Resource{{ID: "image", Name: "Ubuntu"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "external-discovered", Name: "PUBLICNET"}},
+	}
+	result, _, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked || !strings.Contains(strings.Join(result.Warnings, " "), "router_external_network_id") {
+		t.Fatalf("result = %#v, want external-network discovery conflict", result)
 	}
 }
 
@@ -341,5 +430,168 @@ func TestApplyPersistenceValidatesBeforeBackup(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path + ".backup"); !os.IsNotExist(statErr) {
 		t.Fatalf("validation failure created backup: %v", statErr)
+	}
+}
+
+func TestPlanCreateInternalNetworkBypassesAmbiguityAndClearsMirrors(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		ImageID:                 "image",
+		NetworkID:               "old-network",
+		NetworkName:             "old-network-name",
+		SubnetID:                "old-subnet",
+		FloatingNetworkID:       "external",
+		RouterExternalNetworkID: "external",
+		FloatingIPPool:          "PUBLICNET",
+		Networking: &v2.OpenStackNetworkingConfig{
+			NetworkID:               "old-network",
+			SubnetID:                "old-subnet",
+			FloatingNetworkID:       "external",
+			RouterExternalNetworkID: "external",
+			FloatingIPPool:          "PUBLICNET",
+		},
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		Images:           []cloudopenstack.Resource{{ID: "image", Name: "Ubuntu"}},
+		Networks:         []cloudopenstack.Resource{{ID: "network-a", Name: "a"}, {ID: "network-b", Name: "b"}},
+		Subnets:          []cloudopenstack.Subnet{{Resource: cloudopenstack.Resource{ID: "subnet-a", Name: "a"}, NetworkID: "network-a"}, {Resource: cloudopenstack.Resource{ID: "subnet-b", Name: "b"}, NetworkID: "network-b"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "external", Name: "PUBLICNET"}},
+	}
+
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{CreateInternalNetwork: true, Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusPlanned || result.InternalNetworkMode != "tofu-managed" {
+		t.Fatalf("result = %#v, want planned tofu-managed result", result)
+	}
+	for _, selection := range result.Selections {
+		if selection.Field == "network" || selection.Field == "subnet" {
+			t.Fatalf("create mode emitted internal selection: %#v", result.Selections)
+		}
+	}
+	osCfg := prospective.OpenCenter.Infrastructure.Cloud.OpenStack
+	if osCfg.NetworkID != "" || osCfg.NetworkName != "" || osCfg.SubnetID != "" || osCfg.Networking == nil || osCfg.Networking.NetworkID != "" || osCfg.Networking.SubnetID != "" {
+		t.Fatalf("internal selections were not cleared atomically: %#v", osCfg)
+	}
+	paths := map[string]bool{}
+	for _, change := range result.Changes {
+		paths[change.Path] = true
+	}
+	for _, path := range []string{
+		"opencenter.infrastructure.cloud.openstack.network_id",
+		"opencenter.infrastructure.cloud.openstack.network_name",
+		"opencenter.infrastructure.cloud.openstack.subnet_id",
+		"opencenter.infrastructure.cloud.openstack.networking.network_id",
+		"opencenter.infrastructure.cloud.openstack.networking.subnet_id",
+	} {
+		if !paths[path] {
+			t.Fatalf("missing clear change for %s: %#v", path, result.Changes)
+		}
+	}
+}
+
+func TestPlanCreateInternalNetworkRequiresReplaceToClearPopulatedMirrors(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		NetworkID:  "old-network",
+		SubnetID:   "old-subnet",
+		Networking: &v2.OpenStackNetworkingConfig{NetworkID: "old-network", SubnetID: "old-subnet"},
+	}
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{}, Options{CreateInternalNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked || !strings.Contains(strings.Join(result.Warnings, " "), "--replace") {
+		t.Fatalf("result = %#v, want replace protection", result)
+	}
+	osCfg := prospective.OpenCenter.Infrastructure.Cloud.OpenStack
+	if osCfg.NetworkID != "old-network" || osCfg.SubnetID != "old-subnet" || osCfg.Networking.NetworkID != "old-network" || osCfg.Networking.SubnetID != "old-subnet" {
+		t.Fatalf("blocked create mode partially cleared selections: %#v", osCfg)
+	}
+}
+
+func TestPlanCreateInternalNetworkRejectsSelectorsAndVLAN(t *testing.T) {
+	cases := []struct {
+		name    string
+		options Options
+		vlanID  string
+		want    string
+	}{
+		{name: "selectors", options: Options{CreateInternalNetwork: true, NetworkID: "network"}, want: "--network-id"},
+		{name: "subnet selector", options: Options{CreateInternalNetwork: true, SubnetID: "subnet"}, want: "--subnet-id"},
+		{name: "vlan", options: Options{CreateInternalNetwork: true}, vlanID: "100", want: "networking.vlan.id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := v2.NewV2Default("prod", "openstack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{Networking: &v2.OpenStackNetworkingConfig{VLAN: v2.VLANConfigLegacy{ID: tc.vlanID}}}
+			_, _, err = Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{}, tc.options)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlanWithoutCreateInternalNetworkPreservesSelectionBehavior(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{
+		Images:   []cloudopenstack.Resource{{ID: "image", Name: "Ubuntu"}},
+		Networks: []cloudopenstack.Resource{{ID: "network-a", Name: "a"}, {ID: "network-b", Name: "b"}},
+	}, Options{ImageID: "image"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked || result.InternalNetworkMode != "" || len(result.Selections) != 1 || result.Selections[0].Field != "network" {
+		t.Fatalf("no-flag behavior changed: result=%#v config=%#v", result, prospective.OpenCenter.Infrastructure.Cloud.OpenStack)
+	}
+}
+
+func TestPlanCreateInternalNetworkNoOpReportsMode(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{
+		ImageID:                 "image",
+		FloatingIPPool:          "PUBLICNET",
+		FloatingNetworkID:       "external",
+		RouterExternalNetworkID: "external",
+		Networking: &v2.OpenStackNetworkingConfig{
+			FloatingIPPool:          "PUBLICNET",
+			FloatingNetworkID:       "external",
+			RouterExternalNetworkID: "external",
+		},
+	}
+	result, _, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{
+		Images:           []cloudopenstack.Resource{{ID: "image", Name: "Ubuntu"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "external", Name: "PUBLICNET"}},
+	}, Options{CreateInternalNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusNoOp || result.InternalNetworkMode != "tofu-managed" {
+		t.Fatalf("no-op create mode result = %#v", result)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"internal_network_mode":"tofu-managed"`) {
+		t.Fatalf("structured result omitted internal network mode: %s", encoded)
 	}
 }

@@ -118,3 +118,34 @@ func TestStructuredProviderApplyRequiresYes(t *testing.T) {
 		t.Fatalf("structured apply guard = %v, exit=%d", err, ExitCode(err))
 	}
 }
+
+func TestClusterProviderOpenStackCreateInternalNetworkFlagIsShared(t *testing.T) {
+	cluster := NewClusterCmd()
+	for _, operation := range []string{"plan", "apply"} {
+		operationCmd, _, err := cluster.Find([]string{"provider", "openstack", operation})
+		if err != nil || operationCmd == nil {
+			t.Fatalf("find %s: command=%v err=%v", operation, operationCmd, err)
+		}
+		flag := operationCmd.Flags().Lookup("create-internal-network")
+		if flag == nil || flag.DefValue != "false" {
+			t.Fatalf("%s missing shared --create-internal-network flag: %#v", operation, flag)
+		}
+	}
+}
+
+func TestWriteProviderOpenStackOutputIncludesInternalNetworkMode(t *testing.T) {
+	cmd := &cobra.Command{}
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	if err := writeProviderOpenStackOutput(cmd, OutputText, provideropenstack.Result{
+		Operation:           "cluster.provider.openstack.plan",
+		Cluster:             "acme/prod",
+		Status:              provideropenstack.StatusNoOp,
+		InternalNetworkMode: "tofu-managed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Internal network mode: tofu-managed") {
+		t.Fatalf("text output = %q", stdout.String())
+	}
+}
