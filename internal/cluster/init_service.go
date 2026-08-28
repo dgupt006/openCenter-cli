@@ -366,7 +366,7 @@ func (s *InitService) applyOverrides(cfg *v2.Config, configMap map[string]any, o
 
 	// Apply CLI config defaults
 	cliConfig := s.configManager.GetConfig()
-	if cfg.OpenCenter.Meta.Region == "" || cfg.OpenCenter.Meta.Region == "sjc3" {
+	if cfg.OpenCenter.Meta.Region == "" || cfg.OpenCenter.Meta.Region == "SJC3" {
 		if cliConfig.ClusterDefaults.Region != "" {
 			cfg.OpenCenter.Meta.Region = cliConfig.ClusterDefaults.Region
 			setNestedConfigValue(configMap, cliConfig.ClusterDefaults.Region, "opencenter", "meta", "region")

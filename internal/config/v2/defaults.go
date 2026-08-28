@@ -24,7 +24,7 @@ const (
 	defaultSchemaVersion              = "2.0"
 	defaultOrganization               = "opencenter"
 	defaultProvider                   = "openstack"
-	defaultRegion                     = "dfw3"
+	defaultRegion                     = "DFW3"
 	defaultEnvironment                = "dev"
 	defaultBaseDomain                 = "k8s.opencenter.cloud"
 	defaultGitBranch                  = "main"

@@ -102,10 +102,10 @@ func (r *defaultRegistry) ListRegions(provider string) []string {
 // registerBuiltinDefaults populates the registry with hardcoded provider-region defaults.
 func (r *defaultRegistry) registerBuiltinDefaults() {
 	// OpenStack regions
-	r.RegisterDefaults("openstack", "sjc3", newOpenStackSJC3Defaults())
-	r.RegisterDefaults("openstack", "dfw3", newOpenStackDFW3Defaults())
-	r.RegisterDefaults("openstack", "iad3", newOpenStackIAD3Defaults())
-	r.RegisterDefaults("openstack", "ord1", newOpenStackORD1Defaults())
+	r.RegisterDefaults("openstack", "SJC3", newOpenStackSJC3Defaults())
+	r.RegisterDefaults("openstack", "DFW3", newOpenStackDFW3Defaults())
+	r.RegisterDefaults("openstack", "IAD3", newOpenStackIAD3Defaults())
+	r.RegisterDefaults("openstack", "ORD1", newOpenStackORD1Defaults())
 
 	// AWS regions
 	r.RegisterDefaults("aws", "us-east-1", newAWSUSEast1Defaults())
