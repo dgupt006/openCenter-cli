@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,59 @@ type configSecretMetadata struct {
 	Location    string                  `json:"location" yaml:"location"`
 	Description string                  `json:"description" yaml:"description"`
 	PayloadKind configSecretPayloadKind `json:"payload_kind" yaml:"payload_kind"`
+}
+
+type harborSecretPatch struct {
+	AdminPassword    *string `yaml:"admin_password"`
+	RegistryPassword *string `yaml:"registry_password"`
+	DatabasePassword *string `yaml:"database_password"`
+}
+
+func applyHarborSecretPatch(cfg *v2.Config, payload []byte) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	decoder.KnownFields(true)
+
+	var patch harborSecretPatch
+	if err := decoder.Decode(&patch); err != nil {
+		return fmt.Errorf("failed to parse Harbor credentials payload: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("failed to parse Harbor credentials payload: multiple YAML documents are not supported")
+		}
+		return fmt.Errorf("failed to parse Harbor credentials payload: %w", err)
+	}
+
+	candidate := cfg.Secrets.Harbor
+	provided := 0
+	apply := func(path string, value *string, target *string) error {
+		if value == nil {
+			return nil
+		}
+		provided++
+		trimmed := strings.TrimSpace(*value)
+		if trimmed == "" || strings.EqualFold(trimmed, v2.PlaceholderSecret) {
+			return fmt.Errorf("%s must be a non-empty, non-placeholder value", path)
+		}
+		*target = *value
+		return nil
+	}
+	if err := apply("secrets.harbor.admin_password", patch.AdminPassword, &candidate.AdminPassword); err != nil {
+		return err
+	}
+	if err := apply("secrets.harbor.registry_password", patch.RegistryPassword, &candidate.RegistryPassword); err != nil {
+		return err
+	}
+	if err := apply("secrets.harbor.database_password", patch.DatabasePassword, &candidate.DatabasePassword); err != nil {
+		return err
+	}
+	if provided == 0 {
+		return fmt.Errorf("Harbor credentials payload must provide at least one supported field")
+	}
+
+	cfg.Secrets.Harbor = candidate
+	return nil
 }
 
 func configSecretCatalog() []configSecretEntry {
@@ -104,6 +158,26 @@ func configSecretCatalog() []configSecretEntry {
 			},
 			Delete: func(cfg *v2.Config) {
 				cfg.Secrets.Grafana.AdminPassword = ""
+			},
+		},
+		{
+			Name:        "harbor-credentials",
+			Type:        "credentials",
+			Location:    "config: secrets.harbor",
+			Description: "Harbor administrator, registry, and database credentials",
+			PayloadKind: configSecretObject,
+			Present: func(cfg *v2.Config) bool {
+				secret := cfg.Secrets.Harbor
+				return secret.AdminPassword != "" || secret.RegistryPassword != "" || secret.DatabasePassword != ""
+			},
+			Get: func(cfg *v2.Config) interface{} {
+				return cfg.Secrets.Harbor
+			},
+			Set: func(cfg *v2.Config, payload []byte) error {
+				return applyHarborSecretPatch(cfg, payload)
+			},
+			Delete: func(cfg *v2.Config) {
+				cfg.Secrets.Harbor = v2.HarborSecrets{}
 			},
 		},
 		{

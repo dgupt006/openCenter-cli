@@ -107,6 +107,7 @@ type SecretsConfig struct {
 	Headlamp       HeadlampSecrets    `yaml:"headlamp,omitempty" json:"headlamp,omitempty"`
 	WeaveGitOps    WeaveGitOpsSecrets `yaml:"weave_gitops,omitempty" json:"weave_gitops,omitempty"`
 	Grafana        GrafanaSecrets     `yaml:"grafana,omitempty" json:"grafana,omitempty"`
+	Harbor         HarborSecrets      `yaml:"harbor,omitempty" json:"harbor,omitempty"`
 	Tempo          TempoSecrets       `yaml:"tempo,omitempty" json:"tempo,omitempty"`
 	EtcdBackup     EtcdBackupSecrets  `yaml:"etcd_backup,omitempty" json:"etcd_backup,omitempty"`
 	Velero         VeleroSecrets      `yaml:"velero,omitempty" json:"velero,omitempty"`
@@ -197,6 +198,12 @@ type WeaveGitOpsSecrets struct {
 type GrafanaSecrets struct {
 	AdminUser     string `yaml:"admin_user,omitempty" json:"admin_user,omitempty"`
 	AdminPassword string `yaml:"admin_password,omitempty" json:"admin_password,omitempty"`
+}
+
+type HarborSecrets struct {
+	AdminPassword    string `yaml:"admin_password,omitempty" json:"admin_password,omitempty" jsonschema:"secret=true,description=Harbor administrator password"`
+	RegistryPassword string `yaml:"registry_password,omitempty" json:"registry_password,omitempty" jsonschema:"secret=true,description=Harbor registry password"`
+	DatabasePassword string `yaml:"database_password,omitempty" json:"database_password,omitempty" jsonschema:"secret=true,description=Harbor database password"`
 }
 
 type TempoSecrets struct {

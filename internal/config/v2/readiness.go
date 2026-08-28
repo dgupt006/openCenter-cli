@@ -538,6 +538,7 @@ func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	r.validateCertManagerSecrets(cfg)
 	r.validateLokiSecrets(cfg)
 	r.validateTempoSecrets(cfg)
+	r.validateHarborSecrets(cfg)
 	if serviceEnabled(cfg, "weave-gitops") {
 		if isMissingSecret(cfg.Secrets.WeaveGitOps.Password) && isMissingSecret(cfg.Secrets.WeaveGitOps.PasswordHash) {
 			r.addError(CategoryServices, "secrets.weave_gitops.password", "Weave GitOps requires password or password_hash when enabled.", "Set secrets.weave_gitops.password_hash or secrets.weave_gitops.password.")
@@ -612,6 +613,15 @@ func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
 		r.requireSecret("secrets.tempo.access_key", cfg.Secrets.Tempo.AccessKey, "Tempo S3 storage requires an access key.")
 		r.requireSecret("secrets.tempo.secret_key", cfg.Secrets.Tempo.SecretKey, "Tempo S3 storage requires a secret key.")
 	}
+}
+
+func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
+	if !isServiceEnabled(cfg, "harbor") {
+		return
+	}
+	r.requireSecret("secrets.harbor.admin_password", cfg.Secrets.Harbor.AdminPassword, "Harbor admin password is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.registry_password", cfg.Secrets.Harbor.RegistryPassword, "Harbor registry password is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.database_password", cfg.Secrets.Harbor.DatabasePassword, "Harbor database password is required when Harbor is enabled.")
 }
 
 func (r *readinessBuilder) requireSecret(path, value, message string) {

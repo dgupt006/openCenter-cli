@@ -8428,6 +8428,21 @@
           },
           "type": "object"
         },
+        "harbor": {
+          "additionalProperties": false,
+          "properties": {
+            "admin_password": {
+              "type": "string"
+            },
+            "database_password": {
+              "type": "string"
+            },
+            "registry_password": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "headlamp": {
           "additionalProperties": false,
           "properties": {

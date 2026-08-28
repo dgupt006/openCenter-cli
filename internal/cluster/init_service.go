@@ -12,6 +12,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	configdefaults "github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
 	configflags "github.com/opencenter-cloud/opencenter-cli/internal/config/flags"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
@@ -157,6 +158,11 @@ func (s *InitService) Initialize(ctx context.Context, opts InitOptions) (*InitRe
 		return nil, fmt.Errorf("applying overrides: %w", err)
 	}
 
+	// Generate enabled-service credentials only during actual initialization.
+	if err := s.generateHarborSecrets(cfg, configMap); err != nil {
+		return nil, fmt.Errorf("generating Harbor secrets: %w", err)
+	}
+
 	// Update configuration with resolved paths
 	s.updateConfigPaths(cfg, configMap, clusterPaths, opts)
 
@@ -234,6 +240,56 @@ func (s *InitService) validateOrganization(ctx context.Context, organization str
 	}
 
 	return nil
+}
+
+func (s *InitService) generateHarborSecrets(cfg *v2.Config, configMap map[string]any) error {
+	harbor, ok := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+	if !ok || !harbor.IsEnabled() {
+		return nil
+	}
+
+	candidate := cfg.Secrets.Harbor
+	keyManager := sops.NewKeyManager("")
+	used := map[string]struct{}{}
+	generate := func(current *string) error {
+		if !isMissingHarborSecret(*current) {
+			used[*current] = struct{}{}
+			return nil
+		}
+		for {
+			value, err := keyManager.GenerateRandomPassword(32)
+			if err != nil {
+				return err
+			}
+			if _, exists := used[value]; exists {
+				continue
+			}
+			*current = value
+			used[value] = struct{}{}
+			return nil
+		}
+	}
+
+	if err := generate(&candidate.AdminPassword); err != nil {
+		return err
+	}
+	if err := generate(&candidate.RegistryPassword); err != nil {
+		return err
+	}
+	if err := generate(&candidate.DatabasePassword); err != nil {
+		return err
+	}
+
+	cfg.Secrets.Harbor = candidate
+	setNestedConfigValue(configMap, candidate.AdminPassword, "secrets", "harbor", "admin_password")
+	setNestedConfigValue(configMap, candidate.RegistryPassword, "secrets", "harbor", "registry_password")
+	setNestedConfigValue(configMap, candidate.DatabasePassword, "secrets", "harbor", "database_password")
+	return nil
+}
+
+func isMissingHarborSecret(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed == "" || strings.EqualFold(trimmed, v2.PlaceholderSecret)
 }
 
 // checkExistingCluster checks if cluster already exists and handles force flag

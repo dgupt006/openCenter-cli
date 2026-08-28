@@ -268,6 +268,9 @@ func (s *BootstrapService) Bootstrap(ctx context.Context, opts BootstrapOptions)
 	if cfg.SchemaVersion != "2.0" {
 		return nil, fmt.Errorf("invalid schema version for cluster %s: expected 2.0, got %q", opts.ClusterName, cfg.SchemaVersion)
 	}
+	if err := v2.ValidateHarborForDeployment(&cfg); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
 
 	result := &BootstrapResult{
 		StepsCompleted: []string{},

@@ -340,6 +340,11 @@ func NewV2Default(name, provider string) (*Config, error) {
 				AdminUser:     "admin",
 				AdminPassword: grafanaAdminPassword,
 			},
+			Harbor: HarborSecrets{
+				AdminPassword:    PlaceholderSecret,
+				RegistryPassword: PlaceholderSecret,
+				DatabasePassword: PlaceholderSecret,
+			},
 			Loki: LokiSecrets{
 				SwiftApplicationCredentialSecret: PlaceholderSecret,
 				S3AccessKeyID:                    PlaceholderSecret,

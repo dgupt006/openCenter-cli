@@ -487,14 +487,24 @@ func shouldSkipFile(relPath string, cfg v2.Config) bool {
 type OverlayEncryptor func(ctx context.Context, overlayPath string, cfg *v2.Config) error
 
 // RenderClusterApps renders cluster-apps-base and promotes it to the final target.
+// It is the raw rendering primitive; production callers that can materialize
+// credentials must use RenderClusterAppsWithEncryption.
 func RenderClusterApps(cfg v2.Config) error {
-	return RenderClusterAppsWithEncryption(context.Background(), cfg, nil)
+	return renderClusterApps(context.Background(), cfg, nil)
 }
 
 // RenderClusterAppsWithEncryption renders cluster-apps-base into a temporary
-// workspace, optionally encrypts the complete overlay, and only then promotes
-// it to the final target. Encryption errors therefore fail before promotion.
+// workspace, encrypts credential-bearing files, and only then promotes it to
+// the final target. A nil encryptor is rejected so this production seam cannot
+// silently promote plaintext.
 func RenderClusterAppsWithEncryption(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor) error {
+	if encrypt == nil {
+		return fmt.Errorf("overlay encryptor is required")
+	}
+	return renderClusterApps(ctx, cfg, encrypt)
+}
+
+func renderClusterApps(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor) error {
 	clusterName := cfg.ClusterName()
 	if clusterName == "" {
 		return fmt.Errorf("cluster name is empty")
@@ -638,8 +648,23 @@ func RenderInfrastructureCluster(cfg v2.Config) error {
 }
 
 // RenderSingleService renders only the specified service to the cluster apps directory.
-// This is useful for updating a single service without re-rendering the entire cluster.
+// It is the raw rendering primitive; production callers that can materialize
+// credentials must use RenderSingleServiceWithEncryption.
 func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) error {
+	return renderSingleService(context.Background(), cfg, serviceName, isManaged, nil)
+}
+
+// RenderSingleServiceWithEncryption renders a service into a temporary
+// workspace, encrypts credential-bearing files, and only then promotes the
+// service's scoped outputs. A nil encryptor is rejected.
+func RenderSingleServiceWithEncryption(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor) error {
+	if encrypt == nil {
+		return fmt.Errorf("overlay encryptor is required")
+	}
+	return renderSingleService(ctx, cfg, serviceName, isManaged, encrypt)
+}
+
+func renderSingleService(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor) error {
 	clusterName := cfg.ClusterName()
 	if clusterName == "" {
 		return fmt.Errorf("cluster name is empty")
@@ -658,11 +683,11 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 	// Create a temporary workspace for atomic operations
 	tempDir := os.TempDir()
 	manager := NewWorkspaceManager(tempDir)
-	workspace, err := manager.CreateWorkspace(context.Background(), cfg)
+	workspace, err := manager.CreateWorkspace(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("creating workspace: %w", err)
 	}
-	defer manager.CleanupWorkspace(context.Background(), workspace)
+	defer manager.CleanupWorkspace(ctx, workspace)
 
 	prefix := "services"
 	if isManaged {
@@ -690,6 +715,12 @@ func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) erro
 	validationArtifacts := filterSingleServiceArtifacts(serviceName, actions, artifacts)
 	if err := validateMaterializedSecretMembership(cfg, actions, validationArtifacts, targetRoot); err != nil {
 		return err
+	}
+
+	if encrypt != nil {
+		if err := encrypt(ctx, targetRoot, &cfg); err != nil {
+			return fmt.Errorf("encrypting cluster apps overlay: %w", err)
+		}
 	}
 
 	result, err := promoteOverlay(targetRoot, target, clusterName, PromoteOptions{Scope: scopes})

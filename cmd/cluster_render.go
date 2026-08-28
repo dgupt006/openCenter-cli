@@ -14,6 +14,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,9 +23,22 @@ import (
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/tofu"
 	"github.com/spf13/cobra"
 )
+
+var encryptRenderedServiceOverrides = func(ctx context.Context, overlayPath string, cfg *v2.Config) error {
+	return sops.NewSOPSManager().EncryptServiceOverrideValues(ctx, overlayPath, cfg)
+}
+
+func renderClusterAppsEncrypted(ctx context.Context, cfg v2.Config) error {
+	return gitops.RenderClusterAppsWithEncryption(ctx, cfg, encryptRenderedServiceOverrides)
+}
+
+func renderSingleServiceEncrypted(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool) error {
+	return gitops.RenderSingleServiceWithEncryption(ctx, cfg, serviceName, isManaged, encryptRenderedServiceOverrides)
+}
 
 func runClusterGenerateRenderOnly(cmd *cobra.Command, args []string) error {
 	force, _ := cmd.Flags().GetBool("force")
@@ -116,7 +130,7 @@ func renderAllServices(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Comma
 	}
 
 	// Render cluster-specific applications
-	if err := gitops.RenderClusterApps(*cfg); err != nil {
+	if err := renderClusterAppsEncrypted(cmd.Context(), *cfg); err != nil {
 		return fmt.Errorf("failed to render cluster apps: %w", err)
 	}
 
@@ -176,7 +190,7 @@ func renderServicesOnly(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Comm
 	}
 
 	// Render cluster-specific applications
-	if err := gitops.RenderClusterApps(*cfg); err != nil {
+	if err := renderClusterAppsEncrypted(cmd.Context(), *cfg); err != nil {
 		return fmt.Errorf("failed to render cluster apps: %w", err)
 	}
 
@@ -243,7 +257,7 @@ func renderSingleService(cfg *v2.Config, serviceName string, force bool, dryRun 
 	}
 
 	// Render the single service
-	if err := gitops.RenderSingleService(*cfg, serviceName, isManaged); err != nil {
+	if err := renderSingleServiceEncrypted(cmd.Context(), *cfg, serviceName, isManaged); err != nil {
 		return fmt.Errorf("failed to render service '%s': %w", serviceName, err)
 	}
 

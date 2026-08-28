@@ -378,6 +378,9 @@ func TestClusterServiceEnable(t *testing.T) {
 }
 
 func TestClusterServiceDisable(t *testing.T) {
+	originalEncryptor := encryptRenderedServiceOverrides
+	encryptRenderedServiceOverrides = fixtureSOPSOverrideEncryptor
+	defer func() { encryptRenderedServiceOverrides = originalEncryptor }()
 	tests := []struct {
 		name        string
 		clusterName string

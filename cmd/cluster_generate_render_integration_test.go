@@ -26,6 +26,9 @@ import (
 // TestRenderClusterTemplatesIntegration tests the render functions
 // to ensure they work with the unified GitOps generation interface.
 func TestRenderClusterTemplatesIntegration(t *testing.T) {
+	originalEncryptor := encryptRenderedServiceOverrides
+	encryptRenderedServiceOverrides = fixtureSOPSOverrideEncryptor
+	defer func() { encryptRenderedServiceOverrides = originalEncryptor }()
 	// Create temporary directory for test
 	tempDir := t.TempDir()
 

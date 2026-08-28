@@ -20,7 +20,6 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/registry"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
-	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -158,7 +157,7 @@ Examples:
 
 				fmt.Fprintf(cmd.OutOrStdout(), "Rendering service '%s'...\n", serviceName)
 
-				if err := gitops.RenderSingleService(cfg, serviceName, isManaged); err != nil {
+				if err := renderSingleServiceEncrypted(cmd.Context(), cfg, serviceName, isManaged); err != nil {
 					return fmt.Errorf("failed to render service: %w", err)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Service '%s' rendered successfully.\n", serviceName)
@@ -254,7 +253,7 @@ Examples:
 				}
 
 				fmt.Fprintf(cmd.OutOrStdout(), "Rendering cluster apps after disabling '%s'...\n", serviceName)
-				if err := gitops.RenderClusterApps(cfg); err != nil {
+				if err := renderClusterAppsEncrypted(cmd.Context(), cfg); err != nil {
 					return fmt.Errorf("failed to render cluster apps: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "Cluster apps rendered successfully.")
@@ -400,6 +399,7 @@ func processSecrets(secrets []string, serviceName string, secretsCfg *v2.Secrets
 		"headlamp":     "Headlamp",
 		"weave-gitops": "WeaveGitOps",
 		"grafana":      "Grafana",
+		"harbor":       "Harbor",
 		"alert-proxy":  "AlertProxy",
 		"vsphere-csi":  "VSphereCsi",
 	}
@@ -703,6 +703,12 @@ func getServiceSecrets(serviceName string) []ServiceOption {
 			{Name: "swift_password", Type: "string", Description: "Swift password (legacy, deprecated)", Required: false},
 			{Name: "s3_access_key_id", Type: "string", Description: "S3 access key ID (for S3 storage)", Required: false},
 			{Name: "s3_secret_access_key", Type: "string", Description: "S3 secret access key (for S3 storage)", Required: false},
+		}
+	case "harbor":
+		return []ServiceOption{
+			{Name: "admin_password", Type: "string", Description: "Harbor administrator password", Required: true},
+			{Name: "registry_password", Type: "string", Description: "Harbor registry password", Required: true},
+			{Name: "database_password", Type: "string", Description: "Harbor database password", Required: true},
 		}
 	case "keycloak":
 		return []ServiceOption{

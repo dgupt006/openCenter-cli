@@ -132,6 +132,22 @@ func (m *DefaultSOPSManager) encryptFiles(ctx context.Context, overlayPath strin
 
 	m.logger.Debug("Files to encrypt", "count", len(filesToEncrypt), "files", filesToEncrypt)
 
+	// Resolve eligible files before loading keys. Rendering a service that does
+	// not materialize sensitive values must not require SOPS key material.
+	var existingFiles []string
+	for _, file := range filesToEncrypt {
+		filePath := filepath.Join(overlayPath, file)
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			m.logger.Debug("Skipping non-existent file", "file", file)
+			continue
+		}
+		existingFiles = append(existingFiles, filePath)
+	}
+	if len(existingFiles) == 0 {
+		m.logger.Info("Completed overlay files encryption", "encrypted_count", 0)
+		return nil
+	}
+
 	// Get encryption keys
 	var ageKeys []string
 	if cfg.Secrets.SopsAgeKeyFile != "" {
@@ -179,17 +195,6 @@ func (m *DefaultSOPSManager) encryptFiles(ctx context.Context, overlayPath strin
 		EncryptedRegex: encryptedRegex,
 		InPlace:        true,
 		Verbose:        true,
-	}
-
-	// Filter out non-existent files
-	var existingFiles []string
-	for _, file := range filesToEncrypt {
-		filePath := filepath.Join(overlayPath, file)
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			m.logger.Debug("Skipping non-existent file", "file", file)
-			continue
-		}
-		existingFiles = append(existingFiles, filePath)
 	}
 
 	// Encrypt files in parallel if there are multiple files

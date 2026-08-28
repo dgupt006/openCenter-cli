@@ -48,22 +48,14 @@ func serviceOverrideValuesFilesToEncrypt(cfg *v2.Config) []string {
 	//   - harbor: object-storage and registry/admin credentials
 	var files []string
 
+	serviceNames := []string{"loki", "tempo", "mimir", "headlamp", "harbor"}
 	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "openstack") {
-		files = append(files,
-			"services/openstack-ccm/helm-values/override-values.yaml",
-			"services/openstack-csi/helm-values/override-values.yaml",
-		)
+		serviceNames = append([]string{"openstack-ccm", "openstack-csi"}, serviceNames...)
 	}
 
-	// Loki, Tempo, and Mimir always embed storage credentials (swift or S3)
-	// in their override-values regardless of provider.
-	files = append(files,
-		"services/loki/helm-values/override-values.yaml",
-		"services/tempo/helm-values/override-values.yaml",
-		"services/mimir/helm-values/override-values.yaml",
-		"services/headlamp/helm-values/override-values.yaml",
-		"services/harbor/helm-values/override-values.yaml",
-	)
+	for _, serviceName := range serviceNames {
+		files = append(files, "services/"+serviceName+"/helm-values/override-values.yaml")
+	}
 
 	return files
 }

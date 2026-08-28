@@ -139,10 +139,18 @@ func TestEncryptOverlayFilesConfiguredKeyFailureIsFailClosed(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	tmpDir := t.TempDir()
+	overlayPath := filepath.Join(tmpDir, "overlay")
+	filePath := filepath.Join(overlayPath, "flux-system", "gotk-sync.yaml")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("create overlay directory: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("secret: plaintext\n"), 0o644); err != nil {
+		t.Fatalf("write overlay file: %v", err)
+	}
 	cfg := newSOPSTestConfig("configured-key-failure", "baremetal", filepath.Join(tmpDir, "missing-age-key.txt"))
 	manager := NewSOPSManager()
 
-	err := manager.EncryptOverlayFiles(context.Background(), filepath.Join(tmpDir, "overlay"), cfg)
+	err := manager.EncryptOverlayFiles(context.Background(), overlayPath, cfg)
 	if err == nil {
 		t.Fatal("EncryptOverlayFiles() returned nil for a missing configured key")
 	}
@@ -355,5 +363,14 @@ func TestEncryptOverlayFiles_NoKeysBeforeSOPSLookup(t *testing.T) {
 	}
 	if structured.Message != "No age encryption keys available" {
 		t.Fatalf("EncryptOverlayFiles() message = %q, want no-keys message", structured.Message)
+	}
+}
+
+func TestServiceOverrideValuesFilesToEncryptExcludesManagedServicePaths(t *testing.T) {
+	cfg := newSOPSTestConfig("regular-only-overrides", "baremetal", "")
+	for _, path := range serviceOverrideValuesFilesToEncrypt(cfg) {
+		if strings.HasPrefix(path, "managed-services/") {
+			t.Fatalf("managed service override %q is scheduled for encryption", path)
+		}
 	}
 }

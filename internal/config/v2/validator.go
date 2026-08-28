@@ -476,6 +476,9 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 		}
 	}
 
+	// Harbor secrets
+	placeholders = append(placeholders, missingHarborDeploymentSecretPaths(cfg)...)
+
 	// Cert-manager secrets (map-based credentials)
 	if isServiceEnabled(cfg, "cert-manager") {
 		for name, cred := range cfg.Secrets.CertManager.AWS {
@@ -533,12 +536,43 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 	return nil
 }
 
-// isServiceEnabled checks if a service is enabled in the config.
-func isServiceEnabled(cfg *Config, serviceName string) bool {
-	if svc, ok := cfg.OpenCenter.Services[serviceName]; ok {
-		if enabler, ok := svc.(interface{ IsEnabled() bool }); ok {
-			return enabler.IsEnabled()
-		}
+// ValidateHarborForDeployment performs the narrow Harbor credential gate used
+// by bootstrap before any infrastructure mutation. It intentionally does not
+// invoke unrelated provider or global placeholder validation.
+func ValidateHarborForDeployment(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("configuration is nil")
 	}
-	return false
+	if serviceEnabledInMap(cfg.OpenCenter.ManagedServices, "harbor") {
+		return fmt.Errorf("managed Harbor is not supported; configure Harbor under opencenter.services.harbor")
+	}
+	missing := missingHarborDeploymentSecretPaths(cfg)
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the following Harbor secrets must be set to non-placeholder values before deployment:\n  - %s", strings.Join(missing, "\n  - "))
+}
+
+func isServiceEnabled(cfg *Config, serviceName string) bool {
+	if cfg == nil {
+		return false
+	}
+	return serviceEnabledInMap(cfg.OpenCenter.Services, serviceName)
+}
+
+func missingHarborDeploymentSecretPaths(cfg *Config) []string {
+	if !isServiceEnabled(cfg, "harbor") {
+		return nil
+	}
+	var missing []string
+	if isMissingSecret(cfg.Secrets.Harbor.AdminPassword) {
+		missing = append(missing, "secrets.harbor.admin_password")
+	}
+	if isMissingSecret(cfg.Secrets.Harbor.RegistryPassword) {
+		missing = append(missing, "secrets.harbor.registry_password")
+	}
+	if isMissingSecret(cfg.Secrets.Harbor.DatabasePassword) {
+		missing = append(missing, "secrets.harbor.database_password")
+	}
+	return missing
 }

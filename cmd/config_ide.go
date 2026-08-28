@@ -54,16 +54,16 @@ and YAML Language Server clients.
 The generated schema is an editor aid for autocomplete, hover, and early shape
 validation. Runtime validation remains owned by "opencenter cluster validate".`,
 		Example: `  # Generate schema and print generic YAML Language Server instructions
-  opencenter config ide
+  opencenter settings ide
 
   # Generate schema and merge VS Code workspace settings
-  opencenter config ide --ide vscode --write
+  opencenter settings ide --ide vscode --write
 
   # Print schema to stdout for external tooling
-  opencenter config ide --print
+  opencenter settings ide --print
 
   # CI check for checked-in schema drift
-  opencenter config ide --check`,
+  opencenter settings ide --check`,
 		Args: cobra.NoArgs,
 		RunE: runConfigIDE,
 	}

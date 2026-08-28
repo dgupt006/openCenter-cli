@@ -59,7 +59,7 @@ func CheckFile(path string, opts Options) error {
 		return fmt.Errorf("read schema file %s: %w", path, err)
 	}
 	if !bytes.Equal(got, want) {
-		return fmt.Errorf("schema file %s is stale; run opencenter config ide --schema-only", path)
+		return fmt.Errorf("schema file %s is stale; run opencenter settings ide --schema-only", path)
 	}
 	return nil
 }
