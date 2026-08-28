@@ -59,6 +59,13 @@ func TestDefaultCLIConfig(t *testing.T) {
 		t.Errorf("Expected default provider 'openstack', got '%s'", config.ClusterDefaults.Provider)
 	}
 
+	if config.ClusterDefaults.Region != "DFW3" {
+		t.Errorf("Expected default region 'DFW3', got '%s'", config.ClusterDefaults.Region)
+	}
+	if template := (&ConfigManager{defaults: config}).generateDefaultConfigTemplate(); !strings.Contains(template, "# region: DFW3") {
+		t.Errorf("Expected generated CLI defaults template to emit DFW3, got %q", template)
+	}
+
 	if config.ClusterDefaults.GitopsAuthMethod != "token" {
 		t.Errorf("Expected default tops auth method 'token', got '%s'", config.ClusterDefaults.GitopsAuthMethod)
 	}

@@ -91,6 +91,23 @@ func TestPlanBlocksAmbiguousSelectionWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestPlanPreservesUppercaseDFW3Region(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region = "DFW3"
+	snapshot := &cloudopenstack.DiscoverySnapshot{Region: "DFW3"}
+
+	_, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Cloud.OpenStack.Region; got != "DFW3" {
+		t.Fatalf("planned OpenStack region = %q, want DFW3", got)
+	}
+}
+
 func TestPlanRequiresReplaceForExplicitConflictingSelection(t *testing.T) {
 	cfg, err := v2.NewV2Default("prod", "openstack")
 	if err != nil {

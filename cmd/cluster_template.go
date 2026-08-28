@@ -151,7 +151,7 @@ func templateBaseConfig(provider string) v2.Config {
 					Name:         "example-cluster",
 					Organization: "opencenter",
 					Env:          "dev",
-					Region:       "sjc3",
+					Region:       "SJC3",
 				},
 				Cluster: v2.ClusterConfig{
 					ClusterName: "example-cluster",
@@ -246,11 +246,9 @@ func populateOpenStackConfig(cfg *v2.Config) {
 		cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
 	}
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL = "https://keystone.api.dfw3.rackspacecloud.com/v3/"
-	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region = "dfw3"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Domain = "Default"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "app-credential-id"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "app-credential-secret"
-	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID = "799dcf97-3656-4361-8187-13ab1b295e33"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.FloatingIPPool = "PUBLICNET"
 }
 

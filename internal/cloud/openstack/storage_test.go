@@ -30,6 +30,17 @@ func TestStoragePreflightIsRedactedByShape(t *testing.T) {
 	}
 }
 
+func TestStorageAdapterEndpointOptsPreservesRegionCase(t *testing.T) {
+	adapter := NewStorageAdapter(Profile{Region: "DFW3", Interface: "public"})
+
+	if got := adapter.endpointOpts().Region; got != "DFW3" {
+		t.Fatalf("endpointOpts region = %q, want DFW3", got)
+	}
+	if got := adapter.endpointOptsFor("DFW3").Region; got != "DFW3" {
+		t.Fatalf("endpointOptsFor region = %q, want DFW3", got)
+	}
+}
+
 func TestStorageAdapterHTTPLifecycleAndContext(t *testing.T) {
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

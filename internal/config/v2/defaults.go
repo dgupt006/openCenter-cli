@@ -24,7 +24,7 @@ const (
 	defaultSchemaVersion              = "2.0"
 	defaultOrganization               = "opencenter"
 	defaultProvider                   = "openstack"
-	defaultRegion                     = "dfw3"
+	defaultRegion                     = "DFW3"
 	defaultEnvironment                = "dev"
 	defaultBaseDomain                 = "k8s.opencenter.cloud"
 	defaultGitBranch                  = "main"
@@ -107,7 +107,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 		organization = defaultOrganization
 	}
 
-	clusterFQDN := fmt.Sprintf("%s.%s.%s", name, region, defaultBaseDomain)
+	clusterFQDN := fmt.Sprintf("%s.%s.%s", name, strings.ToLower(region), defaultBaseDomain)
 	sshKeyBase := fmt.Sprintf("%s-%s-%s", name, environment, region)
 	sshKeyPath := filepath.ToSlash(filepath.Join("secrets", "ssh", sshKeyBase))
 	sopsAgeKeyPath := filepath.ToSlash(filepath.Join("secrets", "age", "keys", fmt.Sprintf("%s-key.txt", name)))
@@ -233,7 +233,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 					FlavorWorker:        defaultFlavorForProvider(selectedProvider, region, "worker"),
 					FlavorWorkerWindows: defaultFlavorForProvider(selectedProvider, region, "worker-windows"),
 					MasterCount:         3,
-					WorkerCount:         2,
+					WorkerCount:         3,
 					WorkerCountWindows:  0,
 				},
 				Storage: StorageConfig{

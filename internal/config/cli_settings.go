@@ -280,7 +280,7 @@ func DefaultCLIConfig() *CLIConfig {
 		ClusterDefaults: ClusterDefaultsConfig{
 			Organization:     "opencenter",
 			Provider:         "openstack",
-			Region:           "dfw3",
+			Region:           "DFW3",
 			Environment:      "dev",
 			GitopsAuthMethod: GitopsAuthMethodToken,
 		},

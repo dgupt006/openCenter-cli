@@ -261,6 +261,7 @@ func TestGitOpsComments(t *testing.T) {
 }
 
 func TestGenerateCompleteTemplateUsesSharedOpenStackDefaults(t *testing.T) {
+	t.Setenv("OPENCENTER_CONFIG_DIR", t.TempDir())
 	expectedPtr, err := v2.NewV2Default("example-cluster", "openstack")
 	if err != nil {
 		t.Fatalf("NewV2Default() error = %v", err)
@@ -271,6 +272,15 @@ func TestGenerateCompleteTemplateUsesSharedOpenStackDefaults(t *testing.T) {
 
 	if cfg.OpenCenter.Infrastructure.Provider != expected.OpenCenter.Infrastructure.Provider {
 		t.Fatalf("expected provider %q, got %q", expected.OpenCenter.Infrastructure.Provider, cfg.OpenCenter.Infrastructure.Provider)
+	}
+	if expected.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("shared default Meta.Region = %q, want DFW3", expected.OpenCenter.Meta.Region)
+	}
+	if expected.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "DFW3" {
+		t.Fatalf("shared default OpenStack region = %q, want DFW3", expected.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+	}
+	if expected.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL != "https://keystone.api.dfw3.rackspacecloud.com/v3/" {
+		t.Fatalf("shared default auth URL = %q, want lowercase catalog hostname", expected.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL)
 	}
 	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region != expected.OpenCenter.Infrastructure.Cloud.OpenStack.Region {
 		t.Fatalf("expected region %q, got %q", expected.OpenCenter.Infrastructure.Cloud.OpenStack.Region, cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
