@@ -233,7 +233,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 					FlavorWorker:        defaultFlavorForProvider(selectedProvider, region, "worker"),
 					FlavorWorkerWindows: defaultFlavorForProvider(selectedProvider, region, "worker-windows"),
 					MasterCount:         3,
-					WorkerCount:         2,
+					WorkerCount:         3,
 					WorkerCountWindows:  0,
 				},
 				Storage: StorageConfig{
