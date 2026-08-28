@@ -16,6 +16,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -126,18 +127,23 @@ func TestInteractivePrompter_Confirm_ContextCancellation(t *testing.T) {
 	// Create a context that will be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create a prompter with a slow reader (simulates waiting for input)
-	input := strings.NewReader("") // Empty reader will block
+	// Create a prompter with a reader that blocks until the writer is closed
+	reader, writer := io.Pipe()
 	output := &bytes.Buffer{}
-	prompter := NewInteractivePrompter(input, output)
+	prompter := NewInteractivePrompter(reader, output)
 
-	// Cancel the context immediately
+	// Cancel the context immediately while the open pipe keeps input blocked
 	cancel()
 
-	// Give a small delay to ensure cancellation is processed
-	time.Sleep(10 * time.Millisecond)
-
 	result, err := prompter.Confirm(ctx, "Test message")
+
+	// Close both pipe ends deterministically after Confirm returns
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Errorf("failed to close pipe writer: %v", closeErr)
+	}
+	if closeErr := reader.Close(); closeErr != nil {
+		t.Errorf("failed to close pipe reader: %v", closeErr)
+	}
 
 	if err == nil {
 		t.Fatal("expected context cancellation error, got nil")
