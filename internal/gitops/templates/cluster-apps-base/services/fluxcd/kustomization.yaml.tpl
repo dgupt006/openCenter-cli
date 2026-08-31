@@ -32,6 +32,9 @@ resources:
 {{- if (index .OpenCenter.Services "keycloak").Enabled }}
   - ./keycloak.yaml
 {{- end }}
+{{- if (index .OpenCenter.Services "olm").Enabled }}
+  - ./olm.yaml
+{{- end }}
 
 
 {{- range autoNamespaceStages }}

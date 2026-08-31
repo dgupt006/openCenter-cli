@@ -89,6 +89,10 @@ func TestGeneratedDefaultOverlayKustomizeFailureMatrix(t *testing.T) {
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("render default overlay: %v", err)
 	}
+	// OLM's base is materialized by Flux's GitRepository include rather than
+	// generated locally. Seed the v0.46-shaped source artifact so this matrix
+	// validates the composed overlay instead of failing on an absent include.
+	seedOCTR631OLMBaseFixture(t, repo, cfg.ClusterName())
 
 	overlayRoot := filepath.Join(repo, "applications", "overlays", cfg.ClusterName())
 	var roots []string

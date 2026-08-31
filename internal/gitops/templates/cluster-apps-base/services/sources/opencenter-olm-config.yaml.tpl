@@ -1,0 +1,14 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: opencenter-olm-config
+  namespace: flux-system
+spec:
+  interval: 15m
+{{ sourceAuthBlockCustomerRepository }}
+  include:
+    - repository:
+        name: opencenter-olm
+      fromPath: applications/base/services/olm
+      toPath: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/base/olm/

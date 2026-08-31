@@ -146,7 +146,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true, NamespaceStage: true,
 			PrivilegedNamespace: true,
-			SourceName: "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
+			SourceName:          "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
 			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources", "openstack-csi-namespace"},
 			OverrideValuesRenderer: templateRenderer(openstackCSITemplate),
 		},
@@ -161,11 +161,6 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			SourceName: "opencenter-velero", SourceGroup: "velero", EmitSource: true,
 			BasePath: "applications/base/services/velero", ExtraDependencies: []string{"velero-override"}, OverrideDependsOn: []string{"sources", "velero-namespace"},
 			OverrideValuesRenderer: veleroRenderer,
-		},
-		{
-			ServiceName: "olm", DefaultNamespace: "olm",
-			SourceName: "opencenter-olm", SourceGroup: "olm", EmitSource: true,
-			BasePath: "applications/base/services/olm", BaseOnly: true, OmitTargetNamespace: true,
 		},
 		{
 			ServiceName: "vsphere-csi", DefaultNamespace: "vmware-system-csi", HasOverrideValues: true,
