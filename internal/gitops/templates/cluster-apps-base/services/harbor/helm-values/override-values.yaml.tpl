@@ -21,10 +21,10 @@ persistence:
     imageChartStorage:
         type: s3
         s3:
-            region: {{ .OpenCenter.Meta.Region | upper }}
+            region: {{ .OpenCenter.Meta.Region }}
             bucket: {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}
-            accesskey: {{ .Secrets.Global.AWS.Application.AccessKey | default "PLACEHOLDER-HARBOR-ACCESS-KEY" }}
-            secretkey: {{ .Secrets.Global.AWS.Application.SecretAccessKey | default "PLACEHOLDER-HARBOR-SECRET-KEY" }}
+            accesskey: {{ .GetHarborS3AccessKey }}
+            secretkey: {{ .GetHarborS3SecretKey }}
             regionendpoint: swift.api.{{ .OpenCenter.Meta.Region }}.rackspacecloud.com
             v4auth: true
             secure: true

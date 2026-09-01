@@ -579,5 +579,11 @@ func missingHarborDeploymentSecretPaths(cfg *Config) []string {
 	if isMissingSecret(cfg.Secrets.Harbor.DatabasePassword) {
 		missing = append(missing, "secrets.harbor.database_password")
 	}
+	if isMissingSecret(cfg.Secrets.Harbor.S3AccessKeyID) {
+		missing = append(missing, "secrets.harbor.s3_access_key_id")
+	}
+	if isMissingSecret(cfg.Secrets.Harbor.S3SecretAccessKey) {
+		missing = append(missing, "secrets.harbor.s3_secret_access_key")
+	}
 	return missing
 }

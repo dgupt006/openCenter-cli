@@ -202,9 +202,11 @@ type GrafanaSecrets struct {
 }
 
 type HarborSecrets struct {
-	AdminPassword    string `yaml:"admin_password,omitempty" json:"admin_password,omitempty" jsonschema:"secret=true,description=Harbor administrator password"`
-	RegistryPassword string `yaml:"registry_password,omitempty" json:"registry_password,omitempty" jsonschema:"secret=true,description=Harbor registry password"`
-	DatabasePassword string `yaml:"database_password,omitempty" json:"database_password,omitempty" jsonschema:"secret=true,description=Harbor database password"`
+	AdminPassword     string `yaml:"admin_password,omitempty" json:"admin_password,omitempty" jsonschema:"secret=true,description=Harbor administrator password"`
+	RegistryPassword  string `yaml:"registry_password,omitempty" json:"registry_password,omitempty" jsonschema:"secret=true,description=Harbor registry password"`
+	DatabasePassword  string `yaml:"database_password,omitempty" json:"database_password,omitempty" jsonschema:"secret=true,description=Harbor database password"`
+	S3AccessKeyID     string `yaml:"s3_access_key_id,omitempty" json:"s3_access_key_id,omitempty" jsonschema:"secret=true,description=OpenStack EC2 access key for Harbor Swift S3 API"`
+	S3SecretAccessKey string `yaml:"s3_secret_access_key,omitempty" json:"s3_secret_access_key,omitempty" jsonschema:"secret=true,description=OpenStack EC2 secret access key for Harbor Swift S3 API"`
 }
 
 type MimirSecrets struct {

@@ -18,9 +18,11 @@ func TestNewV2DefaultHarborSecretsUseDeterministicPlaceholders(t *testing.T) {
 	}
 
 	if first.Secrets.Harbor != (HarborSecrets{
-		AdminPassword:    PlaceholderSecret,
-		RegistryPassword: PlaceholderSecret,
-		DatabasePassword: PlaceholderSecret,
+		AdminPassword:     PlaceholderSecret,
+		RegistryPassword:  PlaceholderSecret,
+		DatabasePassword:  PlaceholderSecret,
+		S3AccessKeyID:     PlaceholderSecret,
+		S3SecretAccessKey: PlaceholderSecret,
 	}) {
 		t.Fatalf("Harbor defaults = %#v, want all CHANGEME", first.Secrets.Harbor)
 	}
@@ -34,9 +36,11 @@ func TestHarborSecretValidationDependsOnServiceEnabled(t *testing.T) {
 	harbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
 	harbor.Enabled = true
 	cfg.Secrets.Harbor = HarborSecrets{
-		AdminPassword:    PlaceholderSecret,
-		RegistryPassword: "",
-		DatabasePassword: PlaceholderSecret,
+		AdminPassword:     PlaceholderSecret,
+		RegistryPassword:  "",
+		DatabasePassword:  PlaceholderSecret,
+		S3AccessKeyID:     PlaceholderSecret,
+		S3SecretAccessKey: PlaceholderSecret,
 	}
 
 	report := ValidateReadiness(cfg)
@@ -44,6 +48,8 @@ func TestHarborSecretValidationDependsOnServiceEnabled(t *testing.T) {
 		"secrets.harbor.admin_password",
 		"secrets.harbor.registry_password",
 		"secrets.harbor.database_password",
+		"secrets.harbor.s3_access_key_id",
+		"secrets.harbor.s3_secret_access_key",
 	} {
 		assertIssue(t, report, SeverityError, CategoryServices, path)
 	}
@@ -56,6 +62,8 @@ func TestHarborSecretValidationDependsOnServiceEnabled(t *testing.T) {
 		"secrets.harbor.admin_password",
 		"secrets.harbor.registry_password",
 		"secrets.harbor.database_password",
+		"secrets.harbor.s3_access_key_id",
+		"secrets.harbor.s3_secret_access_key",
 	} {
 		if !strings.Contains(err.Error(), path) {
 			t.Fatalf("ValidateForDeployment() error = %v, missing %q", err, path)
@@ -68,6 +76,8 @@ func TestHarborSecretValidationDependsOnServiceEnabled(t *testing.T) {
 		"secrets.harbor.admin_password",
 		"secrets.harbor.registry_password",
 		"secrets.harbor.database_password",
+		"secrets.harbor.s3_access_key_id",
+		"secrets.harbor.s3_secret_access_key",
 	} {
 		assertNoIssue(t, report, path)
 	}
@@ -80,9 +90,11 @@ func TestValidateHarborForDeploymentChecksRegularHarborSecrets(t *testing.T) {
 	cfg := validReadinessConfig(t, "kind")
 	cfg.OpenCenter.Services["harbor"] = &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: true}}
 	cfg.Secrets.Harbor = HarborSecrets{
-		AdminPassword:    PlaceholderSecret,
-		RegistryPassword: "registry-configured",
-		DatabasePassword: "database-configured",
+		AdminPassword:     PlaceholderSecret,
+		RegistryPassword:  "registry-configured",
+		DatabasePassword:  "database-configured",
+		S3AccessKeyID:     "ec2-access-key",
+		S3SecretAccessKey: "ec2-secret-key",
 	}
 
 	err := ValidateHarborForDeployment(cfg)
@@ -103,9 +115,11 @@ func TestValidateHarborForDeploymentRejectsManagedHarbor(t *testing.T) {
 		"harbor": &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: true}},
 	}
 	cfg.Secrets.Harbor = HarborSecrets{
-		AdminPassword:    "admin-configured",
-		RegistryPassword: "registry-configured",
-		DatabasePassword: "database-configured",
+		AdminPassword:     "admin-configured",
+		RegistryPassword:  "registry-configured",
+		DatabasePassword:  "database-configured",
+		S3AccessKeyID:     "ec2-access-key",
+		S3SecretAccessKey: "ec2-secret-key",
 	}
 
 	err := ValidateHarborForDeployment(cfg)

@@ -877,3 +877,35 @@ func TestGatewayClusterIssuerIsLetsencryptDefault(t *testing.T) {
 		t.Fatalf("expected cluster-issuer annotation 'letsencrypt-default' in rmpk-gateway.\nGot:\n%s", gateway)
 	}
 }
+
+func TestRenderHarborOverrideValuesUsesEC2S3Credentials(t *testing.T) {
+	cfg := newDefault("harbor-s3-guided")
+	cfg.Secrets.Harbor = v2.HarborSecrets{
+		AdminPassword:     "harbor-admin",
+		RegistryPassword:  "harbor-registry",
+		DatabasePassword:  "harbor-database",
+		S3AccessKeyID:     "ec2-access-key",
+		S3SecretAccessKey: "ec2-secret-key",
+	}
+
+	values, err := templateRenderer(harborTemplate)(cfg)
+	if err != nil {
+		t.Fatalf("render Harbor override-values: %v", err)
+	}
+	for _, expected := range []string{
+		"type: s3",
+		"region: " + cfg.OpenCenter.Meta.Region,
+		"accesskey: ec2-access-key",
+		"secretkey: ec2-secret-key",
+		"regionendpoint: swift.api." + cfg.OpenCenter.Meta.Region + ".rackspacecloud.com",
+	} {
+		if !strings.Contains(values, expected) {
+			t.Fatalf("expected %q in Harbor values:\n%s", expected, values)
+		}
+	}
+	for _, forbidden := range []string{"CHANGEME", "PLACEHOLDER", "Global.AWS.Application"} {
+		if strings.Contains(values, forbidden) {
+			t.Fatalf("did not expect %q in Harbor values:\n%s", forbidden, values)
+		}
+	}
+}

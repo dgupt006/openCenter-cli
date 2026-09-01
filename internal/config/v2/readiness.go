@@ -630,6 +630,8 @@ func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
 	r.requireSecret("secrets.harbor.admin_password", cfg.Secrets.Harbor.AdminPassword, "Harbor admin password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.registry_password", cfg.Secrets.Harbor.RegistryPassword, "Harbor registry password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.database_password", cfg.Secrets.Harbor.DatabasePassword, "Harbor database password is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
 }
 
 func (r *readinessBuilder) requireSecret(path, value, message string) {

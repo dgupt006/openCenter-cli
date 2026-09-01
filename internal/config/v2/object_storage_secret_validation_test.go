@@ -35,3 +35,28 @@ func TestSwiftApplicationCredentialAccessorsFallBackToGlobalApplicationSecret(t 
 		}
 	}
 }
+
+func TestValidateForDeploymentRejectsHarborS3CredentialPlaceholders(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = true
+	cfg.Secrets.Harbor = HarborSecrets{
+		AdminPassword:     "harbor-admin",
+		RegistryPassword:  "harbor-registry",
+		DatabasePassword:  "harbor-database",
+		S3AccessKeyID:     PlaceholderSecret,
+		S3SecretAccessKey: PlaceholderSecret,
+	}
+
+	err := ValidateForDeployment(cfg)
+	if err == nil {
+		t.Fatal("ValidateForDeployment() accepted enabled Harbor with placeholder S3 credentials")
+	}
+	for _, path := range []string{
+		"secrets.harbor.s3_access_key_id",
+		"secrets.harbor.s3_secret_access_key",
+	} {
+		if !strings.Contains(err.Error(), path) {
+			t.Fatalf("ValidateForDeployment() error = %v, missing %q", err, path)
+		}
+	}
+}

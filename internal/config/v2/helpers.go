@@ -96,6 +96,15 @@ func (c Config) GetTempoS3Credentials() (accessKey, secretKey string) {
 	return c.GetAWSApplicationCredentials()
 }
 
+// GetHarborS3Credentials resolves Harbor S3 credentials.
+func (c Config) GetHarborS3Credentials() (accessKey, secretKey string) {
+	if c.Secrets.Harbor.S3AccessKeyID != "" && c.Secrets.Harbor.S3SecretAccessKey != "" {
+		return c.Secrets.Harbor.S3AccessKeyID, c.Secrets.Harbor.S3SecretAccessKey
+	}
+
+	return c.GetAWSApplicationCredentials()
+}
+
 // GetLokiSwiftApplicationCredentialSecret returns the Loki Swift application credential secret.
 func (c Config) GetLokiSwiftApplicationCredentialSecret() string {
 	if value := strings.TrimSpace(c.Secrets.Loki.SwiftApplicationCredentialSecret); value != "" {
@@ -177,6 +186,18 @@ func (c Config) GetLokiS3AccessKey() string {
 // GetLokiS3SecretKey returns the Loki S3 secret key for templates.
 func (c Config) GetLokiS3SecretKey() string {
 	_, secretKey := c.GetLokiS3Credentials()
+	return secretKey
+}
+
+// GetHarborS3AccessKey returns the Harbor S3 access key for templates.
+func (c Config) GetHarborS3AccessKey() string {
+	accessKey, _ := c.GetHarborS3Credentials()
+	return accessKey
+}
+
+// GetHarborS3SecretKey returns the Harbor S3 secret key for templates.
+func (c Config) GetHarborS3SecretKey() string {
+	_, secretKey := c.GetHarborS3Credentials()
 	return secretKey
 }
 

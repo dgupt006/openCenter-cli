@@ -341,9 +341,11 @@ func NewV2Default(name, provider string) (*Config, error) {
 				AdminPassword: grafanaAdminPassword,
 			},
 			Harbor: HarborSecrets{
-				AdminPassword:    PlaceholderSecret,
-				RegistryPassword: PlaceholderSecret,
-				DatabasePassword: PlaceholderSecret,
+				AdminPassword:     PlaceholderSecret,
+				RegistryPassword:  PlaceholderSecret,
+				DatabasePassword:  PlaceholderSecret,
+				S3AccessKeyID:     PlaceholderSecret,
+				S3SecretAccessKey: PlaceholderSecret,
 			},
 			Mimir: MimirSecrets{
 				SwiftApplicationCredentialSecret: PlaceholderSecret,
