@@ -483,7 +483,7 @@ func prepareKindBootstrapFixture(t *testing.T, clusterName string) (string, stri
 	setupCmd := newClusterGenerateCmd()
 	setupCmd.SetOut(&bytes.Buffer{})
 	setupCmd.SetErr(&bytes.Buffer{})
-	setupCmd.SetArgs([]string{clusterName})
+	setupCmd.SetArgs([]string{clusterName, "--skip-validation"})
 	if err := setupCmd.Execute(); err != nil {
 		t.Fatalf("cluster generate failed: %v", err)
 	}

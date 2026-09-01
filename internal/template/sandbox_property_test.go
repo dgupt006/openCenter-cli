@@ -139,14 +139,11 @@ func TestProperty_TemplateInputValidation(t *testing.T) {
 		func(_ bool) bool {
 			sandbox := NewTemplateSandbox()
 
-			// Use time.Sleep via a custom function to create a reliable,
-			// cancellation-friendly delay. Since we can't inject sleep into
-			// text/template, use a template that does enough work to exceed
-			// 1ms but finishes within a few seconds so leaked goroutines
-			// don't accumulate.
+			// Use a sufficiently expensive template so rendering cannot finish before
+			// the near-zero timeout, while still allowing leaked goroutines to exit.
 			tmpl := `{{ range $i := until 200 }}{{ range $j := until 200 }}{{ $i }}{{ end }}{{ end }}`
 
-			timeout := 1 * time.Millisecond
+			timeout := 1 * time.Nanosecond
 			_, err := sandbox.RenderWithTimeout(tmpl, nil, timeout)
 
 			// Must have timed out
