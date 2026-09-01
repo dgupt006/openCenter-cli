@@ -176,6 +176,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "longhorn", DefaultNamespace: "longhorn-system", HasOverrideValues: true,
 			SourceName: "opencenter-longhorn", SourceGroup: "longhorn", EmitSource: true,
 			BasePath: "applications/base/services/longhorn", OverlayFilesRenderer: longhornOverlayFilesRenderer,
+			OverrideDependsOn: []string{"sources", "longhorn-base", "envoy-gateway-api-base"},
 		},
 		{
 			ServiceName: "metallb", DefaultNamespace: "metallb-system", HasOverrideValues: true,
