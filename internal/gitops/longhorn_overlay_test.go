@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,6 +74,27 @@ func TestLonghornPlansCleanly(t *testing.T) {
 		}
 	}
 	require.True(t, found, "planned actions should include the longhorn HTTPRoute overlay file")
+}
+
+// TestLonghornOverrideDependsOnGatewayAPI verifies the longhorn-override
+// Kustomization (which applies the HTTPRoute) waits for the Gateway API CRDs
+// via envoy-gateway-api-base, and still orders after longhorn-base (OCTR-709).
+func TestLonghornOverrideDependsOnGatewayAPI(t *testing.T) {
+	cfg := enableLonghorn(t, "")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+	require.NoError(t, RenderClusterApps(cfg))
+
+	flux := mustReadFile(t, filepath.Join(
+		cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays",
+		cfg.ClusterName(), "services", "fluxcd", "longhorn.yaml"))
+	docs, err := decodeYAMLDocuments([]byte(flux))
+	require.NoError(t, err)
+
+	override := findFluxKustomization(t, docs, "longhorn-override")
+	require.True(t, hasFluxDependency(t, override, "envoy-gateway-api-base"),
+		"longhorn-override must depend on envoy-gateway-api-base so the HTTPRoute applies after the Gateway API CRDs exist")
+	require.True(t, hasFluxDependency(t, override, "longhorn-base"),
+		"longhorn-override must still depend on longhorn-base for base->override ordering")
 }
 
 // enableLonghorn returns a default config with longhorn enabled, optionally

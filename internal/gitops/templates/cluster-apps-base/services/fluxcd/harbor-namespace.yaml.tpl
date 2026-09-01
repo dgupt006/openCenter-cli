@@ -8,7 +8,7 @@ spec:
   dependsOn:
     - name: sources
       namespace: flux-system
-  interval: 60m
+  interval: 5m
   retryInterval: 1m
   timeout: 5m
   sourceRef:

@@ -355,7 +355,13 @@ storage:
 {{- end }}
 `
 
-const mimirTemplate = `mimir:
+const mimirTemplate = `{{- $kafkaNamespace := "strimzi" -}}
+{{- if index .OpenCenter.Services "kafka-cluster" -}}
+{{- with (index .OpenCenter.Services "kafka-cluster").Namespace -}}{{- $kafkaNamespace = . -}}{{- end -}}
+{{- end -}}
+global:
+    dnsService: coredns
+mimir:
     structuredConfig:
         blocks_storage:
             backend: s3
@@ -366,7 +372,7 @@ const mimirTemplate = `mimir:
                 secret_access_key: {{ .Secrets.Global.AWS.Application.SecretAccessKey | default "PLACEHOLDER-MIMIR-SECRET-KEY" }}
         ingest_storage:
             kafka:
-                address: kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092
+                address: kafka-cluster-kafka-brokers.{{ $kafkaNamespace }}.svc.cluster.local:9092
                 topic: mimir-ingest
                 auto_create_topic_enabled: true
                 auto_create_topic_default_partitions: 1000
