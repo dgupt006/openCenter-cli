@@ -8482,6 +8482,15 @@
           },
           "type": "object"
         },
+        "mimir": {
+          "additionalProperties": false,
+          "properties": {
+            "swift_application_credential_secret": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "overlay_units": {
           "additionalProperties": false,
           "properties": {

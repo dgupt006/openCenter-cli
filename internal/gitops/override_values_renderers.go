@@ -394,21 +394,28 @@ storage:
 {{- end }}
 `
 
-const mimirTemplate = `{{- $kafkaNamespace := "strimzi" -}}
+const mimirTemplate = `{{- $openstack := .OpenCenter.Infrastructure.Cloud.OpenStack -}}
+{{- $kafkaNamespace := "strimzi" -}}
 {{- if index .OpenCenter.Services "kafka-cluster" -}}
 {{- with (index .OpenCenter.Services "kafka-cluster").Namespace -}}{{- $kafkaNamespace = . -}}{{- end -}}
 {{- end -}}
 global:
     dnsService: coredns
+minio:
+    enabled: false
 mimir:
     structuredConfig:
         blocks_storage:
-            backend: s3
-            s3:
-                bucket_name: {{ .OpenCenter.Cluster.ClusterName }}-mimir
-                endpoint: swift.api.{{ .OpenCenter.Meta.Region }}.rackspacecloud.com
-                access_key_id: {{ .Secrets.Global.AWS.Application.AccessKey | default "PLACEHOLDER-MIMIR-ACCESS-KEY" }}
-                secret_access_key: {{ .Secrets.Global.AWS.Application.SecretAccessKey | default "PLACEHOLDER-MIMIR-SECRET-KEY" }}
+            backend: swift
+            swift:
+                container_name: {{ .OpenCenter.Cluster.ClusterName }}-mimir
+                auth_version: 3
+                auth_url: {{ $openstack.AuthURL }}
+                region_name: {{ $openstack.Region | default .OpenCenter.Meta.Region }}
+                application_credential_id: {{ $openstack.ApplicationCredentialID }}
+                application_credential_secret: {{ .GetMimirSwiftApplicationCredentialSecret }}
+                user_domain_name: {{ $openstack.UserDomainName | default ($openstack.DomainName | default $openstack.Domain) }}
+                domain_name: {{ $openstack.DomainName | default $openstack.Domain }}
 {{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
         ingest_storage:
             kafka:

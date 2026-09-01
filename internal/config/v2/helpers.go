@@ -111,7 +111,15 @@ func (c Config) GetLokiSwiftApplicationCredentialSecret() string {
 			}
 		}
 	}
-	return ""
+	return strings.TrimSpace(c.Secrets.Global.AWS.Application.SecretAccessKey)
+}
+
+// GetMimirSwiftApplicationCredentialSecret returns the Mimir Swift application credential secret.
+func (c Config) GetMimirSwiftApplicationCredentialSecret() string {
+	if value := strings.TrimSpace(c.Secrets.Mimir.SwiftApplicationCredentialSecret); value != "" {
+		return value
+	}
+	return strings.TrimSpace(c.Secrets.Global.AWS.Application.SecretAccessKey)
 }
 
 // GetTempoSwiftApplicationCredentialSecret returns the Tempo Swift application credential secret.
@@ -129,7 +137,7 @@ func (c Config) GetTempoSwiftApplicationCredentialSecret() string {
 			}
 		}
 	}
-	return ""
+	return strings.TrimSpace(c.Secrets.Global.AWS.Application.SecretAccessKey)
 }
 
 // GetS3BackendCredentials resolves backend S3 credentials using infrastructure credentials.

@@ -43,7 +43,7 @@ func serviceOverrideValuesFilesToEncrypt(cfg *v2.Config) []string {
 	//   - openstack-csi: application-credential-id/secret (openstack only)
 	//   - loki: swift application_credential_secret or S3 secretAccessKey
 	//   - tempo: swift application_credential_secret or S3 secret_key
-	//   - mimir: S3 secret_access_key
+	//   - mimir: Swift application_credential_secret
 	//   - headlamp: OIDC client secret
 	//   - harbor: object-storage and registry/admin credentials
 	var files []string

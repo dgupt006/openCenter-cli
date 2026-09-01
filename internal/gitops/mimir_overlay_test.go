@@ -43,6 +43,9 @@ func TestMimirKafkaAddressUsesConfiguredNamespace(t *testing.T) {
 	mimir, ok := cfg.OpenCenter.Services["mimir"].(*configservices.DefaultServiceConfig)
 	require.True(t, ok)
 	mimir.Enabled = true
+	kafka, ok := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
+	require.True(t, ok)
+	kafka.Enabled = true
 
 	// Default kafka-cluster namespace is "strimzi".
 	values := readMimirOverrideValues(t, *cfg)
@@ -62,6 +65,7 @@ func TestMimirKafkaAddressHonoursCustomNamespace(t *testing.T) {
 	mimir.Enabled = true
 	kafka, ok := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
 	require.True(t, ok)
+	kafka.Enabled = true
 	kafka.Namespace = "kafka-prod"
 
 	values := readMimirOverrideValues(t, *cfg)

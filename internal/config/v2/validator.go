@@ -452,7 +452,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 
 	// Loki secrets
 	if isServiceEnabled(cfg, "loki") {
-		if cfg.Secrets.Loki.SwiftApplicationCredentialSecret == PlaceholderSecret {
+		if isMissingSecret(cfg.GetLokiSwiftApplicationCredentialSecret()) {
 			placeholders = append(placeholders, "secrets.loki.swift_application_credential_secret")
 		}
 		if cfg.Secrets.Loki.S3AccessKeyID == PlaceholderSecret {
@@ -465,7 +465,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 
 	// Tempo secrets
 	if isServiceEnabled(cfg, "tempo") {
-		if cfg.Secrets.Tempo.SwiftApplicationCredentialSecret == PlaceholderSecret {
+		if isMissingSecret(cfg.GetTempoSwiftApplicationCredentialSecret()) {
 			placeholders = append(placeholders, "secrets.tempo.swift_application_credential_secret")
 		}
 		if cfg.Secrets.Tempo.AccessKey == PlaceholderSecret {
@@ -474,6 +474,11 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 		if cfg.Secrets.Tempo.SecretKey == PlaceholderSecret {
 			placeholders = append(placeholders, "secrets.tempo.secret_key")
 		}
+	}
+
+	// Mimir Swift blocks storage
+	if isServiceEnabled(cfg, "mimir") && isMissingSecret(cfg.GetMimirSwiftApplicationCredentialSecret()) {
+		placeholders = append(placeholders, "secrets.mimir.swift_application_credential_secret")
 	}
 
 	// Harbor secrets

@@ -345,6 +345,9 @@ func NewV2Default(name, provider string) (*Config, error) {
 				RegistryPassword: PlaceholderSecret,
 				DatabasePassword: PlaceholderSecret,
 			},
+			Mimir: MimirSecrets{
+				SwiftApplicationCredentialSecret: PlaceholderSecret,
+			},
 			Loki: LokiSecrets{
 				SwiftApplicationCredentialSecret: PlaceholderSecret,
 				S3AccessKeyID:                    PlaceholderSecret,

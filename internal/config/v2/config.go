@@ -103,6 +103,7 @@ type SecretsConfig struct {
 	Global         GlobalSecrets      `yaml:"global,omitempty" json:"global,omitempty"`
 	CertManager    CertManagerSecrets `yaml:"cert_manager,omitempty" json:"cert_manager,omitempty"`
 	Loki           LokiSecrets        `yaml:"loki,omitempty" json:"loki,omitempty"`
+	Mimir          MimirSecrets       `yaml:"mimir,omitempty" json:"mimir,omitempty"`
 	Keycloak       KeycloakSecrets    `yaml:"keycloak,omitempty" json:"keycloak,omitempty"`
 	Headlamp       HeadlampSecrets    `yaml:"headlamp,omitempty" json:"headlamp,omitempty"`
 	WeaveGitOps    WeaveGitOpsSecrets `yaml:"weave_gitops,omitempty" json:"weave_gitops,omitempty"`
@@ -204,6 +205,10 @@ type HarborSecrets struct {
 	AdminPassword    string `yaml:"admin_password,omitempty" json:"admin_password,omitempty" jsonschema:"secret=true,description=Harbor administrator password"`
 	RegistryPassword string `yaml:"registry_password,omitempty" json:"registry_password,omitempty" jsonschema:"secret=true,description=Harbor registry password"`
 	DatabasePassword string `yaml:"database_password,omitempty" json:"database_password,omitempty" jsonschema:"secret=true,description=Harbor database password"`
+}
+
+type MimirSecrets struct {
+	SwiftApplicationCredentialSecret string `yaml:"swift_application_credential_secret,omitempty" json:"swift_application_credential_secret,omitempty" jsonschema:"secret=true,description=Swift application credential secret for Mimir blocks storage"`
 }
 
 type TempoSecrets struct {

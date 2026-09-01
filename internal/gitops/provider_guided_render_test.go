@@ -149,10 +149,28 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 
 func TestRenderMimirOverrideValues(t *testing.T) {
 	cfg := newDefault("mimir-guided")
+	openstack := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+	openstack.AuthURL = "https://identity.api.example.com/v3"
+	openstack.Region = "SJC3"
+	openstack.ProjectID = "project-id"
+	openstack.ApplicationCredentialID = "app-cred-id"
+	openstack.Domain = "rackspace"
+	openstack.DomainName = "rackspace"
+	openstack.UserDomainName = "rackspace"
+	cfg.Secrets.Mimir.SwiftApplicationCredentialSecret = "mimir-swift-secret"
 
 	mimirValues := renderOverrideValues(t, cfg, "mimir")
 	if !strings.Contains(mimirValues, "dnsService: coredns") {
 		t.Fatalf("expected global.dnsService: coredns in Mimir values:\n%s", mimirValues)
+	}
+	if !strings.Contains(mimirValues, "backend: swift") || !strings.Contains(mimirValues, "application_credential_secret: mimir-swift-secret") {
+		t.Fatalf("expected configured Swift storage in Mimir values:\n%s", mimirValues)
+	}
+	if !strings.Contains(mimirValues, "minio:\n    enabled: false") {
+		t.Fatalf("expected bundled MinIO to be disabled in Mimir values:\n%s", mimirValues)
+	}
+	if strings.Contains(mimirValues, "backend: s3") || strings.Contains(mimirValues, "PLACEHOLDER") {
+		t.Fatalf("did not expect S3 or placeholder storage credentials in Mimir values:\n%s", mimirValues)
 	}
 	if strings.Contains(mimirValues, "ingest_storage:") || strings.Contains(mimirValues, "kafka:") {
 		t.Fatalf("did not expect Kafka ingest storage when kafka-cluster is disabled:\n%s", mimirValues)

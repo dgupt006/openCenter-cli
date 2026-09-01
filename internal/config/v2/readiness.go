@@ -538,6 +538,7 @@ func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	r.validateCertManagerSecrets(cfg)
 	r.validateLokiSecrets(cfg)
 	r.validateTempoSecrets(cfg)
+	r.validateMimirSecrets(cfg)
 	r.validateHarborSecrets(cfg)
 	if serviceEnabled(cfg, "weave-gitops") {
 		if isMissingSecret(cfg.Secrets.WeaveGitOps.Password) && isMissingSecret(cfg.Secrets.WeaveGitOps.PasswordHash) {
@@ -587,7 +588,7 @@ func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
 	}
 	switch storageType {
 	case "swift":
-		r.requireSecret("secrets.loki.swift_application_credential_secret", cfg.Secrets.Loki.SwiftApplicationCredentialSecret, "Loki Swift storage requires an application credential secret.")
+		r.requireSecret("secrets.loki.swift_application_credential_secret", cfg.GetLokiSwiftApplicationCredentialSecret(), "Loki Swift storage requires an application credential secret.")
 	case "s3":
 		r.requireSecret("secrets.loki.s3_access_key_id", cfg.Secrets.Loki.S3AccessKeyID, "Loki S3 storage requires an access key ID.")
 		r.requireSecret("secrets.loki.s3_secret_access_key", cfg.Secrets.Loki.S3SecretAccessKey, "Loki S3 storage requires a secret access key.")
@@ -608,11 +609,18 @@ func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
 	}
 	switch storageType {
 	case "swift":
-		r.requireSecret("secrets.tempo.swift_application_credential_secret", cfg.Secrets.Tempo.SwiftApplicationCredentialSecret, "Tempo Swift storage requires an application credential secret.")
+		r.requireSecret("secrets.tempo.swift_application_credential_secret", cfg.GetTempoSwiftApplicationCredentialSecret(), "Tempo Swift storage requires an application credential secret.")
 	case "s3":
 		r.requireSecret("secrets.tempo.access_key", cfg.Secrets.Tempo.AccessKey, "Tempo S3 storage requires an access key.")
 		r.requireSecret("secrets.tempo.secret_key", cfg.Secrets.Tempo.SecretKey, "Tempo S3 storage requires a secret key.")
 	}
+}
+
+func (r *readinessBuilder) validateMimirSecrets(cfg *Config) {
+	if !serviceEnabled(cfg, "mimir") {
+		return
+	}
+	r.requireSecret("secrets.mimir.swift_application_credential_secret", cfg.GetMimirSwiftApplicationCredentialSecret(), "Mimir Swift blocks storage requires an application credential secret.")
 }
 
 func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
