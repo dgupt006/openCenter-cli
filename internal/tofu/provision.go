@@ -18,6 +18,18 @@ import (
 // - "local" -> provider.local.tf.tpl
 // - "s3" or "aws" -> provider.s3.tf.tpl
 // Note: main.tf is rendered by RenderInfrastructureCluster from the static template
+
+// ProvisionAt materializes OpenTofu configuration under gitDir without
+// changing the caller's configured live repository path.
+func ProvisionAt(cfg v2.Config, gitDir string) error {
+	if strings.TrimSpace(gitDir) == "" {
+		return fmt.Errorf("OpenTofu output directory is empty")
+	}
+	staged := cfg
+	staged.OpenCenter.GitOps.Repository.LocalDir = gitDir
+	return Provision(staged)
+}
+
 // to preserve human-readable ordering of locals and modules.
 func Provision(cfg v2.Config) error {
 	if cfg.OpenCenter.Infrastructure.Provider == "kind" {

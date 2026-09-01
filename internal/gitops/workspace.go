@@ -142,16 +142,32 @@ func (m *DefaultWorkspaceManager) CreateWorkspace(ctx context.Context, cfg v2.Co
 	// Generate unique workspace ID
 	workspaceID := fmt.Sprintf("workspace-%s-%d", cfg.ClusterName(), time.Now().UnixNano())
 
-	// Create workspace root directory
-	rootDir := filepath.Join(m.baseDir, "gitops-workspaces", workspaceID)
-	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+	// Create private workspace roots. Generation temporarily materializes
+	// plaintext secret-bearing manifests before encryption, so both the
+	// workspace and its intermediate directory must be inaccessible to other
+	// local users even when the process umask is permissive.
+	workspaceBase := filepath.Join(m.baseDir, "gitops-workspaces")
+	if err := os.MkdirAll(workspaceBase, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create workspace base directory: %w", err)
+	}
+	if err := os.Chmod(workspaceBase, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to secure workspace base directory: %w", err)
+	}
+	rootDir := filepath.Join(workspaceBase, workspaceID)
+	if err := os.MkdirAll(rootDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create workspace root directory: %w", err)
 	}
+	if err := os.Chmod(rootDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to secure workspace root directory: %w", err)
+	}
 
-	// Create temporary directory for intermediate operations
+	// Create a private temporary directory for intermediate operations.
 	tempDir := filepath.Join(rootDir, ".tmp")
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create workspace temp directory: %w", err)
+	}
+	if err := os.Chmod(tempDir, 0o700); err != nil {
+		return nil, fmt.Errorf("failed to secure workspace temp directory: %w", err)
 	}
 
 	// Initialize workspace

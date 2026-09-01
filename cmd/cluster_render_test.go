@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 )
 
 func newTestCmd() (*cobra.Command, *bytes.Buffer) {
@@ -256,5 +259,95 @@ func TestBackupServiceDirectory(t *testing.T) {
 	}
 	if backupCount != 2 {
 		t.Errorf("expected 2 new backup files, got %d", backupCount)
+	}
+}
+
+func TestPrintPromotionSummaryIncludesCountsDestructivePathsAndBackups(t *testing.T) {
+	cmd, buf := newTestCmd()
+	printPromotionSummary(cmd, &gitops.PromoteResult{
+		Added:           []string{"added.yaml"},
+		Updated:         []string{"updated.yaml"},
+		Unchanged:       []string{"same.yaml"},
+		Seeded:          []string{"seed.yaml"},
+		Pruned:          []string{"stale.yaml"},
+		PruneCandidates: []string{"retained.yaml"},
+		Renamed:         []string{"old.yaml -> new.yaml"},
+		Adopted:         []string{"collision.yaml"},
+		BackupPaths:     []string{"/tmp/.opencenter-backup/backup/collision.yaml"},
+	})
+	output := buf.String()
+	for _, want := range []string{
+		"added=1 updated=1 unchanged=1 seeded=1 pruned=1 prune-candidates=1 renamed=1 adopted=1",
+		"pruned: stale.yaml",
+		"prune candidate (retained): retained.yaml",
+		"renamed: old.yaml -> new.yaml",
+		"adopted: collision.yaml",
+		"backup: /tmp/.opencenter-backup/backup/collision.yaml",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("summary missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderOnlyValidationGateAndExplicitSkip(t *testing.T) {
+	cfg := newTestConfig(t.TempDir())
+	if validator, err := renderOnlyManifestValidator(cfg, false); err == nil || validator != nil {
+		t.Fatalf("default render-only validation returned validatorNil=%t, err=%v; want blocking error", validator == nil, err)
+	}
+	validator, err := renderOnlyManifestValidator(cfg, true)
+	if err != nil {
+		t.Fatalf("skip-validation gate error = %v", err)
+	}
+	if validator != nil {
+		t.Fatal("skip-validation returned a manifest validator")
+	}
+}
+
+func TestRenderSingleServiceForceBackupWaitsForFinalizationAndOwnershipPreflight(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		encryptErr error
+		addUnknown bool
+		wantError  string
+	}{
+		{name: "encryption failure", encryptErr: fmt.Errorf("synthetic encryption failure"), wantError: "synthetic encryption failure"},
+		{name: "ownership failure", addUnknown: true, wantError: "user-authored files"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			cfg, err := v2.NewV2Default("scoped-backup", "kind")
+			if err != nil {
+				t.Fatalf("NewV2Default() error = %v", err)
+			}
+			cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+			cfg.OpenCenter.Services["metallb"].(*services.MetalLBConfig).Enabled = true
+			if err := gitops.RenderClusterApps(*cfg); err != nil {
+				t.Fatalf("initial RenderClusterApps() error = %v", err)
+			}
+			serviceDir := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "metallb")
+			if tt.addUnknown {
+				if err := os.WriteFile(filepath.Join(serviceDir, "hand-authored.yaml"), []byte("keep\n"), 0o644); err != nil {
+					t.Fatalf("write ownership conflict: %v", err)
+				}
+			}
+
+			oldEncrypt := encryptRenderedServiceOverrides
+			encryptRenderedServiceOverrides = func(context.Context, string, *v2.Config) error { return tt.encryptErr }
+			defer func() { encryptRenderedServiceOverrides = oldEncrypt }()
+
+			cmd, _ := newTestCmd()
+			err = renderSingleServiceWithOptions(cfg, "metallb", true, false, true, false, cmd)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("renderSingleServiceWithOptions() error = %v, want %q", err, tt.wantError)
+			}
+			backups, globErr := filepath.Glob(filepath.Join(serviceDir, "*.bak-*"))
+			if globErr != nil {
+				t.Fatal(globErr)
+			}
+			if len(backups) != 0 {
+				t.Fatalf("force backup created before scoped preflight: %v", backups)
+			}
+		})
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
+func TestOCTR675KeycloakOperatorWatchScope(t *testing.T) {
 	dst := t.TempDir()
 	cfg := newDefault("octr666-keycloak")
 	cfg.OpenCenter.Meta.Region = "dfw"
@@ -51,8 +51,14 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 		t.Errorf("OperatorGroup namespace = %q, want keycloak-operator", got)
 	}
 	targetNamespaces, ok := nestedValue(og, "spec", "targetNamespaces").([]any)
-	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "keycloak-operator" {
-		t.Errorf("OperatorGroup targetNamespaces = %#v, want [keycloak-operator]", targetNamespaces)
+	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "keycloak" {
+		t.Errorf("OperatorGroup targetNamespaces = %#v, want [keycloak]", targetNamespaces)
+	}
+	operatorGroupContent := mustReadFile(t, operatorGroupPath)
+	for _, unsupportedScope := range []string{"AllNamespaces", "MultiNamespace"} {
+		if strings.Contains(operatorGroupContent, unsupportedScope) {
+			t.Errorf("OperatorGroup must not use unsupported %s topology", unsupportedScope)
+		}
 	}
 
 	subscriptionPath := filepath.Join(operatorDir, "patch-subscription.yaml")
@@ -167,6 +173,20 @@ func TestOCTR666KeycloakOperatorRendersForNonOrd1(t *testing.T) {
 	keycloakStage := findFluxKustomization(t, fluxDocs, "keycloak-cr")
 	if !hasFluxDependency(t, keycloakStage, "keycloak-operator") {
 		t.Fatalf("keycloak-cr must depend on keycloak-operator")
+	}
+	if got := nestedString(keycloakStage, "spec", "targetNamespace"); got != "keycloak" {
+		t.Errorf("keycloak-cr targetNamespace = %q, want keycloak", got)
+	}
+	keycloakHealthChecks, ok := nestedValue(keycloakStage, "spec", "healthChecks").([]any)
+	if !ok || len(keycloakHealthChecks) != 1 {
+		t.Fatalf("keycloak-cr healthChecks = %#v, want one StatefulSet health check", keycloakHealthChecks)
+	}
+	keycloakHealthCheck, ok := keycloakHealthChecks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("keycloak-cr health check has unexpected shape: %#v", keycloakHealthChecks[0])
+	}
+	if got := keycloakHealthCheck["namespace"]; got != "keycloak" {
+		t.Errorf("keycloak-cr health check namespace = %#v, want keycloak", got)
 	}
 }
 

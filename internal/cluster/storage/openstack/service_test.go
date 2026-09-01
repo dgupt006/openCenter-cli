@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,6 +18,7 @@ import (
 type fakeAdapter struct {
 	preflight                                                                  cloudopenstack.StoragePreflight
 	preflightErr                                                               error
+	preflightS3Endpoint                                                        string
 	preflightCalls, containers, appCreates, appDeletes, ec2Creates, ec2Deletes int
 	appUserID, ec2UserID, appDeleteUserID, ec2DeleteUserID                     string
 	app                                                                        cloudopenstack.AppCredential
@@ -26,9 +26,14 @@ type fakeAdapter struct {
 	revokeErr                                                                  error
 }
 
-func (f *fakeAdapter) Preflight(_ context.Context, _ string, _ string, _ bool) (cloudopenstack.StoragePreflight, error) {
+func (f *fakeAdapter) Preflight(_ context.Context, _ string, explicitS3Endpoint string, _ bool) (cloudopenstack.StoragePreflight, error) {
 	f.preflightCalls++
-	return f.preflight, f.preflightErr
+	f.preflightS3Endpoint = explicitS3Endpoint
+	preflight := f.preflight
+	if explicitS3Endpoint != "" {
+		preflight.S3Endpoint = explicitS3Endpoint
+	}
+	return preflight, f.preflightErr
 }
 func (f *fakeAdapter) EnsureContainer(context.Context, cloudopenstack.ContainerRequest) error {
 	f.containers++
@@ -58,6 +63,8 @@ func (f *fakeAdapter) DeleteEC2Credentials(_ context.Context, _ string, userID s
 type fakeFS struct {
 	data                              []byte
 	backup, atomic, recovery, removed bool
+	recoveryJournals                  []recoveryJournal
+	updateRecoveryErr                 error
 	atomicErr                         error
 }
 
@@ -72,15 +79,19 @@ func (f *fakeFS) WriteAtomic(_ string, data []byte) error {
 	f.data = append([]byte(nil), data...)
 	return nil
 }
-func (f *fakeFS) WriteRecovery(_ string, state RecoveryState) error {
+func (f *fakeFS) WriteRecovery(_ string, state recoveryJournal) error {
 	f.recovery = true
+	f.recoveryJournals = append(f.recoveryJournals, state)
 	if strings.Contains(state.CredentialID, "secret") {
 		return errors.New("secret leaked")
 	}
 	return nil
 }
-func (f *fakeFS) UpdateRecovery(_ string, state RecoveryState) error {
-	return f.WriteRecovery("", state)
+func (f *fakeFS) UpdateRecovery(_ string, state recoveryJournal) error {
+	if err := f.WriteRecovery("", state); err != nil {
+		return err
+	}
+	return f.updateRecoveryErr
 }
 func (f *fakeFS) RemoveRecovery(string) error { f.removed = true; return nil }
 
@@ -114,12 +125,215 @@ func TestValidateOptionsMappings(t *testing.T) {
 	for _, tc := range []struct {
 		service, backend string
 		wantErr          bool
-	}{{"loki", "swift", false}, {"loki", "s3", false}, {"tempo", "swift", false}, {"tempo", "s3", false}, {"etcd-backup", "s3", false}, {"velero", "s3", false}, {"velero", "swift", true}, {"other", "s3", true}} {
+	}{{"loki", "swift", false}, {"loki", "s3", false}, {"tempo", "swift", false}, {"tempo", "s3", false}, {"harbor", "s3", false}, {"harbor", "swift", true}, {"etcd-backup", "s3", false}, {"velero", "s3", false}, {"velero", "swift", true}, {"other", "s3", true}} {
 		err := ValidateOptions(Options{Service: tc.service, Backend: tc.backend, Cluster: "prod"})
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s=%s error=%v, wantErr=%v", tc.service, tc.backend, err, tc.wantErr)
 		}
 	}
+}
+
+func harborStorageConfig(t *testing.T) *v2.Config {
+	t.Helper()
+	cfg := testConfig(t)
+	cfg.OpenCenter.Services["harbor"] = &services.HarborConfig{StorageType: "s3", RegistryVolumeSize: 100, JobserviceVolumeSize: 5, DatabaseVolumeSize: 10, RedisVolumeSize: 5, TrivyVolumeSize: 5}
+	cfg.Secrets.Harbor = v2.HarborSecrets{}
+	return cfg
+}
+
+func TestPlanHarborS3UsesDedicatedCredentialPathsWithoutMutation(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	before, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	planned, err := Plan(context.Background(), PlanInput{
+		Config:  cfg,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"},
+		Adapter: testAdapter(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Result.Status != StatusPlanned {
+		t.Fatalf("status=%s, want planned", planned.Result.Status)
+	}
+	if !containsString(planned.Result.SecretPaths, "secrets.harbor.s3_access_key_id") || !containsString(planned.Result.SecretPaths, "secrets.harbor.s3_secret_access_key") {
+		t.Fatalf("secret paths=%v, want dedicated Harbor S3 paths", planned.Result.SecretPaths)
+	}
+	if planned.prospective.Secrets.Harbor.S3AccessKeyID != "" || planned.prospective.Secrets.Harbor.S3SecretAccessKey != "" {
+		t.Fatalf("read-only plan populated Harbor credentials=%#v", planned.prospective.Secrets.Harbor)
+	}
+	if got := planned.prospective.OpenCenter.Services["harbor"].(*services.HarborConfig); got.StorageType != "s3" || got.S3Bucket != "prod-harbor" || got.S3Region != "RegionOne" {
+		t.Fatalf("planned Harbor storage=%+v", got)
+	}
+	after, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("Harbor plan mutated source config")
+	}
+	encoded, _ := json.Marshal(planned.Result)
+	if strings.Contains(string(encoded), "ec2-secret") || strings.Contains(string(encoded), "access-1") {
+		t.Fatalf("Harbor plan exposed adapter credentials: %s", encoded)
+	}
+}
+
+func TestPlanHarborS3BlocksPartialCredentialPair(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = "only-access"
+	planned, err := Plan(context.Background(), PlanInput{
+		Config:  cfg,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"},
+		Adapter: testAdapter(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Result.Status != StatusBlocked || !strings.Contains(strings.Join(planned.Result.Warnings, "\\n"), "partial") {
+		t.Fatalf("status=%s warnings=%v", planned.Result.Status, planned.Result.Warnings)
+	}
+}
+
+func TestPlanHarborS3ReusesCompleteExternalCredentials(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	harbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+	harbor.StorageType, harbor.S3Bucket, harbor.S3Region, harbor.S3Endpoint = "s3", "prod-harbor", "RegionOne", "https://s3.example"
+	cfg.Secrets.Harbor.S3AccessKeyID, cfg.Secrets.Harbor.S3SecretAccessKey = "access-1", "secret-1"
+
+	planned, err := Plan(context.Background(), PlanInput{
+		Config:  cfg,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"},
+		Adapter: testAdapter(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Result.Status != StatusNoOp || planned.Result.RemoteActions[1].Action != "reuse" || planned.Result.RemoteActions[1].ID != "" {
+		t.Fatalf("result=%+v, want no-op reuse without public access-key ID", planned.Result)
+	}
+	encoded, err := json.Marshal(planned.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "access-1") {
+		t.Fatalf("Harbor plan exposed access key: %s", encoded)
+	}
+}
+
+func TestPlanHarborS3PropagatesCatalogAndExplicitEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		explicit string
+		catalog  string
+		want     string
+	}{
+		{name: "catalog", catalog: "https://catalog-s3.example", want: "https://catalog-s3.example"},
+		{name: "explicit", explicit: "https://explicit-s3.example", catalog: "https://catalog-s3.example", want: "https://explicit-s3.example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := harborStorageConfig(t)
+			adapter := testAdapter()
+			adapter.preflight.S3Endpoint = tc.catalog
+			planned, err := Plan(context.Background(), PlanInput{
+				Config:  cfg,
+				Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod", S3Endpoint: tc.explicit},
+				Adapter: adapter,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			harbor := planned.prospective.OpenCenter.Services["harbor"].(*services.HarborConfig)
+			if harbor.S3Endpoint != tc.want || planned.Result.S3Endpoint != tc.want {
+				t.Fatalf("Harbor endpoint=%q result endpoint=%q, want %q", harbor.S3Endpoint, planned.Result.S3Endpoint, tc.want)
+			}
+			if adapter.preflightS3Endpoint != tc.explicit {
+				t.Fatalf("adapter explicit endpoint=%q, want %q", adapter.preflightS3Endpoint, tc.explicit)
+			}
+		})
+	}
+}
+
+func TestApplyHarborS3KeepsAccessKeyPrivateToJournal(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
+	})
+	if err != nil || result.Status != StatusApplied {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(fs.recoveryJournals) == 0 || fs.recoveryJournals[1].CredentialID != "access-1" {
+		t.Fatalf("private recovery journal=%+v, want access key", fs.recoveryJournals)
+	}
+	publicJSON, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(publicJSON), "access-1") {
+		t.Fatalf("public Harbor result exposed access key: %s", publicJSON)
+	}
+	if fs.recoveryJournals[1].S3Endpoint != "https://s3.example" {
+		t.Fatalf("recovery endpoint=%q, want https://s3.example", fs.recoveryJournals[1].S3Endpoint)
+	}
+}
+
+func TestApplyHarborS3PersistsExternallyIssuedCredentials(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
+	})
+	if err != nil || result.Status != StatusApplied {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !strings.Contains(string(fs.data), "access-1") || !strings.Contains(string(fs.data), "ec2-secret") {
+		t.Fatalf("persisted Harbor S3 credentials missing: %s", fs.data)
+	}
+	if !fs.recovery || !fs.removed {
+		t.Fatalf("Harbor credential recovery lifecycle incomplete: %+v", fs)
+	}
+}
+
+func TestApplyHarborS3RotationRevokesPreviousAccessKey(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	harbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+	harbor.StorageType, harbor.S3Bucket, harbor.S3Region = "s3", "prod-harbor", "RegionOne"
+	cfg.Secrets.Harbor.S3AccessKeyID, cfg.Secrets.Harbor.S3SecretAccessKey = "old-access", "old-secret"
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := testAdapter()
+	fs := &fakeFS{data: raw}
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod", RotateCredentials: true}, Adapter: adapter, FileSystem: fs,
+	})
+	if err != nil || result.Status != StatusApplied || adapter.ec2Creates != 1 || adapter.ec2Deletes != 1 {
+		t.Fatalf("result=%+v err=%v adapter=%+v", result, err, adapter)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlanDoesNotMutateAndReusesCompleteCredentials(t *testing.T) {
@@ -237,17 +451,63 @@ func TestApplyRotationKeepsReplacementWhenRevokeFails(t *testing.T) {
 	}
 }
 
-func TestRecoveryAndConfigDoNotContainAdapterSecrets(t *testing.T) {
-	state := RecoveryState{CredentialID: "ec2-1", CredentialType: "ec2", PersistenceState: "created-not-persisted"}
-	data, err := json.Marshal(state)
+func TestRecoveryJournalKeepsPrivateIDButPublicDTODoesNot(t *testing.T) {
+	journal := recoveryJournal{RecoveryState: RecoveryState{CredentialType: "ec2", PersistenceState: "created-not-persisted"}, CredentialID: "access-key-1"}
+	privateData, err := json.Marshal(journal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret") {
-		t.Fatal(string(data))
+	if !strings.Contains(string(privateData), "access-key-1") {
+		t.Fatalf("private recovery journal lost credential ID: %s", privateData)
 	}
-	if _, err := os.Stat("/definitely-not-created"); err == nil {
-		t.Fatal("unexpected test artifact")
+
+	public := Result{Recovery: &journal.RecoveryState, RemoteActions: []RemoteAction{{ID: ""}}}
+	jsonData, err := json.Marshal(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yamlData, err := yaml.Marshal(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{string(jsonData), string(yamlData)} {
+		if strings.Contains(output, "access-key-1") || strings.Contains(output, "credential_id") {
+			t.Fatalf("public storage DTO leaked private recovery identity: %s", output)
+		}
+	}
+}
+
+func TestApplyHarborFailureAfterCredentialCreationRetainsPrivateJournalID(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	validationCalls := 0
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
+		Validate: func(*v2.Config) error {
+			validationCalls++
+			if validationCalls == 2 {
+				return errors.New("post-create validation failed")
+			}
+			return nil
+		},
+	})
+	if err == nil || result.Status != StatusPartial {
+		t.Fatalf("result=%+v err=%v, want partial failure", result, err)
+	}
+	if len(fs.recoveryJournals) < 2 || fs.recoveryJournals[1].CredentialID != "access-1" {
+		t.Fatalf("private recovery journal=%+v, want created access key", fs.recoveryJournals)
+	}
+	publicJSON, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(publicJSON), "access-1") || (result.Recovery != nil && strings.Contains(result.Recovery.PersistenceState, "access-1")) {
+		t.Fatalf("public Harbor result leaked access key: %s", publicJSON)
 	}
 }
 
@@ -352,7 +612,7 @@ func TestPlanUsesCanonicalS3EndpointAndEtcdHost(t *testing.T) {
 func TestRecoveryReservationIsExclusive(t *testing.T) {
 	path := t.TempDir() + "/recovery.json"
 	fs := OSFileSystem{}
-	state := RecoveryState{Path: path, Service: "loki", Backend: "s3", PersistenceState: "creation-pending"}
+	state := recoveryJournal{RecoveryState: RecoveryState{Path: path, Service: "loki", Backend: "s3", PersistenceState: "creation-pending"}}
 	if err := fs.WriteRecovery(path, state); err != nil {
 		t.Fatal(err)
 	}
@@ -382,5 +642,22 @@ func TestApplyOwnerPreflightFailureHasNoMutations(t *testing.T) {
 	}
 	if fs.recovery || fs.backup || fs.atomic || fs.removed {
 		t.Fatalf("local mutations occurred: fs=%+v", fs)
+	}
+}
+
+func TestPlanHarborS3TreatsPlaceholdersAsMissing(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = v2.PlaceholderSecret
+	cfg.Secrets.Harbor.S3SecretAccessKey = v2.PlaceholderSecret
+	planned, err := Plan(context.Background(), PlanInput{
+		Config:  cfg,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"},
+		Adapter: testAdapter(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planned.Result.RemoteActions) < 2 || planned.Result.RemoteActions[1].Action != "create" {
+		t.Fatalf("remote actions=%v, want Harbor S3 credential creation", planned.Result.RemoteActions)
 	}
 }

@@ -13,7 +13,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 
@@ -49,12 +51,14 @@ command will fail and provide an example of the correct usage.`,
 // newClusterServiceEnableCmd creates the "cluster service enable" command.
 func newClusterServiceEnableCmd() *cobra.Command {
 	var (
-		isManaged bool
-		params    []string
-		secrets   []string
-		cluster   string
-		force     bool
-		render    bool
+		isManaged      bool
+		params         []string
+		secrets        []string
+		cluster        string
+		force          bool
+		render         bool
+		prune          bool
+		adoptGenerated bool
 	)
 	cmd := &cobra.Command{
 		Use:   "enable <service-name>",
@@ -100,12 +104,28 @@ Examples:
 			}
 
 			serviceCfg := existingService
+			var explicitFields map[string]any
+			if exists {
+				explicitFields, err = loadExplicitServiceFields(cmd.Context(), cfg, isManaged, serviceName)
+				if err != nil {
+					return fmt.Errorf("failed to inspect existing service config: %w", err)
+				}
+			}
 			if !exists {
-				serviceCfg = newServiceConfig(serviceName)
+				serviceCfg, _ = v2.NewDefaultServiceConfig(serviceName, cfg.OpenCenter.Cluster.ClusterFQDN)
+				if serviceCfg == nil {
+					serviceCfg = newServiceConfig(serviceName)
+				}
 			}
 			serviceCfg, err = materializeServiceConfig(serviceName, serviceCfg)
 			if err != nil {
 				return fmt.Errorf("failed to prepare service config: %w", err)
+			}
+			if exists {
+				serviceCfg, err = hydrateBuiltInServiceConfig(serviceName, serviceCfg, cfg.OpenCenter.Cluster.ClusterFQDN, explicitFields)
+				if err != nil {
+					return fmt.Errorf("failed to hydrate service defaults: %w", err)
+				}
 			}
 
 			// Set Enabled = true
@@ -121,12 +141,12 @@ Examples:
 			if err := processSecrets(secrets, serviceName, &cfg.Secrets); err != nil {
 				return err
 			}
-			// Custom validation logic (validate before saving)
-			if err := validateService(serviceName, serviceCfg, &cfg.Secrets); err != nil {
+			// Custom validation logic (validate before saving). Include the candidate
+			// service in the config so provider-aware backend resolution sees it.
+			serviceMap[serviceName] = serviceCfg
+			if err := validateServiceWithConfig(serviceName, serviceCfg, &cfg.Secrets, &cfg); err != nil {
 				return err
 			}
-
-			serviceMap[serviceName] = serviceCfg
 
 			if !isManaged {
 				if err := validateServiceDependencies(cfg.OpenCenter.Services); err != nil {
@@ -157,10 +177,11 @@ Examples:
 
 				fmt.Fprintf(cmd.OutOrStdout(), "Rendering service '%s'...\n", serviceName)
 
-				if err := renderSingleServiceEncrypted(cmd.Context(), cfg, serviceName, isManaged); err != nil {
+				promotion, err := renderSingleServiceEncryptedResult(cmd.Context(), cfg, serviceName, isManaged, prune, adoptGenerated)
+				if err != nil {
 					return fmt.Errorf("failed to render service: %w", err)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Service '%s' rendered successfully.\n", serviceName)
+				printPromotionSummary(cmd, promotion)
 			}
 
 			return nil
@@ -172,15 +193,19 @@ Examples:
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Specify the cluster name")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-enable an already enabled service to re-render configuration")
 	cmd.Flags().BoolVar(&render, "render", false, "Render the service templates immediately after enabling")
+	cmd.Flags().BoolVar(&prune, "prune", true, "Remove stale generated files during --render")
+	cmd.Flags().BoolVar(&adoptGenerated, "adopt-generated", false, "Claim differing planned files after creating backups during --render")
 	return cmd
 }
 
 // newClusterServiceDisableCmd creates the "cluster service disable" command.
 func newClusterServiceDisableCmd() *cobra.Command {
 	var (
-		isManaged bool
-		cluster   string
-		render    bool
+		isManaged      bool
+		cluster        string
+		render         bool
+		prune          bool
+		adoptGenerated bool
 	)
 	cmd := &cobra.Command{
 		Use:   "disable <service-name>",
@@ -253,10 +278,11 @@ Examples:
 				}
 
 				fmt.Fprintf(cmd.OutOrStdout(), "Rendering cluster apps after disabling '%s'...\n", serviceName)
-				if err := renderClusterAppsEncrypted(cmd.Context(), cfg); err != nil {
+				promotion, err := renderClusterAppsEncryptedResult(cmd.Context(), cfg, prune, adoptGenerated)
+				if err != nil {
 					return fmt.Errorf("failed to render cluster apps: %w", err)
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "Cluster apps rendered successfully.")
+				printPromotionSummary(cmd, promotion)
 			}
 			return nil
 		},
@@ -264,6 +290,8 @@ Examples:
 	cmd.Flags().BoolVar(&isManaged, "managed", false, "Disable the service from the managed services list")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Specify the cluster name")
 	cmd.Flags().BoolVar(&render, "render", false, "Render the cluster application manifests immediately after disabling")
+	cmd.Flags().BoolVar(&prune, "prune", true, "Remove stale generated files during --render")
+	cmd.Flags().BoolVar(&adoptGenerated, "adopt-generated", false, "Claim differing planned files after creating backups during --render")
 	return cmd
 }
 
@@ -374,6 +402,96 @@ func materializeServiceConfig(serviceName string, serviceCfg any) (any, error) {
 		return serviceCfg, nil
 	}
 }
+
+func loadExplicitServiceFields(ctx context.Context, cfg v2.Config, managed bool, serviceName string) (map[string]any, error) {
+	configPath, err := getConfigPath(ctx, cfg.ClusterName(), cfg.OpenCenter.Meta.Organization)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var document map[string]any
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	opencenter, _ := document["opencenter"].(map[string]any)
+	section := "services"
+	if managed {
+		section = "managed_services"
+	}
+	serviceMap, _ := opencenter[section].(map[string]any)
+	fields, _ := serviceMap[serviceName].(map[string]any)
+	if fields == nil {
+		return map[string]any{}, nil
+	}
+	return fields, nil
+}
+
+func hydrateBuiltInServiceConfig(serviceName string, existing any, clusterFQDN string, explicitFields map[string]any) (any, error) {
+	defaults, builtIn := v2.NewDefaultServiceConfig(serviceName, clusterFQDN)
+	if !builtIn {
+		return existing, nil
+	}
+	if existing == nil {
+		return defaults, nil
+	}
+
+	destination := reflect.ValueOf(existing)
+	source := reflect.ValueOf(defaults)
+	if destination.Type() != source.Type() {
+		return nil, fmt.Errorf("existing type %T does not match canonical default type %T", existing, defaults)
+	}
+	if err := mergeMissingServiceDefaults(destination, source, explicitFields); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
+func mergeMissingServiceDefaults(destination, defaults reflect.Value, explicitFields map[string]any) error {
+	for destination.Kind() == reflect.Pointer {
+		if destination.IsNil() || defaults.IsNil() {
+			return fmt.Errorf("service config pointers must not be nil")
+		}
+		destination = destination.Elem()
+		defaults = defaults.Elem()
+	}
+	if destination.Kind() != reflect.Struct || defaults.Kind() != reflect.Struct {
+		return fmt.Errorf("service configs must be structs")
+	}
+
+	typeInfo := destination.Type()
+	for i := 0; i < destination.NumField(); i++ {
+		fieldInfo := typeInfo.Field(i)
+		fieldName := strings.Split(fieldInfo.Tag.Get("yaml"), ",")[0]
+		if fieldInfo.Anonymous && (fieldName == "" || fieldName == "-") {
+			if err := mergeMissingServiceDefaults(destination.Field(i), defaults.Field(i), explicitFields); err != nil {
+				return err
+			}
+			continue
+		}
+		if fieldName == "" || fieldName == "-" {
+			continue
+		}
+
+		explicitValue, present := explicitFields[fieldName]
+		if present {
+			if nested, ok := explicitValue.(map[string]any); ok && destination.Field(i).Kind() == reflect.Struct {
+				if err := mergeMissingServiceDefaults(destination.Field(i), defaults.Field(i), nested); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if destination.Field(i).CanSet() {
+			destination.Field(i).Set(defaults.Field(i))
+		}
+	}
+	return nil
+}
+
 func processSecrets(secrets []string, serviceName string, secretsCfg *v2.SecretsConfig) error {
 	secretMap := make(map[string]string)
 	for _, s := range secrets {
@@ -431,7 +549,7 @@ func processSecrets(secrets []string, serviceName string, secretsCfg *v2.Secrets
 }
 
 // validateService performs custom validation for specific services.
-func validateService(serviceName string, serviceCfg any, secretsCfg *v2.SecretsConfig) error {
+func validateServiceLegacy(serviceName string, serviceCfg any, secretsCfg *v2.SecretsConfig) error {
 	switch serviceName {
 	case "cert-manager":
 		if cfg, ok := serviceCfg.(*services.CertManagerConfig); ok {
@@ -465,6 +583,85 @@ func validateService(serviceName string, serviceCfg any, secretsCfg *v2.SecretsC
 		if secretsCfg.Keycloak.AdminPassword == "" {
 			return fmt.Errorf("missing required secret 'admin_password' for service 'keycloak'.\nExample: --secret=\"admin_password=your-password\"")
 		}
+	case "harbor":
+		accessMissing := strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID), v2.PlaceholderSecret)
+		secretMissing := strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey), v2.PlaceholderSecret)
+		if accessMissing != secretMissing {
+			return fmt.Errorf("both Harbor S3 access key and secret key must be provided.\nExample: --secret=\"s3_access_key_id=ACCESS\" --secret=\"s3_secret_access_key=SECRET\"")
+		}
+	}
+	return nil
+}
+
+func validateService(serviceName string, serviceCfg any, secretsCfg *v2.SecretsConfig) error {
+	return validateServiceWithConfig(serviceName, serviceCfg, secretsCfg, nil)
+}
+
+func validateServiceWithConfig(serviceName string, serviceCfg any, secretsCfg *v2.SecretsConfig, cfg *v2.Config) error {
+	if serviceName == "harbor" {
+		accessMissing := strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID), v2.PlaceholderSecret)
+		secretMissing := strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey), v2.PlaceholderSecret)
+		if accessMissing != secretMissing {
+			return fmt.Errorf("both Harbor S3 access key and secret key must be provided.\nExample: --secret=\"s3_access_key_id=ACCESS\" --secret=\"s3_secret_access_key=SECRET\"")
+		}
+		if harbor, ok := serviceCfg.(*services.HarborConfig); ok {
+			if err := v2.ValidateHarborConfig(harbor); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if serviceName != "loki" && serviceName != "tempo" {
+		return validateServiceLegacy(serviceName, serviceCfg, secretsCfg)
+	}
+
+	backend := ""
+	if cfg != nil {
+		backend = v2.ResolveObjectStorageBackend(cfg, serviceName)
+	}
+	if backend == "" {
+		switch typed := serviceCfg.(type) {
+		case *services.LokiConfig:
+			backend = strings.ToLower(strings.TrimSpace(typed.StorageType))
+			if backend == "" {
+				backend = "swift"
+			}
+		case *services.TempoConfig:
+			backend = strings.ToLower(strings.TrimSpace(typed.StorageType))
+			if backend == "" {
+				backend = "s3"
+			}
+		}
+	}
+
+	switch backend {
+	case "swift":
+		var id, secret string
+		switch typed := serviceCfg.(type) {
+		case *services.LokiConfig:
+			id, secret = typed.SwiftApplicationCredentialID, secretsCfg.Loki.SwiftApplicationCredentialSecret
+		case *services.TempoConfig:
+			id, secret = typed.SwiftApplicationCredentialID, secretsCfg.Tempo.SwiftApplicationCredentialSecret
+		}
+		if id == "" || secret == "" {
+			return fmt.Errorf("missing required Swift credentials for service '%s'", serviceName)
+		}
+	case "s3":
+		var endpoint, access, secret string
+		switch typed := serviceCfg.(type) {
+		case *services.LokiConfig:
+			endpoint, access, secret = typed.S3Endpoint, secretsCfg.Loki.S3AccessKeyID, secretsCfg.Loki.S3SecretAccessKey
+		case *services.TempoConfig:
+			endpoint, access, secret = typed.S3Endpoint, secretsCfg.Tempo.AccessKey, secretsCfg.Tempo.SecretKey
+		}
+		if err := v2.ValidateS3Endpoint(endpoint); err != nil {
+			return fmt.Errorf("service '%s' requires a configured S3 endpoint (s3_endpoint): %w", serviceName, err)
+		}
+		if (access == "") != (secret == "") {
+			return fmt.Errorf("both S3 access key and secret key must be provided for service '%s'", serviceName)
+		}
+	default:
+		return fmt.Errorf("unsupported storage backend %q for service '%s'", backend, serviceName)
 	}
 	return nil
 }
@@ -709,6 +906,8 @@ func getServiceSecrets(serviceName string) []ServiceOption {
 			{Name: "admin_password", Type: "string", Description: "Harbor administrator password", Required: true},
 			{Name: "registry_password", Type: "string", Description: "Harbor registry password", Required: true},
 			{Name: "database_password", Type: "string", Description: "Harbor database password", Required: true},
+			{Name: "s3_access_key_id", Type: "string", Description: "Externally issued S3 access key ID for Harbor image storage", Required: true},
+			{Name: "s3_secret_access_key", Type: "string", Description: "Externally issued S3 secret access key for Harbor image storage", Required: true},
 		}
 	case "keycloak":
 		return []ServiceOption{

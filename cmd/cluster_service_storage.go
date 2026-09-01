@@ -168,6 +168,7 @@ func isMissingConfigError(err error) bool {
 }
 
 func renderStorageReview(cmd *cobra.Command, result storageopenstack.Result) {
+	result = sanitizeStorageResult(result)
 	stderr := cmd.ErrOrStderr()
 	fmt.Fprintln(stderr, "OpenStack storage apply review:")
 	fmt.Fprintf(stderr, "  service: %s\n  backend: %s\n  container: %s\n", result.Service, result.Backend, result.Container)
@@ -203,6 +204,7 @@ func confirmStorageApply(cmd *cobra.Command) (bool, error) {
 }
 
 func writeStorageOutput(cmd *cobra.Command, format OutputFormat, result storageopenstack.Result) error {
+	result = sanitizeStorageResult(result)
 	if format != OutputText {
 		return writeStructuredOutput(cmd, format, result)
 	}
@@ -231,4 +233,19 @@ func sanitizeStorageError(err error) error {
 		return nil
 	}
 	return fmt.Errorf("%s", security.MaskSecrets(err.Error(), "[generated]"))
+}
+
+func sanitizeStorageResult(result storageopenstack.Result) storageopenstack.Result {
+	if result.Service != "harbor" {
+		return result
+	}
+	sanitized := result
+	sanitized.RemoteActions = append([]storageopenstack.RemoteAction(nil), result.RemoteActions...)
+	for i := range sanitized.RemoteActions {
+		sanitized.RemoteActions[i].ID = ""
+	}
+	if result.Recovery != nil {
+		sanitized.Recovery = result.Recovery
+	}
+	return sanitized
 }

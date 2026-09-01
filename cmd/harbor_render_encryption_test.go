@@ -106,7 +106,7 @@ func TestRenderSingleServiceEncryptionFailurePreservesHarborOutput(t *testing.T)
 	}
 }
 
-func TestRenderServicesOnlyDryRunDoesNotInvokeEncryption(t *testing.T) {
+func TestRenderServicesOnlyDryRunInvokesEquivalentEncryption(t *testing.T) {
 	cfg := harborRenderTestConfig(t, t.TempDir())
 	originalEncryptor := encryptRenderedServiceOverrides
 	defer func() { encryptRenderedServiceOverrides = originalEncryptor }()
@@ -120,8 +120,8 @@ func TestRenderServicesOnlyDryRunDoesNotInvokeEncryption(t *testing.T) {
 	if err := renderServicesOnly(cfg, false, true, cmd); err != nil {
 		t.Fatalf("renderServicesOnly(dry-run) error = %v", err)
 	}
-	if called {
-		t.Fatal("dry-run invoked the encryption/rendering path")
+	if !called {
+		t.Fatal("dry-run did not finalize the same encrypted representation as apply")
 	}
 }
 

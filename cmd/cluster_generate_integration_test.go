@@ -117,7 +117,7 @@ func TestClusterGenerateIntegrationKindProvider(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	setupCmd.SetOut(&stdout)
 	setupCmd.SetErr(&stderr)
-	setupCmd.SetArgs([]string{"kind-setup-int"})
+	setupCmd.SetArgs([]string{"kind-setup-int", "--skip-validation"})
 	if err := setupCmd.Execute(); err != nil {
 		t.Fatalf("cluster generate failed: %v\nstderr: %s", err, stderr.String())
 	}
@@ -170,7 +170,7 @@ func TestClusterGenerateIntegrationKindProviderDisableDefaultCNI(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	setupCmd.SetOut(&stdout)
 	setupCmd.SetErr(&stderr)
-	setupCmd.SetArgs([]string{"kind-setup-cni-int"})
+	setupCmd.SetArgs([]string{"kind-setup-cni-int", "--skip-validation"})
 	if err := setupCmd.Execute(); err != nil {
 		t.Fatalf("cluster generate failed: %v\nstderr: %s", err, stderr.String())
 	}
@@ -186,7 +186,75 @@ func TestClusterGenerateIntegrationKindProviderDisableDefaultCNI(t *testing.T) {
 	}
 }
 
-// TestClusterGenerateWithDIContainer tests that the DI container is properly set up
+func TestClusterGenerateBlocksInvalidReadinessBeforeTargetMutation(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	initCmd := newClusterInitCmd()
+	initCmd.SetOut(&bytes.Buffer{})
+	initCmd.SetErr(&bytes.Buffer{})
+	initCmd.SetArgs([]string{"blocked-generation", "--type", "kind"})
+	if err := initCmd.Execute(); err != nil {
+		t.Fatalf("cluster init failed: %v", err)
+	}
+
+	target := filepath.Join(dir, "clusters", "gitops", "opencenter")
+	if err := os.MkdirAll(filepath.Join(target, "custom"), 0o755); err != nil {
+		t.Fatalf("create target sentinel directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "custom", "sentinel.txt"), []byte("unchanged\n"), 0o644); err != nil {
+		t.Fatalf("write target sentinel: %v", err)
+	}
+	before := snapshotCommandTarget(t, target)
+
+	resetCommandStateForTests()
+	generateCmd := newClusterGenerateCmd()
+	generateCmd.SetOut(&bytes.Buffer{})
+	generateCmd.SetErr(&bytes.Buffer{})
+	generateCmd.SetArgs([]string{"blocked-generation"})
+	err := generateCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "offline generation validation") {
+		t.Fatalf("cluster generate error = %v, want blocking offline readiness failure", err)
+	}
+
+	after := snapshotCommandTarget(t, target)
+	if len(after) != len(before) {
+		t.Fatalf("target file count changed after blocked generation: got %d, want %d", len(after), len(before))
+	}
+	for path, want := range before {
+		if got, ok := after[path]; !ok || got != want {
+			t.Fatalf("target mutated at %q: got %q (present=%v), want %q", path, got, ok, want)
+		}
+	}
+}
+
+func snapshotCommandTarget(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		result[filepath.ToSlash(rel)] = string(data)
+		return nil
+	}); err != nil {
+		t.Fatalf("snapshot command target: %v", err)
+	}
+	return result
+}
+
+// TestClusterGenerateWithDIContainer tests that the DI container is properly set up.
 func TestClusterGenerateWithDIContainer(t *testing.T) {
 	dir := t.TempDir()
 	prepareCommandTestEnv(t, dir)

@@ -240,9 +240,12 @@ func validReadinessConfig(t *testing.T, provider string) *Config {
 	cfg.Secrets.Loki.SwiftApplicationCredentialSecret = "loki-swift-secret"
 	cfg.Secrets.Loki.S3AccessKeyID = "loki-s3-access"
 	cfg.Secrets.Loki.S3SecretAccessKey = "loki-s3-secret"
+	cfg.OpenCenter.Services["loki"].(*services.LokiConfig).S3Endpoint = "https://loki-s3.example"
 	cfg.Secrets.Tempo.SwiftApplicationCredentialSecret = "tempo-swift-secret"
 	cfg.Secrets.Tempo.AccessKey = "tempo-s3-access"
 	cfg.Secrets.Tempo.SecretKey = "tempo-s3-secret"
+	cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).S3Endpoint = "https://tempo-s3.example"
+	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).S3Endpoint = "https://harbor-s3.example"
 
 	cfg.OpenCenter.GitOps.Repository.URL = "ssh://git@github.com/example/cluster.git"
 	cfg.OpenCenter.GitOps.Auth.Token = nil
@@ -561,4 +564,39 @@ func TestValidateReadinessAzureRequiresCloudSection(t *testing.T) {
 	report := ValidateReadiness(cfg)
 
 	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.azure")
+}
+
+func TestValidateReadinessKeycloakStrictHostnameSchedulingCapacity(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	keycloak := cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig)
+	keycloak.Instances = 3
+	cfg.OpenCenter.Infrastructure.Compute.WorkerCount = 2
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = nil
+
+	report := ValidateReadiness(cfg)
+	issue := assertIssue(t, report, SeverityError, CategoryServices, "opencenter.services.keycloak.instances")
+	if !strings.Contains(issue.Message, "3") || !strings.Contains(issue.Message, "2") || !strings.Contains(issue.Message, "DoNotSchedule") {
+		t.Fatalf("capacity issue = %#v, want replicas, workers, and strict scheduling semantics", issue)
+	}
+}
+
+func TestValidateReadinessKeycloakCapacityIncludesAdditionalLinuxWorkerPools(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig).Instances = 3
+	cfg.OpenCenter.Infrastructure.Compute.WorkerCount = 2
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []WorkerPoolConfig{{Name: "extra", Count: 1, Flavor: "worker"}}
+
+	report := ValidateReadiness(cfg)
+	assertNoIssue(t, report, "opencenter.services.keycloak.instances")
+}
+
+func TestValidateReadinessDoesNotApplyStrictCapacityToDisabledKeycloak(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	keycloak := cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig)
+	keycloak.Enabled = false
+	keycloak.Instances = 10
+	cfg.OpenCenter.Infrastructure.Compute.WorkerCount = 1
+
+	report := ValidateReadiness(cfg)
+	assertNoIssue(t, report, "opencenter.services.keycloak.instances")
 }

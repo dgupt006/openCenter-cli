@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	configservices "github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -116,6 +117,7 @@ func planAllServicesEnabled(t *testing.T) []clusterAppAction {
 
 	cfg, err := v2.NewV2Default("k8s-routes", "openstack")
 	require.NoError(t, err)
+	cfg.OpenCenter.Services["harbor"].(*configservices.HarborConfig).S3Endpoint = "https://harbor-s3.example"
 
 	for _, serviceCfg := range cfg.OpenCenter.Services {
 		if base := extractBaseConfig(serviceCfg); base != nil {

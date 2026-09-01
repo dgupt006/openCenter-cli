@@ -1,6 +1,13 @@
 package cmd
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	storageopenstack "github.com/opencenter-cloud/opencenter-cli/internal/cluster/storage/openstack"
+	"github.com/spf13/cobra"
+)
 
 func TestClusterServiceStorageHierarchy(t *testing.T) {
 	root := newClusterServiceCmd()
@@ -26,5 +33,30 @@ func TestClusterServiceStorageHierarchy(t *testing.T) {
 				t.Errorf("%s missing --%s", operation.Name(), name)
 			}
 		}
+	}
+}
+
+func TestHarborStorageOutputRedactsCredentialIdentifiers(t *testing.T) {
+	result := storageopenstack.Result{
+		Service:       "harbor",
+		RemoteActions: []storageopenstack.RemoteAction{{Order: 2, Action: "reuse", Resource: "keystone-ec2-credential", ID: "access-1"}},
+		Recovery:      &storageopenstack.RecoveryState{},
+	}
+	cmd := &cobra.Command{}
+	var text bytes.Buffer
+	cmd.SetOut(&text)
+	cmd.SetErr(&text)
+	renderStorageReview(cmd, result)
+	if strings.Contains(text.String(), "access-1") {
+		t.Fatalf("interactive Harbor output exposed access key: %s", text.String())
+	}
+
+	text.Reset()
+	cmd.SetOut(&text)
+	if err := writeStorageOutput(cmd, OutputJSON, result); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text.String(), "access-1") {
+		t.Fatalf("structured Harbor output exposed access key: %s", text.String())
 	}
 }

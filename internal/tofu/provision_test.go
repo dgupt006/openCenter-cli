@@ -69,3 +69,34 @@ func TestInfrastructureArtifactsAreCoLocated(t *testing.T) {
 		t.Fatalf("unexpected nested infrastructure directory: %s", nestedClusterDir)
 	}
 }
+
+func TestProvisionAtMaterializesOnlyExplicitStagedRoot(t *testing.T) {
+	live := t.TempDir()
+	stage := t.TempDir()
+	cfg, err := v2.NewV2Default("staged", "openstack")
+	if err != nil {
+		t.Fatalf("NewV2Default() error = %v", err)
+	}
+	cfg.OpenCenter.GitOps.Repository.LocalDir = live
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "stage-id"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "stage-secret"
+	cfg.OpenTofu.Enabled = true
+	cfg.OpenTofu.Backend.Type = "local"
+	cfg.OpenTofu.Backend.Local = &v2.LocalBackendConfig{Path: "terraform.tfstate"}
+
+	if err := ProvisionAt(*cfg, stage); err != nil {
+		t.Fatalf("ProvisionAt() error = %v", err)
+	}
+	clusterDir := filepath.Join(stage, "infrastructure", "clusters", "staged")
+	for _, name := range []string{"provider.tf", "terraform.tfvars"} {
+		if _, err := os.Stat(filepath.Join(clusterDir, name)); err != nil {
+			t.Fatalf("staged %s missing: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(live, "infrastructure", "clusters", "staged", name)); !os.IsNotExist(err) {
+			t.Fatalf("ProvisionAt wrote live %s: %v", name, err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(clusterDir, "terraform.tfvars")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("staged terraform.tfvars mode = %v, %v", info, err)
+	}
+}

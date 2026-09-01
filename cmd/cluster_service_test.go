@@ -23,6 +23,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
+	"github.com/spf13/cobra"
 )
 
 func setupServiceTestEnv(t *testing.T, clusterName string) (string, func()) {
@@ -963,5 +964,19 @@ func TestClusterServiceStatus(t *testing.T) {
 				tt.validate(t, out.String())
 			}
 		})
+	}
+}
+
+func TestClusterServiceRenderOwnershipFlags(t *testing.T) {
+	for _, cmd := range []*cobra.Command{newClusterServiceEnableCmd(), newClusterServiceDisableCmd()} {
+		for _, name := range []string{"prune", "adopt-generated"} {
+			if cmd.Flags().Lookup(name) == nil {
+				t.Errorf("%s missing %s flag", cmd.Use, name)
+			}
+		}
+		prune, err := cmd.Flags().GetBool("prune")
+		if err != nil || !prune {
+			t.Errorf("%s prune default = %v, %v; want true", cmd.Use, prune, err)
+		}
 	}
 }

@@ -220,7 +220,7 @@ type TaintConfig struct {
 // StorageConfig represents storage configuration.
 // Requirements: 9.2
 type StorageConfig struct {
-	DefaultStorageClass             string              `yaml:"default_storage_class" json:"default_storage_class" validate:"required"`
+	DefaultStorageClass             string              `yaml:"default_storage_class" json:"default_storage_class" validate:"required,dns1123"`
 	WorkerVolumeSize                int                 `yaml:"worker_volume_size" json:"worker_volume_size" validate:"required,min=1"`
 	WorkerVolumeDestinationType     string              `yaml:"worker_volume_destination_type" json:"worker_volume_destination_type" validate:"required,oneof=volume local"`
 	WorkerVolumeSourceType          string              `yaml:"worker_volume_source_type" json:"worker_volume_source_type" validate:"required,oneof=image volume snapshot"`

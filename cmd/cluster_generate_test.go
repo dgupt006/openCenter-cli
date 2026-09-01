@@ -27,6 +27,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation/validators"
+	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/spf13/cobra"
 )
 
@@ -58,11 +59,14 @@ func TestClusterGenerateCommandStructure(t *testing.T) {
 	}
 
 	// Verify flags exist
-	flags := []string{"force", "skip-validation", "render-only"}
+	flags := []string{"force", "skip-validation", "render-only", "prune", "adopt-generated"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected flag %q to be registered", name)
 		}
+	}
+	if got, err := cmd.Flags().GetBool("prune"); err != nil || !got {
+		t.Fatalf("prune default = %v, %v; want true", got, err)
 	}
 	if cmd.Flags().Lookup("dry-run") != nil {
 		t.Error("expected dry-run to be global, not command-local")
@@ -220,7 +224,19 @@ func TestClusterGenerateDryRunSkipsCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create native v2 config: %v", err)
 	}
+
 	cfg := *cfgPtr
+	keyManager := sops.NewKeyManager(filepath.Dir(clusterPaths.SOPSKeyPath))
+	keyPair, err := keyManager.GenerateAgeKey()
+	if err != nil {
+		t.Fatalf("generate test age key: %v", err)
+	}
+	keyName := strings.TrimSuffix(filepath.Base(clusterPaths.SOPSKeyPath), ".txt")
+	if err := keyManager.SaveAgeKey(keyPair, keyName); err != nil {
+		t.Fatalf("save test age key: %v", err)
+	}
+	cfg.Secrets.SopsAgeKeyFile = clusterPaths.SOPSKeyPath
+	cfg.Secrets.SOPSConfig.AgeKeyFile = clusterPaths.SOPSKeyPath
 	cfg.OpenCenter.Meta.Organization = organization
 	cfg.OpenCenter.GitOps.Repository.LocalDir = clusterPaths.GitOpsDir
 

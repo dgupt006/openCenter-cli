@@ -26,6 +26,9 @@ import (
 func templateRenderer(tmpl string) OverrideValuesRenderer {
 	return func(cfg v2.Config) (string, error) {
 		funcMap := sprig.TxtFuncMap()
+		funcMap["objectStorageBackend"] = func(serviceName string) string {
+			return v2.ResolveObjectStorageBackend(&cfg, serviceName)
+		}
 		t, err := template.New("override-values").Funcs(funcMap).Parse(tmpl)
 		if err != nil {
 			return "", err
@@ -281,7 +284,7 @@ extraObjects:
 `
 
 const lokiTemplate = `{{- $loki := index .OpenCenter.Services "loki" -}}
-{{- $storageType := $loki.StorageType | default "s3" -}}
+{{- $storageType := objectStorageBackend "loki" -}}
 {{- $bucketName := $loki.BucketName | default (printf "%s-loki" .OpenCenter.Meta.Name) -}}
 global:
     dnsService: coredns
@@ -305,7 +308,7 @@ loki:
 {{- else }}
         s3:
             s3: null
-            endpoint: {{ $loki.S3Endpoint | default (printf "https://swift.api.%s.rackspacecloud.com" .OpenCenter.Meta.Region) }}
+            endpoint: {{ $loki.S3Endpoint }}
             region: {{ $loki.S3Region | default .OpenCenter.Meta.Region }}
             secretAccessKey: {{ .GetLokiS3SecretKey }}
             accessKeyId: {{ .GetLokiS3AccessKey }}
@@ -367,7 +370,7 @@ backend:
 `
 
 const tempoTemplate = `{{- $tempo := index .OpenCenter.Services "tempo" -}}
-{{- $storageType := $tempo.StorageType | default "s3" -}}
+{{- $storageType := objectStorageBackend "tempo" -}}
 {{- $bucketName := $tempo.BucketName | default (printf "%s-tempo" .OpenCenter.Meta.Name) -}}
 storage:
     trace:
@@ -385,7 +388,7 @@ storage:
 {{- else }}
         s3:
             bucket: {{ $bucketName }}
-            endpoint: {{ $tempo.S3Endpoint | default (printf "swift.api.%s.rackspacecloud.com" .OpenCenter.Meta.Region) }}
+            endpoint: {{ $tempo.S3Endpoint }}
             access_key: {{ .GetTempoS3AccessKey }}
             secret_key: {{ .GetTempoS3SecretKey }}
             region: {{ $tempo.S3Region | default .OpenCenter.Meta.Region }}
@@ -502,6 +505,7 @@ volumes:
 `
 
 const harborTemplate = `{{- $harbor := index .OpenCenter.Services "harbor" -}}
+{{- $storageClass := $harbor.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 externalURL: https://{{ $harbor.Hostname | default (printf "harbor.%s" .OpenCenter.Cluster.ClusterFQDN) }}
 logLevel: info
 expose:
@@ -510,17 +514,24 @@ persistence:
     enabled: true
     resourcePolicy: keep
     persistentVolumeClaim:
+        # Harbor requires registry PVC cache/state even when image blobs use object storage.
         registry:
-            size: 100Gi
+            size: {{ $harbor.RegistryVolumeSize | default 100 }}Gi
+            storageClass: {{ $storageClass }}
         jobservice:
             jobLog:
-                size: 100Gi
+                size: {{ $harbor.JobserviceVolumeSize | default 5 }}Gi
+                storageClass: {{ $storageClass }}
         database:
-            size: 100Gi
+            size: {{ $harbor.DatabaseVolumeSize | default 10 }}Gi
+            storageClass: {{ $storageClass }}
         redis:
-            size: 100Gi
+            size: {{ $harbor.RedisVolumeSize | default 5 }}Gi
+            storageClass: {{ $storageClass }}
         trivy:
-            size: 100Gi
+            size: {{ $harbor.TrivyVolumeSize | default 5 }}Gi
+            storageClass: {{ $storageClass }}
+    # Primary image blobs use object storage; registry PVC is cache/state, not blob storage.
     imageChartStorage:
         type: s3
         s3:
@@ -528,7 +539,7 @@ persistence:
             bucket: {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}
             accesskey: {{ .GetHarborS3AccessKey }}
             secretkey: {{ .GetHarborS3SecretKey }}
-            regionendpoint: swift.api.{{ .OpenCenter.Meta.Region }}.rackspacecloud.com
+            regionendpoint: {{ $harbor.S3Endpoint }}
             v4auth: true
             secure: true
             rootdirectory: images

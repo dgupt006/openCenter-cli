@@ -2,6 +2,7 @@ package services
 
 import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/registry"
+	"gopkg.in/yaml.v3"
 )
 
 // HarborConfig extends BaseConfig with Harbor-specific configuration.
@@ -13,10 +14,16 @@ type HarborConfig struct {
 	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" jsonschema:"description=External URL for Harbor"`
 
 	// Storage
-	StorageType        string `yaml:"storage_type,omitempty" json:"storage_type,omitempty" jsonschema:"description=Storage backend type,enum=filesystem,enum=s3,enum=swift,default=filesystem"`
-	RegistryVolumeSize int    `yaml:"registry_volume_size,omitempty" json:"registry_volume_size,omitempty" jsonschema:"description=Registry persistent volume size in GB,default=100"`
-	S3Bucket           string `yaml:"s3_bucket,omitempty" json:"s3_bucket,omitempty" jsonschema:"description=S3 bucket name for image storage"`
-	S3Region           string `yaml:"s3_region,omitempty" json:"s3_region,omitempty" jsonschema:"description=S3 region"`
+	StorageType          string `yaml:"storage_type,omitempty" json:"storage_type,omitempty" validate:"oneof=s3" jsonschema:"description=Storage backend type,enum=s3,default=s3"`
+	RegistryVolumeSize   int    `yaml:"registry_volume_size,omitempty" json:"registry_volume_size,omitempty" validate:"min=1" jsonschema:"description=Registry PVC size in GB; retained for compatibility and required Harbor cache/state,default=100"`
+	JobserviceVolumeSize int    `yaml:"jobservice_volume_size,omitempty" json:"jobservice_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor jobservice log PVC size in GB,default=5"`
+	DatabaseVolumeSize   int    `yaml:"database_volume_size,omitempty" json:"database_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor internal database PVC size in GB,default=10"`
+	RedisVolumeSize      int    `yaml:"redis_volume_size,omitempty" json:"redis_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Redis PVC size in GB,default=5"`
+	TrivyVolumeSize      int    `yaml:"trivy_volume_size,omitempty" json:"trivy_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Trivy PVC size in GB,default=5"`
+	StorageClass         string `yaml:"storage_class,omitempty" json:"storage_class,omitempty" jsonschema:"description=Storage class for Harbor PVCs; defaults to infrastructure storage.default_storage_class"`
+	S3Bucket             string `yaml:"s3_bucket,omitempty" json:"s3_bucket,omitempty" jsonschema:"description=S3 bucket name for image storage"`
+	S3Region             string `yaml:"s3_region,omitempty" json:"s3_region,omitempty" jsonschema:"description=S3 region"`
+	S3Endpoint           string `yaml:"s3_endpoint,omitempty" json:"s3_endpoint,omitempty" validate:"omitempty,url" jsonschema:"description=S3-compatible endpoint URL for image storage"`
 
 	// Database
 	DatabaseType string `yaml:"database_type,omitempty" json:"database_type,omitempty" jsonschema:"description=Database type,enum=internal,enum=external,default=internal"`
@@ -29,6 +36,42 @@ type HarborConfig struct {
 	EmitCertificate bool `yaml:"emit_certificate,omitempty" json:"emit_certificate,omitempty" jsonschema:"description=Render the Harbor TLS certificate manifest"`
 }
 
+// UnmarshalYAML applies defaults only when Harbor storage fields are omitted.
+// An explicitly supplied zero remains zero so runtime validation can reject it.
+func (c *HarborConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain HarborConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*c = HarborConfig(decoded)
+
+	provided := make(map[string]bool)
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			provided[node.Content[i].Value] = true
+		}
+	}
+	if !provided["storage_type"] {
+		c.StorageType = "s3"
+	}
+	if !provided["registry_volume_size"] {
+		c.RegistryVolumeSize = 100
+	}
+	if !provided["jobservice_volume_size"] {
+		c.JobserviceVolumeSize = 5
+	}
+	if !provided["database_volume_size"] {
+		c.DatabaseVolumeSize = 10
+	}
+	if !provided["redis_volume_size"] {
+		c.RedisVolumeSize = 5
+	}
+	if !provided["trivy_volume_size"] {
+		c.TrivyVolumeSize = 5
+	}
+	return nil
+}
 func init() {
 	registry.RegisterServiceConfig("harbor", HarborConfig{})
 }

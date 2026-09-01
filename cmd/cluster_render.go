@@ -33,15 +33,38 @@ var encryptRenderedServiceOverrides = func(ctx context.Context, overlayPath stri
 }
 
 func renderClusterAppsEncrypted(ctx context.Context, cfg v2.Config) error {
-	return gitops.RenderClusterAppsWithEncryption(ctx, cfg, encryptRenderedServiceOverrides)
+	_, err := renderClusterAppsEncryptedResult(ctx, cfg, true, false)
+	return err
+}
+
+func renderClusterAppsEncryptedResult(ctx context.Context, cfg v2.Config, prune, adoptGenerated bool) (*gitops.PromoteResult, error) {
+	return gitops.RenderClusterAppsWithEncryptionResult(ctx, cfg, encryptRenderedServiceOverrides, gitops.PromoteOptions{
+		Prune:          &prune,
+		AdoptGenerated: adoptGenerated,
+	})
 }
 
 func renderSingleServiceEncrypted(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool) error {
-	return gitops.RenderSingleServiceWithEncryption(ctx, cfg, serviceName, isManaged, encryptRenderedServiceOverrides)
+	_, err := renderSingleServiceEncryptedResult(ctx, cfg, serviceName, isManaged, true, false)
+	return err
+}
+
+func renderSingleServiceEncryptedResult(ctx context.Context, cfg v2.Config, serviceName string, isManaged, prune, adoptGenerated bool) (*gitops.PromoteResult, error) {
+	return renderSingleServiceEncryptedResultWithBeforePromote(ctx, cfg, serviceName, isManaged, prune, adoptGenerated, nil)
+}
+
+func renderSingleServiceEncryptedResultWithBeforePromote(ctx context.Context, cfg v2.Config, serviceName string, isManaged, prune, adoptGenerated bool, beforePromote func() error) (*gitops.PromoteResult, error) {
+	return gitops.RenderSingleServiceWithEncryptionResult(ctx, cfg, serviceName, isManaged, encryptRenderedServiceOverrides, gitops.PromoteOptions{
+		Prune:          &prune,
+		AdoptGenerated: adoptGenerated,
+		BeforePromote:  beforePromote,
+	})
 }
 
 func runClusterGenerateRenderOnly(cmd *cobra.Command, args []string) error {
 	force, _ := cmd.Flags().GetBool("force")
+	prune, _ := cmd.Flags().GetBool("prune")
+	adoptGenerated, _ := cmd.Flags().GetBool("adopt-generated")
 	dryRun := getGlobalOptions(cmd).DryRun
 
 	// Resolve gitops auth method early so we fail fast on invalid values.
@@ -63,7 +86,25 @@ func runClusterGenerateRenderOnly(cmd *cobra.Command, args []string) error {
 	// Apply gitops auth override to BaseRepo.URL
 	applyGitopsAuthOverride(cfg, gitopsAuth)
 
-	return renderAllServices(cfg, force, dryRun, cmd)
+	skipValidation, _ := cmd.Flags().GetBool("skip-validation")
+	manifestValidator, err := renderOnlyManifestValidator(cfg, skipValidation)
+	if err != nil {
+		return err
+	}
+
+	return renderAllServicesWithOptionsAndValidator(cfg, force, dryRun, prune, adoptGenerated, manifestValidator, cmd)
+}
+
+func renderOnlyManifestValidator(cfg *v2.Config, skipValidation bool) (func(string) error, error) {
+	if skipValidation {
+		return nil, nil
+	}
+	if err := v2.ValidateForGeneration(cfg); err != nil {
+		return nil, fmt.Errorf("validating configuration for generation: %w", err)
+	}
+	return func(gitDir string) error {
+		return gitops.NewManifestValidator(gitDir).Validate()
+	}, nil
 }
 
 // checkRenderStatus checks if services have already been rendered
@@ -84,69 +125,92 @@ func checkRenderStatus(cfg *v2.Config, cmd *cobra.Command) error {
 	return renderAllServices(cfg, false, false, cmd)
 }
 
-// renderAllServices renders all cluster services and infrastructure
 func renderAllServices(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Command) error {
+	return renderAllServicesWithOptions(cfg, force, dryRun, true, false, cmd)
+}
+
+func renderAllServicesWithOptions(cfg *v2.Config, force bool, dryRun, prune, adoptGenerated bool, cmd *cobra.Command) error {
+	return renderAllServicesWithOptionsAndValidator(cfg, force, dryRun, prune, adoptGenerated, nil, cmd)
+}
+
+func renderAllServicesWithOptionsAndValidator(cfg *v2.Config, force bool, dryRun, prune, adoptGenerated bool, manifestValidator func(string) error, cmd *cobra.Command) error {
 	clusterName := cfg.ClusterName()
 	gitOpsDir := cfg.GitDir()
 	kustomizationPath := filepath.Join(gitOpsDir, "applications", "overlays", clusterName, "kustomization.yaml")
 
-	// Check if already rendered and force not specified
-	if _, err := os.Stat(kustomizationPath); err == nil && !force {
+	alreadyRendered := false
+	if _, err := os.Stat(kustomizationPath); err == nil {
+		alreadyRendered = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect existing render: %w", err)
+	}
+	if alreadyRendered && !force && manifestValidator == nil {
 		return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
 	}
 
 	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "🧪 DRY RUN: Would render all services and infrastructure for cluster: %s\n", clusterName)
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Copy base GitOps structure\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Render cluster-specific applications\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Render infrastructure templates\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Provision OpenTofu configuration\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "DRY RUN: Would render all services and infrastructure for cluster: %s\n", clusterName)
+		promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
+			Materialize:           stagedTofuMaterializer(*cfg),
+			Encrypt:               encryptRenderedServiceOverrides,
+			ValidateManifest:      manifestValidator,
+			IncludeInfrastructure: true,
+			IncludeFluxBridge:     true,
+			Promote: gitops.PromoteOptions{
+				Prune:          &prune,
+				DryRun:         true,
+				AdoptGenerated: adoptGenerated,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to plan staged generation: %w", err)
+		}
+		printPromotionSummary(cmd, promotion)
+		if alreadyRendered && !force {
+			return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
+		}
 		if force {
-			fmt.Fprintf(cmd.OutOrStdout(), "  - Create timestamped backups before overwriting\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "  force overwrite backups: enabled\n")
 		}
 		return nil
 	}
 
-	// Create backups if force is specified and files exist
-	if force {
-		if err := backupApplicationsDirectory(cfg, cmd); err != nil {
-			return fmt.Errorf("failed to create backups: %w", err)
-		}
-
-		// Also backup infrastructure if it exists
-		infraPath := filepath.Join(gitOpsDir, "infrastructure", "clusters", clusterName)
-		if _, err := os.Stat(infraPath); err == nil {
-			if err := backupInfrastructureDirectory(infraPath, clusterName, cmd); err != nil {
-				return fmt.Errorf("failed to create infrastructure backups: %w", err)
-			}
-		}
-	}
-
 	fmt.Fprintf(cmd.OutOrStdout(), "Rendering all services and infrastructure for cluster: %s\n", clusterName)
-
-	// Copy base GitOps structure
-	if err := gitops.CopyBase(*cfg, true); err != nil {
-		return fmt.Errorf("failed to copy base GitOps structure: %w", err)
+	promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
+		Materialize:           stagedTofuMaterializer(*cfg),
+		Encrypt:               encryptRenderedServiceOverrides,
+		ValidateManifest:      manifestValidator,
+		IncludeInfrastructure: true,
+		IncludeFluxBridge:     true,
+		BeforePromote: func() error {
+			if !force {
+				return nil
+			}
+			if err := backupApplicationsDirectory(cfg, cmd); err != nil {
+				return err
+			}
+			infraPath := filepath.Join(gitOpsDir, "infrastructure", "clusters", clusterName)
+			if _, err := os.Stat(infraPath); err == nil {
+				if err := backupInfrastructureDirectory(infraPath, clusterName, cmd); err != nil {
+					return err
+				}
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		},
+		Promote: gitops.PromoteOptions{
+			Prune:          &prune,
+			DryRun:         alreadyRendered && !force,
+			AdoptGenerated: adoptGenerated,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate staged tree: %w", err)
 	}
-
-	// Render cluster-specific applications
-	if err := renderClusterAppsEncrypted(cmd.Context(), *cfg); err != nil {
-		return fmt.Errorf("failed to render cluster apps: %w", err)
-	}
-
-	// Render infrastructure templates
-	if err := gitops.RenderInfrastructureCluster(*cfg); err != nil {
-		return fmt.Errorf("failed to render infrastructure cluster: %w", err)
-	}
-
-	// Bridge flux-system to the services overlay
-	if err := gitops.RenderClusterFluxBridge(*cfg); err != nil {
-		return fmt.Errorf("failed to render cluster flux bridge: %w", err)
-	}
-
-	// Provision OpenTofu (renders main.tf and provider.tf)
-	if err := tofu.Provision(*cfg); err != nil {
-		return fmt.Errorf("failed to provision opentofu: %w", err)
+	printPromotionSummary(cmd, promotion)
+	if alreadyRendered && !force {
+		return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "✓ All services and infrastructure rendered successfully")
@@ -156,47 +220,86 @@ func renderAllServices(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Comma
 
 // renderServicesOnly renders all cluster services without infrastructure
 func renderServicesOnly(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Command) error {
+	return renderServicesOnlyWithOptions(cfg, force, dryRun, true, false, cmd)
+}
+
+func stagedTofuMaterializer(cfg v2.Config) func(string) error {
+	if strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider)) == "kind" {
+		return nil
+	}
+	return func(root string) error {
+		return tofu.ProvisionAt(cfg, root)
+	}
+}
+
+func renderServicesOnlyWithOptions(cfg *v2.Config, force bool, dryRun, prune, adoptGenerated bool, cmd *cobra.Command) error {
 	clusterName := cfg.ClusterName()
 	gitOpsDir := cfg.GitDir()
 	kustomizationPath := filepath.Join(gitOpsDir, "applications", "overlays", clusterName, "kustomization.yaml")
 
-	// Check if already rendered and force not specified
-	if _, err := os.Stat(kustomizationPath); err == nil && !force {
+	alreadyRendered := false
+	if _, err := os.Stat(kustomizationPath); err == nil {
+		alreadyRendered = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect existing render: %w", err)
+	}
+	if alreadyRendered && !force {
 		return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
 	}
 
 	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "🧪 DRY RUN: Would render all services (no infrastructure) for cluster: %s\n", clusterName)
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Copy base GitOps structure\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Render cluster-specific applications\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "DRY RUN: Would render all services (no infrastructure) for cluster: %s\n", clusterName)
+		if strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL) == "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  - Copy base GitOps structure\n  - Render cluster-specific applications\n")
+			if force {
+				fmt.Fprintf(cmd.OutOrStdout(), "  - Create timestamped backups before overwriting\n")
+			}
+			return nil
+		}
+		promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
+			Encrypt:           encryptRenderedServiceOverrides,
+			IncludeFluxBridge: true,
+			Promote: gitops.PromoteOptions{
+				Prune:          &prune,
+				DryRun:         true,
+				AdoptGenerated: adoptGenerated,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to plan staged services: %w", err)
+		}
+		printPromotionSummary(cmd, promotion)
+		if alreadyRendered && !force {
+			return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
+		}
 		if force {
-			fmt.Fprintf(cmd.OutOrStdout(), "  - Create timestamped backups before overwriting\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "  force overwrite backups: enabled\n")
 		}
 		return nil
 	}
 
-	// Create backups if force is specified and files exist
-	if force {
-		if err := backupApplicationsDirectory(cfg, cmd); err != nil {
-			return fmt.Errorf("failed to create backups: %w", err)
-		}
-	}
-
 	fmt.Fprintf(cmd.OutOrStdout(), "Rendering all services (no infrastructure) for cluster: %s\n", clusterName)
-
-	// Copy base GitOps structure
-	if err := gitops.CopyBase(*cfg, true); err != nil {
-		return fmt.Errorf("failed to copy base GitOps structure: %w", err)
+	promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
+		Encrypt:           encryptRenderedServiceOverrides,
+		IncludeFluxBridge: true,
+		BeforePromote: func() error {
+			if !force {
+				return nil
+			}
+			return backupApplicationsDirectory(cfg, cmd)
+		},
+		Promote: gitops.PromoteOptions{
+			Prune:          &prune,
+			DryRun:         alreadyRendered && !force,
+			AdoptGenerated: adoptGenerated,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate staged services: %w", err)
 	}
-
-	// Render cluster-specific applications
-	if err := renderClusterAppsEncrypted(cmd.Context(), *cfg); err != nil {
-		return fmt.Errorf("failed to render cluster apps: %w", err)
-	}
-
-	// Bridge flux-system to the services overlay
-	if err := gitops.RenderClusterFluxBridge(*cfg); err != nil {
-		return fmt.Errorf("failed to render cluster flux bridge: %w", err)
+	printPromotionSummary(cmd, promotion)
+	if alreadyRendered && !force {
+		return fmt.Errorf("services already rendered for cluster '%s', use --force to overwrite (creates backups)", clusterName)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "✓ All services rendered successfully (infrastructure skipped)")
@@ -206,6 +309,10 @@ func renderServicesOnly(cfg *v2.Config, force bool, dryRun bool, cmd *cobra.Comm
 
 // renderSingleService renders a specific service
 func renderSingleService(cfg *v2.Config, serviceName string, force bool, dryRun bool, cmd *cobra.Command) error {
+	return renderSingleServiceWithOptions(cfg, serviceName, force, dryRun, true, false, cmd)
+}
+
+func renderSingleServiceWithOptions(cfg *v2.Config, serviceName string, force bool, dryRun, prune, adoptGenerated bool, cmd *cobra.Command) error {
 	clusterName := cfg.ClusterName()
 
 	// Check if service exists in configuration
@@ -238,15 +345,6 @@ func renderSingleService(cfg *v2.Config, serviceName string, force bool, dryRun 
 		return nil
 	}
 
-	// Create backup if force is specified and files exist
-	if force {
-		if _, err := os.Stat(serviceDir); err == nil {
-			if err := backupServiceDirectory(serviceDir, serviceName, cmd); err != nil {
-				return fmt.Errorf("failed to create backup: %w", err)
-			}
-		}
-	}
-
 	fmt.Fprintf(cmd.OutOrStdout(), "Rendering service '%s' for cluster: %s\n", serviceName, clusterName)
 
 	// Determine if this is a managed service
@@ -256,10 +354,24 @@ func renderSingleService(cfg *v2.Config, serviceName string, force bool, dryRun 
 		isManaged = true
 	}
 
-	// Render the single service
-	if err := renderSingleServiceEncrypted(cmd.Context(), *cfg, serviceName, isManaged); err != nil {
+	// Render the single service. Force backups are deferred until rendering,
+	// encryption, materialized-secret validation, and ownership preflight pass.
+	beforePromote := func() error {
+		if !force {
+			return nil
+		}
+		if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		return backupServiceDirectory(serviceDir, serviceName, cmd)
+	}
+	promotion, err := renderSingleServiceEncryptedResultWithBeforePromote(cmd.Context(), *cfg, serviceName, isManaged, prune, adoptGenerated, beforePromote)
+	if err != nil {
 		return fmt.Errorf("failed to render service '%s': %w", serviceName, err)
 	}
+	printPromotionSummary(cmd, promotion)
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ Service '%s' rendered successfully\n", serviceName)
 	fmt.Fprintln(cmd.OutOrStdout(), "Render complete")
@@ -390,4 +502,29 @@ func backupInfrastructureDirectory(infraPath, clusterName string, cmd *cobra.Com
 		}
 		return nil
 	})
+}
+
+func printPromotionSummary(cmd *cobra.Command, result *gitops.PromoteResult) {
+	if result == nil {
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Promotion summary: added=%d updated=%d unchanged=%d seeded=%d pruned=%d prune-candidates=%d renamed=%d adopted=%d\n", len(result.Added), len(result.Updated), len(result.Unchanged), len(result.Seeded), len(result.Pruned), len(result.PruneCandidates), len(result.Renamed), len(result.Adopted))
+	for _, item := range result.Pruned {
+		fmt.Fprintf(cmd.OutOrStdout(), "  pruned: %s\n", item)
+	}
+	for _, item := range result.PruneCandidates {
+		fmt.Fprintf(cmd.OutOrStdout(), "  prune candidate (retained): %s\n", item)
+	}
+	for _, item := range result.Renamed {
+		fmt.Fprintf(cmd.OutOrStdout(), "  renamed: %s\n", item)
+	}
+	for _, item := range result.Adopted {
+		fmt.Fprintf(cmd.OutOrStdout(), "  adopted: %s\n", item)
+	}
+	for _, item := range result.BackupPaths {
+		fmt.Fprintf(cmd.OutOrStdout(), "  backup: %s\n", item)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(cmd.OutOrStdout(), "  warning: %s\n", warning)
+	}
 }

@@ -54,6 +54,7 @@ func ValidateReadiness(cfg *Config) ReadinessReport {
 	r.validateProvider(cfg)
 	r.validateNetworkPlugin(cfg)
 	r.validateGitOps(cfg)
+	r.validateServiceSchedulingCapacity(cfg)
 	r.validateServiceSecrets(cfg)
 
 	return r.report
@@ -522,6 +523,50 @@ func gitProviderForHost(host string) string {
 	}
 }
 
+func (r *readinessBuilder) validateServiceSchedulingCapacity(cfg *Config) {
+	if !serviceEnabled(cfg, "keycloak") {
+		return
+	}
+	keycloak, _ := configuredService(cfg, "keycloak").(*services.KeycloakConfig)
+	if keycloak == nil || keycloak.Instances <= 0 {
+		return
+	}
+
+	workers := configuredSchedulableLinuxWorkers(cfg)
+	if keycloak.Instances > workers {
+		r.addError(
+			CategoryServices,
+			"opencenter.services.keycloak.instances",
+			fmt.Sprintf("Keycloak instances (%d) exceed configured schedulable Linux workers (%d); Keycloak uses hostname topology spread with DoNotSchedule.", keycloak.Instances, workers),
+			"Increase Linux worker capacity, including additional worker pools, or reduce Keycloak instances.",
+		)
+	}
+}
+
+func configuredSchedulableLinuxWorkers(cfg *Config) int {
+	if cfg == nil {
+		return 0
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Deployment.Method), "kamaji") && cfg.Deployment.Kamaji != nil && len(cfg.Deployment.Kamaji.WorkerPools) > 0 {
+		capacity := 0
+		for _, pool := range cfg.Deployment.Kamaji.WorkerPools {
+			if !strings.EqualFold(strings.TrimSpace(pool.OS), "windows") && pool.Count > 0 {
+				capacity += pool.Count
+			}
+		}
+		return capacity
+	}
+
+	compute := cfg.OpenCenter.Infrastructure.Compute
+	capacity := compute.WorkerCount
+	for _, pool := range compute.AdditionalServerPoolsWorker {
+		if pool.Count > 0 {
+			capacity += pool.Count
+		}
+	}
+	return capacity
+}
+
 func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	if serviceEnabled(cfg, "keycloak") {
 		if !oidcClientSecretsProvidedInternally(cfg) {
@@ -578,20 +623,17 @@ func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
 	if !serviceEnabled(cfg, "loki") {
 		return
 	}
-	loki, _ := cfg.OpenCenter.Services["loki"].(*services.LokiConfig)
-	storageType := ""
-	if loki != nil {
-		storageType = strings.ToLower(strings.TrimSpace(loki.StorageType))
-	}
-	if storageType == "" && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") {
-		storageType = "swift"
-	}
-	switch storageType {
+	switch ResolveObjectStorageBackend(cfg, "loki") {
 	case "swift":
 		r.requireSecret("secrets.loki.swift_application_credential_secret", cfg.GetLokiSwiftApplicationCredentialSecret(), "Loki Swift storage requires an application credential secret.")
 	case "s3":
-		r.requireSecret("secrets.loki.s3_access_key_id", cfg.Secrets.Loki.S3AccessKeyID, "Loki S3 storage requires an access key ID.")
-		r.requireSecret("secrets.loki.s3_secret_access_key", cfg.Secrets.Loki.S3SecretAccessKey, "Loki S3 storage requires a secret access key.")
+		loki, _ := configuredService(cfg, "loki").(*services.LokiConfig)
+		if loki != nil {
+			r.requireS3Endpoint("opencenter.services.loki.s3_endpoint", loki.S3Endpoint, "Loki S3 storage requires a configured endpoint.")
+		}
+		accessKey, secretKey := cfg.GetLokiS3Credentials()
+		r.requireSecret("secrets.loki.s3_access_key_id", accessKey, "Loki S3 storage requires an access key ID.")
+		r.requireSecret("secrets.loki.s3_secret_access_key", secretKey, "Loki S3 storage requires a secret access key.")
 	}
 }
 
@@ -599,20 +641,17 @@ func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
 	if !serviceEnabled(cfg, "tempo") {
 		return
 	}
-	tempo, _ := cfg.OpenCenter.Services["tempo"].(*services.TempoConfig)
-	storageType := ""
-	if tempo != nil {
-		storageType = strings.ToLower(strings.TrimSpace(tempo.StorageType))
-	}
-	if storageType == "" && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") {
-		storageType = "swift"
-	}
-	switch storageType {
+	switch ResolveObjectStorageBackend(cfg, "tempo") {
 	case "swift":
 		r.requireSecret("secrets.tempo.swift_application_credential_secret", cfg.GetTempoSwiftApplicationCredentialSecret(), "Tempo Swift storage requires an application credential secret.")
 	case "s3":
-		r.requireSecret("secrets.tempo.access_key", cfg.Secrets.Tempo.AccessKey, "Tempo S3 storage requires an access key.")
-		r.requireSecret("secrets.tempo.secret_key", cfg.Secrets.Tempo.SecretKey, "Tempo S3 storage requires a secret key.")
+		tempo, _ := configuredService(cfg, "tempo").(*services.TempoConfig)
+		if tempo != nil {
+			r.requireS3Endpoint("opencenter.services.tempo.s3_endpoint", tempo.S3Endpoint, "Tempo S3 storage requires a configured endpoint.")
+		}
+		accessKey, secretKey := cfg.GetTempoS3Credentials()
+		r.requireSecret("secrets.tempo.access_key", accessKey, "Tempo S3 storage requires an access key.")
+		r.requireSecret("secrets.tempo.secret_key", secretKey, "Tempo S3 storage requires a secret key.")
 	}
 }
 
@@ -627,11 +666,21 @@ func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
 	if !isServiceEnabled(cfg, "harbor") {
 		return
 	}
+	harbor, _ := configuredService(cfg, "harbor").(*services.HarborConfig)
+	if harbor != nil {
+		r.requireS3Endpoint("opencenter.services.harbor.s3_endpoint", harbor.S3Endpoint, "Harbor S3 storage requires a configured endpoint.")
+	}
 	r.requireSecret("secrets.harbor.admin_password", cfg.Secrets.Harbor.AdminPassword, "Harbor admin password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.registry_password", cfg.Secrets.Harbor.RegistryPassword, "Harbor registry password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.database_password", cfg.Secrets.Harbor.DatabasePassword, "Harbor database password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
+}
+
+func (r *readinessBuilder) requireS3Endpoint(path, value, message string) {
+	if err := ValidateS3Endpoint(value); err != nil {
+		r.addError(CategoryServices, path, message, "Set a provider-specific absolute HTTP(S) S3 endpoint.")
+	}
 }
 
 func (r *readinessBuilder) requireSecret(path, value, message string) {

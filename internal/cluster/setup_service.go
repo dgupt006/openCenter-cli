@@ -23,6 +23,8 @@ type SetupOptions struct {
 	DryRun           bool
 	SkipValidation   bool
 	Force            bool
+	Prune            *bool
+	AdoptGenerated   bool
 	GitopsAuthMethod string // "ssh" or "token"; when set, overrides BaseRepo URL scheme
 }
 
@@ -31,6 +33,7 @@ type SetupResult struct {
 	GitOpsPath       string
 	ManifestsCreated int
 	ValidationPassed bool
+	Promotion        *gitops.PromoteResult
 	Warnings         []string
 }
 
@@ -40,10 +43,11 @@ type overlayFileEncryptor interface {
 
 // SetupService handles cluster setup business logic
 type SetupService struct {
-	pathResolver     *paths.PathResolver
-	validationEngine *validation.ValidationEngine
-	configurationMgr *config.ConfigurationManager
-	overlayEncryptor overlayFileEncryptor
+	pathResolver      *paths.PathResolver
+	validationEngine  *validation.ValidationEngine
+	configurationMgr  *config.ConfigurationManager
+	overlayEncryptor  overlayFileEncryptor
+	manifestValidator func(string) error
 }
 
 // NewSetupService creates a new SetupService
@@ -71,6 +75,9 @@ func NewSetupServiceWithConfigMgr(
 		validationEngine: validationEngine,
 		configurationMgr: configurationMgr,
 		overlayEncryptor: sops.NewSOPSManager(),
+		manifestValidator: func(gitDir string) error {
+			return gitops.NewManifestValidator(gitDir).Validate()
+		},
 	}
 }
 
@@ -156,55 +163,54 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 	}
 
 	if !opts.SkipValidation {
-		if err := s.validateSetupConfig(&cfg); err != nil {
-			result.ValidationPassed = false
-			result.Warnings = append(result.Warnings, fmt.Sprintf("validation: %v", err))
-		} else {
-			result.ValidationPassed = true
+		if err := v2.ValidateForGeneration(&cfg); err != nil {
+			return nil, fmt.Errorf("validating configuration for generation: %w", err)
 		}
+		result.ValidationPassed = true
 	}
 
-	// Generate GitOps manifests
-	if opts.DryRun {
-		promotion, err := gitops.PlanClusterAppsPromotion(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("dry-run promotion refused: %w", err)
-		}
-		result.ManifestsCreated = len(promotion.Added) + len(promotion.Updated)
-		result.Warnings = append(result.Warnings, formatDryRunPromotion(promotion)...)
-	} else {
-		manifestCount, err := s.generateGitOpsManifests(ctx, cfg, clusterPaths, false)
-		if err != nil {
-			return nil, fmt.Errorf("generating manifests: %w", err)
-		}
-		result.ManifestsCreated = manifestCount
+	// Generate GitOps manifests from the same staged tree for dry-run and apply.
+	promotion, manifestCount, err := s.generateGitOpsManifestsWithPromotion(ctx, cfg, clusterPaths, opts.DryRun, !opts.SkipValidation, gitops.PromoteOptions{
+		Prune:          opts.Prune,
+		AdoptGenerated: opts.AdoptGenerated,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("generating manifests: %w", err)
 	}
-
-	// Validate generated manifests (non-blocking)
-	if err := s.validateManifests(clusterPaths); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("manifest validation: %v", err))
-	}
+	result.Promotion = promotion
+	result.ManifestsCreated = manifestCount
+	result.Warnings = append(result.Warnings, formatDryRunPromotion(promotion)...)
 
 	return result, nil
 }
 
+func promotionChangeCount(result *gitops.PromoteResult) int {
+	if result == nil {
+		return 0
+	}
+	return len(result.Added) + len(result.Updated) + len(result.Renamed)
+}
+
 func formatDryRunPromotion(result *gitops.PromoteResult) []string {
-	lines := []string{"dry-run promotion plan:"}
-	categories := []struct {
+	if result == nil {
+		return nil
+	}
+	lines := []string{"promotion summary: " + fmt.Sprintf("added=%d updated=%d unchanged=%d seeded=%d pruned=%d prune-candidates=%d renamed=%d adopted=%d", len(result.Added), len(result.Updated), len(result.Unchanged), len(result.Seeded), len(result.Pruned), len(result.PruneCandidates), len(result.Renamed), len(result.Adopted))}
+	for _, category := range []struct {
 		name  string
 		paths []string
 	}{
-		{name: "added", paths: result.Added},
-		{name: "updated", paths: result.Updated},
-		{name: "unchanged", paths: result.Unchanged},
 		{name: "pruned", paths: result.Pruned},
-		{name: "seeded", paths: result.Seeded},
-	}
-	for _, category := range categories {
-		lines = append(lines, fmt.Sprintf("  %s: %d", category.name, len(category.paths)))
+		{name: "prune candidate (retained)", paths: result.PruneCandidates},
+		{name: "renamed", paths: result.Renamed},
+		{name: "adopted", paths: result.Adopted},
+	} {
 		for _, path := range category.paths {
-			lines = append(lines, fmt.Sprintf("    %s: %s", category.name, path))
+			lines = append(lines, fmt.Sprintf("  %s: %s", category.name, path))
 		}
+	}
+	for _, path := range result.BackupPaths {
+		lines = append(lines, fmt.Sprintf("  backup: %s", path))
 	}
 	for _, warning := range result.Warnings {
 		lines = append(lines, fmt.Sprintf("promotion warning: %s", warning))
@@ -212,92 +218,45 @@ func formatDryRunPromotion(result *gitops.PromoteResult) []string {
 	return lines
 }
 
-// generateGitOpsManifests generates GitOps manifests from configuration
+// generateGitOpsManifests generates GitOps manifests from configuration.
+// The legacy count-only shape is retained for focused callers.
 func (s *SetupService) generateGitOpsManifests(ctx context.Context, cfg v2.Config, clusterPaths *paths.ClusterPaths, dryRun bool) (int, error) {
-	if dryRun {
-		promotion, err := gitops.PlanClusterAppsPromotion(cfg)
-		if err != nil {
-			return 0, err
-		}
-		return len(promotion.Added) + len(promotion.Updated), nil
-	}
-
-	// Snapshot existing file modification times before generation so we can
-	// distinguish files written during this run from pre-existing ones.
-	snapshotBefore, err := s.snapshotFileModTimes(clusterPaths.GitOpsDir)
+	promotion, _, err := s.generateGitOpsManifestsWithPromotion(ctx, cfg, clusterPaths, dryRun, false, gitops.PromoteOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("snapshotting existing files: %w", err)
+		return 0, err
 	}
+	return promotionChangeCount(promotion), nil
+}
 
-	// Copy base GitOps structure (always render for generation)
-	if err := gitops.CopyBase(cfg, true); err != nil {
-		return 0, fmt.Errorf("copying base GitOps structure: %w", err)
+func (s *SetupService) generateGitOpsManifestsWithPromotion(ctx context.Context, cfg v2.Config, clusterPaths *paths.ClusterPaths, dryRun, validateManifests bool, promoteOpts gitops.PromoteOptions) (*gitops.PromoteResult, int, error) {
+	generationOptions := gitops.StagedGenerationOptions{
+		Encrypt:               s.overlayEncryptor.EncryptServiceOverrideValues,
+		IncludeInfrastructure: true,
+		IncludeFluxBridge:     true,
+		Promote:               promoteOpts,
 	}
-
-	// Render cluster-specific applications and encrypt the temporary overlay
-	// before its atomic promotion to the final GitOps target.
-	if err := gitops.RenderClusterAppsWithEncryption(ctx, cfg, s.overlayEncryptor.EncryptServiceOverrideValues); err != nil {
-		return 0, fmt.Errorf("rendering cluster apps: %w", err)
-	}
-
-	// Render infrastructure templates
-	if err := gitops.RenderInfrastructureCluster(cfg); err != nil {
-		return 0, fmt.Errorf("rendering infrastructure cluster: %w", err)
-	}
-
-	// Render the Flux bridge into clusters/<cluster>/ so `flux bootstrap`'s
-	// reconciliation path picks up the per-service overlays.
-	if err := gitops.RenderClusterFluxBridge(cfg); err != nil {
-		return 0, fmt.Errorf("rendering cluster flux bridge: %w", err)
-	}
-
 	if strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider)) != "kind" {
-		if err := tofu.Provision(cfg); err != nil {
-			return 0, fmt.Errorf("provisioning opentofu: %w", err)
+		generationOptions.Materialize = func(root string) error {
+			return tofu.ProvisionAt(cfg, root)
 		}
 	}
+	generationOptions.Promote.DryRun = dryRun || promoteOpts.DryRun
+	if validateManifests {
+		generationOptions.ValidateManifest = s.manifestValidator
+	}
 
-	// Count only the files that were actually written during this generation.
-	manifestCount, err := s.countGeneratedFiles(clusterPaths.GitOpsDir, snapshotBefore)
+	promotion, manifestCount, err := gitops.GenerateClusterTree(ctx, cfg, generationOptions)
 	if err != nil {
-		return 0, fmt.Errorf("counting generated files: %w", err)
+		return nil, 0, err
 	}
-
-	return manifestCount, nil
+	return promotion, manifestCount, nil
 }
 
-func (s *SetupService) validateSetupConfig(cfg *v2.Config) error {
-	if cfg == nil {
-		return fmt.Errorf("configuration is nil")
-	}
-	if strings.TrimSpace(cfg.ClusterName()) == "" {
-		return fmt.Errorf("cluster name must be set")
-	}
-	if strings.TrimSpace(cfg.GitDir()) == "" {
-		return fmt.Errorf("opencenter.gitops.git_dir must be set in the configuration")
-	}
-
-	provider := strings.ToLower(strings.TrimSpace(cfg.Provider()))
-	if provider == "" {
-		return fmt.Errorf("opencenter.infrastructure.provider must be set")
-	}
-	if provider == "kind" && cfg.OpenCenter.Infrastructure.Kind == nil {
-		return fmt.Errorf("opencenter.infrastructure.kind must be configured for the kind provider")
-	}
-
-	return nil
-}
-
-// validateManifests validates generated GitOps manifests
+// validateManifests validates generated GitOps manifests.
 func (s *SetupService) validateManifests(clusterPaths *paths.ClusterPaths) error {
-	// Create manifest validator
-	validator := gitops.NewManifestValidator(clusterPaths.GitOpsDir)
-
-	// Run validation
-	if err := validator.Validate(); err != nil {
+	if err := s.manifestValidator(clusterPaths.GitOpsDir); err != nil {
 		return fmt.Errorf("manifest validation failed: %w", err)
 	}
-
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
+	"gopkg.in/yaml.v3"
 )
 
 func TestNewV2DefaultHarborSecretsUseDeterministicPlaceholders(t *testing.T) {
@@ -28,6 +29,69 @@ func TestNewV2DefaultHarborSecretsUseDeterministicPlaceholders(t *testing.T) {
 	}
 	if first.Secrets.Harbor != second.Secrets.Harbor {
 		t.Fatalf("Harbor defaults are not deterministic: %#v != %#v", first.Secrets.Harbor, second.Secrets.Harbor)
+	}
+}
+
+func TestHarborStorageValidationRejectsUnsupportedStorageAndEndpoint(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	harbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+	harbor.StorageType = "filesystem"
+	if err := NewValidator().Validate(cfg); err == nil || !strings.Contains(err.Error(), "storage_type") {
+		t.Fatalf("Validate() error = %v, want unsupported Harbor storage type", err)
+	}
+
+	harbor.StorageType = "s3"
+	harbor.S3Endpoint = "https://swift.example/v1/AUTH_project"
+	if err := ValidateHarborConfig(harbor); err == nil || !strings.Contains(err.Error(), "Swift") {
+		t.Fatalf("ValidateHarborConfig() error = %v, want Swift endpoint rejection", err)
+	}
+}
+
+func TestHarborStorageValidationRejectsNonPositiveExplicitPVCSize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*services.HarborConfig)
+	}{
+		{name: "registry", set: func(cfg *services.HarborConfig) { cfg.RegistryVolumeSize = -1 }},
+		{name: "jobservice", set: func(cfg *services.HarborConfig) { cfg.JobserviceVolumeSize = -1 }},
+		{name: "database", set: func(cfg *services.HarborConfig) { cfg.DatabaseVolumeSize = -1 }},
+		{name: "redis", set: func(cfg *services.HarborConfig) { cfg.RedisVolumeSize = -1 }},
+		{name: "trivy", set: func(cfg *services.HarborConfig) { cfg.TrivyVolumeSize = -1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validReadinessConfig(t, "kind")
+			harbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+			harbor.RegistryVolumeSize = 100
+			harbor.JobserviceVolumeSize = 5
+			harbor.DatabaseVolumeSize = 10
+			harbor.RedisVolumeSize = 5
+			harbor.TrivyVolumeSize = 5
+			tc.set(harbor)
+			if err := ValidateHarborConfig(harbor); err == nil || !strings.Contains(err.Error(), tc.name) {
+				t.Fatalf("ValidateHarborConfig() error = %v, want %s size rejection", err, tc.name)
+			}
+		})
+	}
+}
+
+func TestHarborYAMLDefaultsPreserveExplicitNonPositiveValuesForValidation(t *testing.T) {
+	var omitted services.HarborConfig
+	if err := yaml.Unmarshal([]byte("storage_type: s3\n"), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.RegistryVolumeSize != 100 || omitted.JobserviceVolumeSize != 5 || omitted.DatabaseVolumeSize != 10 || omitted.RedisVolumeSize != 5 || omitted.TrivyVolumeSize != 5 {
+		t.Fatalf("omitted Harbor PVC defaults = %#v", omitted)
+	}
+
+	var explicit services.HarborConfig
+	if err := yaml.Unmarshal([]byte("registry_volume_size: 0\n"), &explicit); err != nil {
+		t.Fatal(err)
+	}
+	if explicit.RegistryVolumeSize != 0 {
+		t.Fatalf("explicit zero was defaulted: %#v", explicit)
+	}
+	if err := ValidateHarborConfig(&explicit); err == nil || !strings.Contains(err.Error(), "registry") {
+		t.Fatalf("ValidateHarborConfig() error = %v, want explicit zero rejection", err)
 	}
 }
 

@@ -29,14 +29,25 @@ type GeneratedManifest struct {
 }
 
 type PromoteOptions struct {
-	Force  bool
-	DryRun bool
-	Scope  []string
+	// Prune defaults to true when nil for backward compatibility. A non-nil
+	// false value reports prune candidates without deleting them.
+	Prune          *bool
+	Force          bool // retained for API compatibility; never enables adoption
+	DryRun         bool
+	Scope          []string
+	AdoptGenerated bool
+	BeforePromote  func() error
+}
+
+func (o PromoteOptions) pruneEnabled() bool {
+	return o.Prune == nil || *o.Prune
 }
 
 type PromoteResult struct {
-	Added, Updated, Unchanged, Pruned, Seeded []string
-	Warnings                                  []string
+	Added, Updated, Unchanged, Pruned, PruneCandidates, Seeded []string
+	Renamed, Adopted                                           []string
+	BackupPaths                                                []string
+	Warnings                                                   []string
 }
 
 type scannedOverlay struct {
@@ -82,26 +93,44 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 	}
 
 	result := &PromoteResult{Warnings: append(plannedWarnings, existing.warnings...)}
+	adoptionCandidates := make(map[string]bool)
 	unknown := make([]string, 0)
-	for path := range existing.files {
+	for path, onDisk := range existing.files {
+		if !scopeAllows(path, opts.Scope) {
+			continue
+		}
 		if ownedSecretPaths[path] {
 			continue
 		}
-		if _, tracked := manifest.Files[path]; !tracked {
-			unknown = append(unknown, path)
+		if expectedHash, tracked := manifest.Files[path]; tracked {
+			if hashBytes(onDisk) != expectedHash {
+				return nil, fmt.Errorf("ownership conflict: refusing to overwrite modified tracked file %s", path)
+			}
+			continue
 		}
+		plannedData, planned := planned[path]
+		if planned {
+			if hashBytes(onDisk) == hashBytes(plannedData) {
+				// An identical planned file is safe to claim without requiring an
+				// explicit adoption flag.
+				continue
+			}
+			if bootstrap || opts.AdoptGenerated {
+				adoptionCandidates[path] = true
+				continue
+			}
+			return nil, fmt.Errorf("ownership conflict: refusing to overwrite untracked planned file %s; rerun with --adopt-generated to back it up and claim it", path)
+		}
+		unknown = append(unknown, path)
 	}
 	sort.Strings(unknown)
-	if len(unknown) > 0 && !bootstrap && !opts.Force {
-		return nil, fmt.Errorf("refusing to regenerate: user-authored files found in generator-owned paths:\n  %s\nmove these under a \"custom/\" directory in the service overlay, or run \"opencenter cluster migrate-layout %s\"", strings.Join(unknown, "\n  "), clusterName)
-	}
 	if len(unknown) > 0 {
-		for _, path := range unknown {
-			if bootstrap {
+		if bootstrap {
+			for _, path := range unknown {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("leaving legacy user-authored file untouched: %s", path))
-			} else {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("overwriting unknown generator-owned file due to Force: %s", path))
 			}
+		} else {
+			return nil, fmt.Errorf("refusing to regenerate: user-authored files found in generator-owned paths:\n  %s\nmove these under a \"custom/\" directory in the service overlay, or run \"opencenter cluster migrate-layout %s\"", strings.Join(unknown, "\n  "), clusterName)
 		}
 	}
 
@@ -135,9 +164,9 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 			result.Unchanged = append(result.Unchanged, path)
 		} else {
 			result.Updated = append(result.Updated, path)
-			if bootstrap {
+			if adoptionCandidates[path] {
+				result.Adopted = append(result.Adopted, path)
 				adoptedBackups = append(adoptedBackups, backupFile{path: path, data: onDisk})
-				result.Warnings = append(result.Warnings, fmt.Sprintf("adopted %s; original backed up before regeneration", path))
 			}
 		}
 	}
@@ -158,31 +187,87 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 		}
 	}
 	sort.Strings(prune)
-	result.Pruned = append(result.Pruned, prune...)
+	renameSources := make(map[string]bool)
+	if opts.pruneEnabled() {
+		result.Renamed = detectSafeRenames(prune, result.Added, planned, existing.files, manifest.Files)
+		if len(result.Renamed) > 0 {
+			renameTo := make(map[string]bool)
+			for _, rename := range result.Renamed {
+				parts := strings.SplitN(rename, " -> ", 2)
+				if len(parts) == 2 {
+					renameSources[parts[0]] = true
+					renameTo[parts[1]] = true
+				}
+			}
+			filteredPrune := prune[:0]
+			for _, path := range prune {
+				if !renameSources[path] {
+					filteredPrune = append(filteredPrune, path)
+				}
+			}
+			prune = filteredPrune
+			filteredAdded := result.Added[:0]
+			for _, path := range result.Added {
+				if !renameTo[path] {
+					filteredAdded = append(filteredAdded, path)
+				}
+			}
+			result.Added = filteredAdded
+		}
+	}
+	if opts.pruneEnabled() {
+		result.Pruned = append(result.Pruned, prune...)
+	} else {
+		result.PruneCandidates = append(result.PruneCandidates, prune...)
+	}
 	sort.Strings(result.Added)
 	sort.Strings(result.Updated)
 	sort.Strings(result.Unchanged)
 	sort.Strings(result.Seeded)
+	sort.Strings(result.Pruned)
+	sort.Strings(result.PruneCandidates)
+	sort.Strings(result.Renamed)
+	sort.Strings(result.Adopted)
+	if !opts.pruneEnabled() && len(prune) > 0 {
+		result.Warnings = append(result.Warnings, "prune disabled; candidates were reported but retained")
+	}
 	sort.Strings(result.Warnings)
 
 	if opts.DryRun {
 		return result, nil
 	}
+	if opts.BeforePromote != nil {
+		if err := opts.BeforePromote(); err != nil {
+			return nil, fmt.Errorf("pre-promotion preparation failed: %w", err)
+		}
+	}
 	if err := os.MkdirAll(targetOverlayDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create target overlay: %w", err)
 	}
 
-	if err := writeAdoptionBackups(targetOverlayDir, adoptedBackups); err != nil {
+	backupPaths, err := writeAdoptionBackups(targetOverlayDir, adoptedBackups)
+	if err != nil {
 		return nil, err
 	}
-	for _, path := range prune {
-		expectedHash := manifest.Files[path]
-		if err := removeVerifiedFileMatching(targetOverlayDir, filepath.Join(targetOverlayDir, filepath.FromSlash(path)), expectedHash); err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("prune %s: %w", path, err)
+	result.BackupPaths = append(result.BackupPaths, backupPaths...)
+	for _, path := range result.Adopted {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("adopted %s; original backed up", path))
+	}
+	if opts.pruneEnabled() {
+		deletePaths := append([]string(nil), prune...)
+		for path := range renameSources {
+			deletePaths = append(deletePaths, path)
 		}
-	}
-	if err := removeEmptyOwnedDirs(targetOverlayDir); err != nil {
-		return nil, err
+		sort.Strings(deletePaths)
+		for _, path := range deletePaths {
+			expectedHash := manifest.Files[path]
+			if err := removeVerifiedFileMatching(targetOverlayDir, filepath.Join(targetOverlayDir, filepath.FromSlash(path)), expectedHash); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("prune %s: %w", path, err)
+			}
+		}
+		if err := removeEmptyOwnedDirs(targetOverlayDir); err != nil {
+			return nil, err
+		}
 	}
 	for path, data := range planned {
 		dst := filepath.Join(targetOverlayDir, filepath.FromSlash(path))
@@ -204,7 +289,16 @@ func promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName string, o
 		manifest.Files[path] = hashBytes(data)
 	}
 	for _, path := range prune {
-		delete(manifest.Files, path)
+		if opts.pruneEnabled() {
+			delete(manifest.Files, path)
+		}
+	}
+	if opts.pruneEnabled() {
+		for _, rename := range result.Renamed {
+			if parts := strings.SplitN(rename, " -> ", 2); len(parts) == 2 {
+				delete(manifest.Files, parts[0])
+			}
+		}
 	}
 	manifest.Version = ownershipManifestVersion
 	manifest.Cluster = clusterName
@@ -285,6 +379,9 @@ func scanGeneratorOwnedOverlay(root string) (scannedOverlay, error) {
 			if rel != "." && entry.IsDir() && !isGeneratorOwnedPath(rel) {
 				return fs.SkipDir
 			}
+			return nil
+		}
+		if isGeneratedBackupPath(rel) {
 			return nil
 		}
 		if isCustomPath(rel) {
@@ -426,22 +523,48 @@ func validateOwnershipRoot(root string) error {
 	return nil
 }
 
-func writeAdoptionBackups(target string, files []backupFile) error {
+func writeAdoptionBackups(target string, files []backupFile) ([]string, error) {
 	if len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(target)))
 	backupRoot := filepath.Join(repoRoot, ".opencenter-backup", time.Now().UTC().Format("20060102T150405.000000000Z07:00"))
+	paths := make([]string, 0, len(files))
 	for _, file := range files {
 		path := filepath.Join(backupRoot, filepath.FromSlash(file.path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return fmt.Errorf("create backup for %s: %w", file.path, err)
+			return nil, fmt.Errorf("create backup for %s: %w", file.path, err)
 		}
 		if err := os.WriteFile(path, file.data, 0o644); err != nil {
-			return fmt.Errorf("write backup for %s: %w", file.path, err)
+			return nil, fmt.Errorf("write backup for %s: %w", file.path, err)
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+func detectSafeRenames(pruned, added []string, planned, existing map[string][]byte, manifest map[string]string) []string {
+	byHash := make(map[string][]string)
+	for _, path := range added {
+		byHash[hashBytes(planned[path])] = append(byHash[hashBytes(planned[path])], path)
+	}
+	staleByHash := make(map[string][]string)
+	for _, path := range pruned {
+		data, ok := existing[path]
+		if !ok || manifest[path] != hashBytes(data) {
+			continue
+		}
+		staleByHash[hashBytes(data)] = append(staleByHash[hashBytes(data)], path)
+	}
+	renamed := make([]string, 0)
+	for hash, stale := range staleByHash {
+		candidates := byHash[hash]
+		if len(stale) == 1 && len(candidates) == 1 {
+			renamed = append(renamed, stale[0]+" -> "+candidates[0])
 		}
 	}
-	return nil
+	sort.Strings(renamed)
+	return renamed
 }
 
 func validatePlannedTargets(root string, planned map[string][]byte) error {

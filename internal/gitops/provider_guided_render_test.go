@@ -887,6 +887,7 @@ func TestRenderHarborOverrideValuesUsesEC2S3Credentials(t *testing.T) {
 		S3AccessKeyID:     "ec2-access-key",
 		S3SecretAccessKey: "ec2-secret-key",
 	}
+	cfg.OpenCenter.Services["harbor"].(*configservices.HarborConfig).S3Endpoint = "https://s3.example"
 
 	values, err := templateRenderer(harborTemplate)(cfg)
 	if err != nil {
@@ -897,7 +898,7 @@ func TestRenderHarborOverrideValuesUsesEC2S3Credentials(t *testing.T) {
 		"region: " + cfg.OpenCenter.Meta.Region,
 		"accesskey: ec2-access-key",
 		"secretkey: ec2-secret-key",
-		"regionendpoint: swift.api." + cfg.OpenCenter.Meta.Region + ".rackspacecloud.com",
+		"regionendpoint: https://s3.example",
 	} {
 		if !strings.Contains(values, expected) {
 			t.Fatalf("expected %q in Harbor values:\n%s", expected, values)
@@ -907,5 +908,45 @@ func TestRenderHarborOverrideValuesUsesEC2S3Credentials(t *testing.T) {
 		if strings.Contains(values, forbidden) {
 			t.Fatalf("did not expect %q in Harbor values:\n%s", forbidden, values)
 		}
+	}
+}
+
+func TestLokiTempoRenderedBackendMatchesSharedProviderAwareResolver(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		explicit string
+		want     string
+	}{
+		{name: "openstack omitted", provider: "openstack", want: "swift"},
+		{name: "generic omitted", provider: "kind", want: "s3"},
+		{name: "openstack explicit s3", provider: "openstack", explicit: "s3", want: "s3"},
+		{name: "generic explicit swift", provider: "kind", explicit: "swift", want: "swift"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mustNewGitOpsTestConfig("backend-agreement", tt.provider)
+			cfg.OpenCenter.Services["loki"].(*configservices.LokiConfig).StorageType = tt.explicit
+			cfg.OpenCenter.Services["tempo"].(*configservices.TempoConfig).StorageType = tt.explicit
+
+			for _, serviceName := range []string{"loki", "tempo"} {
+				resolved := v2.ResolveObjectStorageBackend(&cfg, serviceName)
+				if resolved != tt.want {
+					t.Fatalf("%s resolver = %q, want %q", serviceName, resolved, tt.want)
+				}
+				values := renderOverrideValues(t, cfg, serviceName)
+				needle := "type: " + resolved
+				if serviceName == "tempo" {
+					needle = "backend: " + resolved
+				}
+				if !strings.Contains(values, needle) {
+					t.Fatalf("%s rendered backend disagrees with resolver %q:\n%s", serviceName, resolved, values)
+				}
+				if resolved == "s3" && strings.Contains(values, "rackspacecloud.com") {
+					t.Fatalf("%s S3 rendering used a Rackspace-derived fallback endpoint:\n%s", serviceName, values)
+				}
+			}
+		})
 	}
 }

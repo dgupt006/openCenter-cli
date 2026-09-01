@@ -95,20 +95,12 @@ func TestRenderSingleServiceRewritesOnlyTargetAndAggregates(t *testing.T) {
 		}
 	}
 
-	const (
-		targetSentinel    = "stale-target"
-		aggregateSentinel = "stale-aggregate"
-		unrelatedSentinel = "leave-me-alone"
-	)
-	if err := os.WriteFile(targetFile, []byte(targetSentinel), 0o644); err != nil {
-		t.Fatalf("write target sentinel: %v", err)
+	for _, path := range []string{targetFile, aggregateFlux, aggregateSources} {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("remove generated file %s: %v", path, err)
+		}
 	}
-	if err := os.WriteFile(aggregateFlux, []byte(aggregateSentinel), 0o644); err != nil {
-		t.Fatalf("write aggregate flux sentinel: %v", err)
-	}
-	if err := os.WriteFile(aggregateSources, []byte(aggregateSentinel), 0o644); err != nil {
-		t.Fatalf("write aggregate sources sentinel: %v", err)
-	}
+	const unrelatedSentinel = "leave-me-alone"
 	if err := os.WriteFile(unrelatedFile, []byte(unrelatedSentinel), 0o644); err != nil {
 		t.Fatalf("write unrelated sentinel: %v", err)
 	}
@@ -120,10 +112,10 @@ func TestRenderSingleServiceRewritesOnlyTargetAndAggregates(t *testing.T) {
 	for _, path := range []string{targetFile, aggregateFlux, aggregateSources} {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+			t.Fatalf("read recreated file %s: %v", path, err)
 		}
-		if strings.Contains(string(data), "stale-") {
-			t.Fatalf("expected %s to be re-rendered, found sentinel content", path)
+		if len(data) == 0 {
+			t.Fatalf("expected %s to be recreated with generated content", path)
 		}
 	}
 

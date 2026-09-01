@@ -486,64 +486,98 @@ func shouldSkipFile(relPath string, cfg v2.Config) bool {
 // final target unchanged.
 type OverlayEncryptor func(ctx context.Context, overlayPath string, cfg *v2.Config) error
 
+// PlanClusterAppsPromotionWithOptions renders cluster applications into an
+// isolated workspace and classifies promotion with mutation disabled.
+func PlanClusterAppsPromotionWithOptions(cfg v2.Config, opts PromoteOptions) (*PromoteResult, error) {
+	clusterName := cfg.ClusterName()
+	if clusterName == "" {
+		return nil, fmt.Errorf("cluster name is empty")
+	}
+	if cfg.GitDir() == "" {
+		return nil, fmt.Errorf("opencenter.gitops.repository.local_dir must be set")
+	}
+	manager := NewWorkspaceManager(os.TempDir())
+	workspace, err := manager.CreateWorkspace(context.Background(), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating dry-run workspace: %w", err)
+	}
+	defer manager.CleanupWorkspace(context.Background(), workspace)
+	if err := RenderClusterAppsAtomic(cfg, workspace); err != nil {
+		return nil, fmt.Errorf("rendering cluster apps: %w", err)
+	}
+	workspaceOverlayDir := filepath.Join(workspace.RootDir, "applications", "overlays", clusterName)
+	targetOverlayDir := filepath.Join(cfg.GitDir(), "applications", "overlays", clusterName)
+	opts.DryRun = true
+	return promoteOverlay(workspaceOverlayDir, targetOverlayDir, clusterName, opts)
+}
+
 // RenderClusterApps renders cluster-apps-base and promotes it to the final target.
 // It is the raw rendering primitive; production callers that can materialize
 // credentials must use RenderClusterAppsWithEncryption.
 func RenderClusterApps(cfg v2.Config) error {
-	return renderClusterApps(context.Background(), cfg, nil)
+	_, err := renderClusterAppsWithOptions(context.Background(), cfg, nil, PromoteOptions{})
+	return err
+}
+
+// RenderClusterAppsWithEncryption renders and returns the complete promotion
+// classification. The legacy error-only wrapper remains available above.
+func RenderClusterAppsWithEncryptionResult(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor, opts PromoteOptions) (*PromoteResult, error) {
+	if encrypt == nil {
+		return nil, fmt.Errorf("overlay encryptor is required")
+	}
+	return renderClusterAppsWithOptions(ctx, cfg, encrypt, opts)
 }
 
 // RenderClusterAppsWithEncryption renders cluster-apps-base into a temporary
 // workspace, encrypts credential-bearing files, and only then promotes it to
-// the final target. A nil encryptor is rejected so this production seam cannot
-// silently promote plaintext.
+// the final target.
 func RenderClusterAppsWithEncryption(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor) error {
-	if encrypt == nil {
-		return fmt.Errorf("overlay encryptor is required")
-	}
-	return renderClusterApps(ctx, cfg, encrypt)
+	_, err := RenderClusterAppsWithEncryptionResult(ctx, cfg, encrypt, PromoteOptions{})
+	return err
 }
 
 func renderClusterApps(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor) error {
+	_, err := renderClusterAppsWithOptions(ctx, cfg, encrypt, PromoteOptions{})
+	return err
+}
+
+func renderClusterAppsWithOptions(ctx context.Context, cfg v2.Config, encrypt OverlayEncryptor, opts PromoteOptions) (*PromoteResult, error) {
 	clusterName := cfg.ClusterName()
 	if clusterName == "" {
-		return fmt.Errorf("cluster name is empty")
+		return nil, fmt.Errorf("cluster name is empty")
 	}
 	target := filepath.Join(cfg.GitDir(), "applications", "overlays", clusterName)
 
-	// Create target directory
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		return err
-	}
+	// The promotion layer creates the target only after ownership preflight.
 
 	// Create a temporary workspace for atomic operations
 	tempDir := os.TempDir()
 	manager := NewWorkspaceManager(tempDir)
 	workspace, err := manager.CreateWorkspace(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("creating workspace: %w", err)
+		return nil, fmt.Errorf("creating workspace: %w", err)
 	}
 	defer manager.CleanupWorkspace(ctx, workspace)
 
 	if err := RenderClusterAppsAtomic(cfg, workspace); err != nil {
-		return err
+		return nil, err
 	}
 
 	workspaceAppsDir := filepath.Join(workspace.RootDir, "applications", "overlays", clusterName)
 	if encrypt != nil {
 		if err := encrypt(ctx, workspaceAppsDir, &cfg); err != nil {
-			return fmt.Errorf("encrypting cluster apps overlay: %w", err)
+			return nil, fmt.Errorf("encrypting cluster apps overlay: %w", err)
 		}
 	}
 
-	result, err := promoteOverlay(workspaceAppsDir, target, clusterName, PromoteOptions{})
+	result, err := promoteOverlay(workspaceAppsDir, target, clusterName, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
-	return nil
+	return result, nil
 }
 
 // cleanupDisabledServices removes service directories that are not enabled in the configuration.
@@ -647,45 +681,50 @@ func RenderInfrastructureCluster(cfg v2.Config) error {
 	return copyWorkspaceToTarget(workspace.RootDir, target)
 }
 
-// RenderSingleService renders only the specified service to the cluster apps directory.
-// It is the raw rendering primitive; production callers that can materialize
-// credentials must use RenderSingleServiceWithEncryption.
 func RenderSingleService(cfg v2.Config, serviceName string, isManaged bool) error {
-	return renderSingleService(context.Background(), cfg, serviceName, isManaged, nil)
+	_, err := renderSingleServiceWithOptions(context.Background(), cfg, serviceName, isManaged, nil, PromoteOptions{})
+	return err
+}
+
+// RenderSingleServiceWithEncryptionResult returns the scoped promotion result.
+func RenderSingleServiceWithEncryptionResult(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor, opts PromoteOptions) (*PromoteResult, error) {
+	if encrypt == nil {
+		return nil, fmt.Errorf("overlay encryptor is required")
+	}
+	return renderSingleServiceWithOptions(ctx, cfg, serviceName, isManaged, encrypt, opts)
 }
 
 // RenderSingleServiceWithEncryption renders a service into a temporary
-// workspace, encrypts credential-bearing files, and only then promotes the
-// service's scoped outputs. A nil encryptor is rejected.
+// workspace and promotes its scoped outputs.
 func RenderSingleServiceWithEncryption(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor) error {
-	if encrypt == nil {
-		return fmt.Errorf("overlay encryptor is required")
-	}
-	return renderSingleService(ctx, cfg, serviceName, isManaged, encrypt)
+	_, err := RenderSingleServiceWithEncryptionResult(ctx, cfg, serviceName, isManaged, encrypt, PromoteOptions{})
+	return err
 }
 
 func renderSingleService(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor) error {
+	_, err := renderSingleServiceWithOptions(ctx, cfg, serviceName, isManaged, encrypt, PromoteOptions{})
+	return err
+}
+
+func renderSingleServiceWithOptions(ctx context.Context, cfg v2.Config, serviceName string, isManaged bool, encrypt OverlayEncryptor, opts PromoteOptions) (*PromoteResult, error) {
 	clusterName := cfg.ClusterName()
 	if clusterName == "" {
-		return fmt.Errorf("cluster name is empty")
+		return nil, fmt.Errorf("cluster name is empty")
 	}
 	actions, artifacts, err := planSingleServiceActionsWithArtifacts(cfg, serviceName, isManaged)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	target := filepath.Join(cfg.GitDir(), "applications", "overlays", clusterName)
 
-	// Create target directory
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		return err
-	}
+	// The promotion layer creates the target only after ownership preflight.
 
 	// Create a temporary workspace for atomic operations
 	tempDir := os.TempDir()
 	manager := NewWorkspaceManager(tempDir)
 	workspace, err := manager.CreateWorkspace(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("creating workspace: %w", err)
+		return nil, fmt.Errorf("creating workspace: %w", err)
 	}
 	defer manager.CleanupWorkspace(ctx, workspace)
 
@@ -697,7 +736,7 @@ func renderSingleService(ctx context.Context, cfg v2.Config, serviceName string,
 	for _, action := range actions {
 		rel, err := normalizeOwnershipPath(action.Output)
 		if err != nil {
-			return fmt.Errorf("invalid descriptor output %q: %w", action.Output, err)
+			return nil, fmt.Errorf("invalid descriptor output %q: %w", action.Output, err)
 		}
 		if !strings.HasPrefix(rel, scopes[0]+"/") && rel != scopes[0] {
 			scopes = append(scopes, rel)
@@ -706,31 +745,32 @@ func renderSingleService(ctx context.Context, cfg v2.Config, serviceName string,
 
 	targetRoot, err := resolveClusterAppsTarget(workspace, cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeClusterAppActions(actions, targetRoot, cfg, workspace); err != nil {
-		return err
+		return nil, err
 	}
 
 	validationArtifacts := filterSingleServiceArtifacts(serviceName, actions, artifacts)
 	if err := validateMaterializedSecretMembership(cfg, actions, validationArtifacts, targetRoot); err != nil {
-		return err
+		return nil, err
 	}
 
 	if encrypt != nil {
 		if err := encrypt(ctx, targetRoot, &cfg); err != nil {
-			return fmt.Errorf("encrypting cluster apps overlay: %w", err)
+			return nil, fmt.Errorf("encrypting cluster apps overlay: %w", err)
 		}
 	}
 
-	result, err := promoteOverlay(targetRoot, target, clusterName, PromoteOptions{Scope: scopes})
+	opts.Scope = scopes
+	result, err := promoteOverlay(targetRoot, target, clusterName, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, warning := range result.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
-	return nil
+	return result, nil
 }
 
 func filterSingleServiceArtifacts(serviceName string, actions []clusterAppAction, artifacts []secretartifacts.Artifact) []secretartifacts.Artifact {
@@ -945,4 +985,119 @@ func RenderInfrastructureClusterAtomic(cfg v2.Config, workspace *GitOpsWorkspace
 		// Copy file as-is
 		return copyFileAtomic(path, dst, workspace)
 	})
+}
+
+// StagedGenerationOptions controls complete-tree staging and promotion. The staged
+// tree is the only render pass; validation, ownership planning, and apply all
+// consume the same workspace contents.
+type StagedGenerationOptions struct {
+	Materialize           func(string) error
+	Encrypt               OverlayEncryptor
+	ValidateManifest      func(string) error
+	IncludeInfrastructure bool
+	IncludeFluxBridge     bool
+	Promote               PromoteOptions
+	BeforePromote         func() error
+}
+
+// GenerateClusterTree renders the requested GitOps tree once in a private
+// workspace, validates it, runs ownership preflight without mutation, and
+// promotes the already validated stage. It never writes the live target before
+// the ownership preflight succeeds.
+func GenerateClusterTree(ctx context.Context, cfg v2.Config, opts StagedGenerationOptions) (*PromoteResult, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg.ClusterName() == "" {
+		return nil, 0, fmt.Errorf("cluster name is empty")
+	}
+	if cfg.GitDir() == "" {
+		return nil, 0, fmt.Errorf("opencenter.gitops.repository.local_dir must be set")
+	}
+
+	manager := NewWorkspaceManager(os.TempDir())
+	workspace, err := manager.CreateWorkspace(ctx, cfg)
+	if err != nil {
+		return nil, 0, fmt.Errorf("creating generation workspace: %w", err)
+	}
+	defer func() {
+		_ = manager.CleanupWorkspace(ctx, workspace)
+		if shutdown, ok := manager.(interface{ Shutdown(context.Context) error }); ok {
+			_ = shutdown.Shutdown(ctx)
+		}
+	}()
+
+	if err := CopyBaseAtomic(cfg, true, workspace); err != nil {
+		return nil, 0, fmt.Errorf("rendering base GitOps structure: %w", err)
+	}
+	if err := RenderClusterAppsAtomic(cfg, workspace); err != nil {
+		return nil, 0, fmt.Errorf("rendering cluster apps: %w", err)
+	}
+
+	clusterName := cfg.ClusterName()
+	stagedOverlay := filepath.Join(workspace.RootDir, "applications", "overlays", clusterName)
+	if opts.IncludeInfrastructure {
+		if err := RenderInfrastructureClusterAtomic(cfg, workspace); err != nil {
+			return nil, 0, fmt.Errorf("rendering infrastructure cluster: %w", err)
+		}
+	}
+	if opts.IncludeFluxBridge {
+		if err := RenderClusterFluxBridgeAtomic(cfg, workspace); err != nil {
+			return nil, 0, fmt.Errorf("rendering cluster flux bridge: %w", err)
+		}
+	}
+	if opts.Materialize != nil {
+		if err := opts.Materialize(workspace.RootDir); err != nil {
+			return nil, 0, fmt.Errorf("materializing staged generated files: %w", err)
+		}
+	}
+	if opts.Encrypt != nil {
+		if err := opts.Encrypt(ctx, stagedOverlay, &cfg); err != nil {
+			return nil, 0, fmt.Errorf("encrypting staged cluster apps: %w", err)
+		}
+	}
+	if opts.ValidateManifest != nil {
+		if err := opts.ValidateManifest(workspace.RootDir); err != nil {
+			return nil, 0, fmt.Errorf("manifest validation failed: %w", err)
+		}
+	}
+
+	planOptions := opts.Promote
+	planOptions.DryRun = true
+	planned, err := promoteGeneratedTree(workspace.RootDir, cfg.GitDir(), clusterName, planOptions)
+	if err != nil {
+		return nil, 0, fmt.Errorf("complete-tree ownership preflight refused promotion: %w", err)
+	}
+	manifestCount, err := countWorkspaceFiles(workspace.RootDir)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting staged files: %w", err)
+	}
+	if opts.Promote.DryRun {
+		return planned, manifestCount, nil
+	}
+	if opts.BeforePromote != nil {
+		if err := opts.BeforePromote(); err != nil {
+			return nil, 0, fmt.Errorf("pre-promotion preparation failed: %w", err)
+		}
+	}
+
+	promoted, err := promoteGeneratedTree(workspace.RootDir, cfg.GitDir(), clusterName, opts.Promote)
+	if err != nil {
+		return nil, 0, fmt.Errorf("promoting staged generated tree: %w", err)
+	}
+	return promoted, manifestCount, nil
+}
+
+func countWorkspaceFiles(root string) (int, error) {
+	count := 0
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !strings.HasPrefix(filepath.ToSlash(path), filepath.ToSlash(filepath.Join(root, ".tmp"))+"/") {
+			count++
+		}
+		return nil
+	})
+	return count, err
 }

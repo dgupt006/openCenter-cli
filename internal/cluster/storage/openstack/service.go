@@ -55,10 +55,17 @@ type RemoteAction struct {
 type RecoveryState struct {
 	Path             string `json:"path" yaml:"path"`
 	CredentialType   string `json:"credential_type" yaml:"credential_type"`
-	CredentialID     string `json:"credential_id" yaml:"credential_id"`
+	S3Endpoint       string `json:"s3_endpoint,omitempty" yaml:"s3_endpoint,omitempty"`
 	Service          string `json:"service" yaml:"service"`
 	Backend          string `json:"backend" yaml:"backend"`
 	PersistenceState string `json:"persistence_state" yaml:"persistence_state"`
+}
+
+// recoveryJournal is private durable state. CredentialID is intentionally not
+// part of RecoveryState or Result so public output cannot expose revocation data.
+type recoveryJournal struct {
+	RecoveryState
+	CredentialID string `json:"credential_id,omitempty" yaml:"credential_id,omitempty"`
 }
 
 type Result struct {
@@ -68,6 +75,7 @@ type Result struct {
 	Service       string         `json:"service" yaml:"service"`
 	Backend       string         `json:"backend" yaml:"backend"`
 	Container     string         `json:"container" yaml:"container"`
+	S3Endpoint    string         `json:"s3_endpoint,omitempty" yaml:"s3_endpoint,omitempty"`
 	Changes       []ConfigChange `json:"changes" yaml:"changes"`
 	RemoteActions []RemoteAction `json:"remote_actions" yaml:"remote_actions"`
 	SecretPaths   []string       `json:"secret_paths" yaml:"secret_paths"`
@@ -117,6 +125,8 @@ func restoreCredential(original, prospective *v2.Config, opts Options) {
 	case *services.VeleroConfig:
 		newService.(*services.VeleroConfig).S3CredentialID = old.S3CredentialID
 		prospective.Secrets.Velero = original.Secrets.Velero
+	case *services.HarborConfig:
+		prospective.Secrets.Harbor = original.Secrets.Harbor
 	}
 }
 
@@ -131,7 +141,7 @@ func ValidateOptions(opts Options) error {
 	}
 	allowed := map[string]map[string]bool{
 		"loki": {"swift": true, "s3": true}, "tempo": {"swift": true, "s3": true},
-		"etcd-backup": {"s3": true}, "velero": {"s3": true},
+		"harbor": {"s3": true}, "etcd-backup": {"s3": true}, "velero": {"s3": true},
 	}
 	if !allowed[opts.Service][opts.Backend] {
 		return fmt.Errorf("unsupported storage mapping %s=%s", opts.Service, opts.Backend)
@@ -210,8 +220,13 @@ func Plan(ctx context.Context, input PlanInput) (PlanOutput, error) {
 	if complete && !input.Options.RotateCredentials {
 		restoreCredential(input.Config, prospective, input.Options)
 	}
+	if harbor, ok := prospectiveService.(*services.HarborConfig); ok {
+		if err := v2.ValidateHarborConfig(harbor); err != nil {
+			return PlanOutput{}, fmt.Errorf("validate prospective Harbor configuration: %w", err)
+		}
+	}
 	oldCred = existingCredentialIDForConfig(input.Config, input.Options)
-	result := Result{SchemaVersion: ResultSchemaVersion, Operation: "cluster.service.storage.plan", Status: StatusPlanned, Service: input.Options.Service, Backend: input.Options.Backend, Container: container, Changes: changes, SecretPaths: secretPaths}
+	result := Result{SchemaVersion: ResultSchemaVersion, Operation: "cluster.service.storage.plan", Status: StatusPlanned, Service: input.Options.Service, Backend: input.Options.Backend, Container: container, S3Endpoint: storageEndpoint, Changes: changes, SecretPaths: secretPaths}
 	result.RemoteActions = []RemoteAction{{Order: 1, Action: "ensure", Resource: "object-store-container", Name: container, Scope: "project"}}
 	if partial && !input.Options.RotateCredentials {
 		result.Status = StatusBlocked
@@ -219,11 +234,11 @@ func Plan(ctx context.Context, input PlanInput) (PlanOutput, error) {
 		return PlanOutput{Result: result, prospective: prospective, Preflight: preflight}, nil
 	}
 	if complete && !input.Options.RotateCredentials {
-		result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 2, Action: "reuse", Resource: credentialResource(input.Options.Backend), ID: oldCred, Scope: credentialScope(input.Options.Backend)})
+		result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 2, Action: "reuse", Resource: credentialResource(input.Options.Backend), ID: publicCredentialID(input.Options.Service, oldCred), Scope: credentialScope(input.Options.Backend)})
 	} else {
 		result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 2, Action: "create", Resource: credentialResource(input.Options.Backend), Scope: credentialScope(input.Options.Backend)})
 		if oldCred != "" {
-			result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 4, Action: "revoke", Resource: credentialResource(input.Options.Backend), ID: oldCred, Scope: credentialScope(input.Options.Backend)})
+			result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 4, Action: "revoke", Resource: credentialResource(input.Options.Backend), ID: publicCredentialID(input.Options.Service, oldCred), Scope: credentialScope(input.Options.Backend)})
 		}
 	}
 	result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: 3, Action: "persist", Resource: "typed-configuration", Scope: "local"})
@@ -275,13 +290,14 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	oldID := existingCredentialIDForConfig(cfg, input.Options)
 	var createdType, createdID string
 	var createdSecret, createdAccess string
+	var journal recoveryJournal
 	needsCredential := !complete || rotate
 	if needsCredential {
-		pending := RecoveryState{Path: input.RecoveryPath, CredentialType: credentialType(input.Options.Backend), Service: result.Service, Backend: result.Backend, PersistenceState: "creation-pending"}
-		if err := input.FileSystem.WriteRecovery(input.RecoveryPath, pending); err != nil {
+		journal = recoveryJournal{RecoveryState: RecoveryState{Path: input.RecoveryPath, CredentialType: credentialType(input.Options.Backend), S3Endpoint: result.S3Endpoint, Service: result.Service, Backend: result.Backend, PersistenceState: "creation-pending"}}
+		if err := input.FileSystem.WriteRecovery(input.RecoveryPath, journal); err != nil {
 			return Result{}, fmt.Errorf("reserve recovery record: %w", redactError(err, cfg))
 		}
-		result.Recovery = &pending
+		result.Recovery = &journal.RecoveryState
 		var createErr error
 		if input.Options.Backend == "swift" {
 			var created cloudopenstack.AppCredential
@@ -290,7 +306,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 		} else {
 			var created cloudopenstack.EC2Credentials
 			created, createErr = input.Adapter.CreateEC2Credentials(ctx, cloudopenstack.EC2CredentialRequest{UserID: planned.Preflight.CredentialOwnerID, ProjectID: planned.Preflight.ProjectID, ProjectName: cfg.OpenCenter.Meta.Name, UserName: result.Service + "-s3-user"})
-			createdType, createdID, createdAccess, createdSecret = "ec2", created.ID, created.AccessKeyID, created.Secret
+			createdType, createdID, createdAccess, createdSecret = "ec2", created.AccessKeyID, created.AccessKeyID, created.Secret
 		}
 		if createErr != nil {
 			if removeErr := input.FileSystem.RemoveRecovery(input.RecoveryPath); removeErr != nil {
@@ -299,10 +315,11 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 			result.Recovery = nil
 			return Result{}, fmt.Errorf("create storage credential: %w", redactError(createErr, cfg))
 		}
+		journal.CredentialType = createdType
+		journal.CredentialID = createdID
 		result.Recovery.CredentialType = createdType
-		result.Recovery.CredentialID = createdID
 		result.Recovery.PersistenceState = "created-not-persisted"
-		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, *result.Recovery); err != nil {
+		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, journal); err != nil {
 			return partialResult(result, fmt.Errorf("update recovery record after credential creation: %w", redactError(err, cfg, createdAccess, createdSecret)))
 		}
 		applyCredential(planned.prospective, input.Options, createdID, createdAccess, createdSecret)
@@ -332,7 +349,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	result.Status = StatusApplied
 	if result.Recovery != nil {
 		result.Recovery.PersistenceState = "persisted-revoke-pending"
-		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, *result.Recovery); err != nil {
+		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, journal); err != nil {
 			return partialResult(result, fmt.Errorf("update recovery record after persistence: %w", redactError(err, cfg, createdAccess, createdSecret)))
 		}
 	}
@@ -347,7 +364,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 			result.Status = StatusPartial
 			if result.Recovery != nil {
 				result.Recovery.PersistenceState = "persisted-revoke-failed"
-				if recoveryErr := input.FileSystem.UpdateRecovery(input.RecoveryPath, *result.Recovery); recoveryErr != nil {
+				if recoveryErr := input.FileSystem.UpdateRecovery(input.RecoveryPath, journal); recoveryErr != nil {
 					result.Warnings = append(result.Warnings, redactError(fmt.Errorf("retain recovery record after revoke failure: %w", recoveryErr), cfg, createdAccess, createdSecret).Error())
 				}
 			}
@@ -357,7 +374,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	}
 	if result.Recovery != nil {
 		result.Recovery.PersistenceState = "revoked"
-		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, *result.Recovery); err != nil {
+		if err := input.FileSystem.UpdateRecovery(input.RecoveryPath, journal); err != nil {
 			return partialResult(result, fmt.Errorf("update recovery record after revoke: %w", redactError(err, cfg, createdAccess, createdSecret)))
 		}
 		if err := input.FileSystem.RemoveRecovery(input.RecoveryPath); err != nil {
@@ -383,8 +400,8 @@ type FileSystem interface {
 	CheckRecoveryPath(string) error
 	Backup(string, []byte) error
 	WriteAtomic(string, []byte) error
-	WriteRecovery(string, RecoveryState) error
-	UpdateRecovery(string, RecoveryState) error
+	WriteRecovery(string, recoveryJournal) error
+	UpdateRecovery(string, recoveryJournal) error
 	RemoveRecovery(string) error
 }
 
@@ -469,10 +486,10 @@ func (OSFileSystem) Backup(path string, data []byte) error {
 	}
 	return err
 }
-func (OSFileSystem) WriteRecovery(path string, state RecoveryState) error {
+func (OSFileSystem) WriteRecovery(path string, state recoveryJournal) error {
 	return writeRecoveryExclusive(path, state)
 }
-func (OSFileSystem) UpdateRecovery(path string, state RecoveryState) error {
+func (OSFileSystem) UpdateRecovery(path string, state recoveryJournal) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -509,7 +526,7 @@ func (OSFileSystem) RemoveRecovery(path string) error {
 	}
 	return syncDirectory(filepath.Dir(path))
 }
-func writeRecoveryExclusive(path string, state RecoveryState) error {
+func writeRecoveryExclusive(path string, state recoveryJournal) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -558,7 +575,7 @@ func serviceConfig(cfg *v2.Config, name string) (any, error) {
 		return nil, fmt.Errorf("service %q is not configured", name)
 	}
 	switch typed := value.(type) {
-	case *services.LokiConfig, *services.TempoConfig, *services.EtcdBackupConfig, *services.VeleroConfig:
+	case *services.LokiConfig, *services.TempoConfig, *services.HarborConfig, *services.EtcdBackupConfig, *services.VeleroConfig:
 		return typed, nil
 	default:
 		return nil, fmt.Errorf("service %q has no canonical typed configuration", name)
@@ -697,6 +714,18 @@ func patchService(service any, secrets *v2.SecretsConfig, opts Options, containe
 		typed.S3CredentialID = "[generated]"
 		setCredentialSecret("secrets.velero.access_key_id", secrets.Velero.AccessKeyID, "[generated]")
 		setCredentialSecret("secrets.velero.secret_access_key", secrets.Velero.SecretAccessKey, "[generated]")
+	case *services.HarborConfig:
+		oldID = secrets.Harbor.S3AccessKeyID
+		set("opencenter.services.harbor.storage_type", typed.StorageType, backend)
+		typed.StorageType = backend
+		set("opencenter.services.harbor.s3_bucket", typed.S3Bucket, container)
+		typed.S3Bucket = container
+		set("opencenter.services.harbor.s3_region", typed.S3Region, preflight.Region)
+		typed.S3Region = preflight.Region
+		set("opencenter.services.harbor.s3_endpoint", typed.S3Endpoint, preflight.S3Endpoint)
+		typed.S3Endpoint = preflight.S3Endpoint
+		setCredentialSecret("secrets.harbor.s3_access_key_id", secrets.Harbor.S3AccessKeyID, "[generated]")
+		setCredentialSecret("secrets.harbor.s3_secret_access_key", secrets.Harbor.S3SecretAccessKey, "[generated]")
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
 	sort.Strings(secretPaths)
@@ -724,6 +753,14 @@ func credentialState(service, backend string, cfg any, secrets v2.SecretsConfig)
 		access, secret = secrets.EtcdBackup.AccessKeyID, secrets.EtcdBackup.SecretAccessKey
 	case "velero":
 		access, secret = secrets.Velero.AccessKeyID, secrets.Velero.SecretAccessKey
+	case "harbor":
+		access, secret = secrets.Harbor.S3AccessKeyID, secrets.Harbor.S3SecretAccessKey
+		id = access
+	}
+	if service == "harbor" && backend == "s3" {
+		accessPresent := usableCredentialValue(access)
+		secretPresent := usableCredentialValue(secret)
+		return accessPresent && secretPresent, (accessPresent || secretPresent) && !(accessPresent && secretPresent)
 	}
 	if backend == "swift" {
 		complete = id != "" && secret != ""
@@ -741,6 +778,9 @@ func hasCompleteCredential(cfg *v2.Config, opts Options) (bool, bool) {
 	return complete, opts.RotateCredentials
 }
 func existingCredentialID(cfg *v2.Config, opts Options) string {
+	if opts.Service == "harbor" && opts.Backend == "s3" {
+		return cfg.Secrets.Harbor.S3AccessKeyID
+	}
 	svc, _ := serviceConfig(cfg, opts.Service)
 	return existingCredentialIDFromConfig(svc, opts.Backend)
 }
@@ -765,6 +805,9 @@ func existingCredentialIDFromConfig(cfg any, backend string) string {
 }
 
 func existingCredentialIDForConfig(cfg *v2.Config, opts Options) string {
+	if opts.Service == "harbor" && opts.Backend == "s3" {
+		return cfg.Secrets.Harbor.S3AccessKeyID
+	}
 	svc, _ := serviceConfig(cfg, opts.Service)
 	return existingCredentialIDFromConfig(svc, opts.Backend)
 }
@@ -798,6 +841,9 @@ func applyCredential(cfg *v2.Config, opts Options, id, access, secret string) {
 		s.S3CredentialID = id
 		cfg.Secrets.Velero.AccessKeyID = access
 		cfg.Secrets.Velero.SecretAccessKey = secret
+	case *services.HarborConfig:
+		cfg.Secrets.Harbor.S3AccessKeyID = access
+		cfg.Secrets.Harbor.S3SecretAccessKey = secret
 	}
 }
 
@@ -892,6 +938,11 @@ func credentialScope(backend string) string {
 	}
 	return "project"
 }
+func usableCredentialValue(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && !strings.EqualFold(trimmed, v2.PlaceholderSecret)
+}
+
 func redacted(path, value string) string {
 	if strings.Contains(path, "secret") || strings.Contains(path, "access_key") || strings.Contains(path, "password") || value == "[generated]" {
 		if value == "" {
@@ -929,9 +980,17 @@ func redactError(err error, cfg *v2.Config, extra ...string) error {
 			cfg.Secrets.Tempo.SwiftApplicationCredentialSecret, cfg.Secrets.Tempo.AccessKey, cfg.Secrets.Tempo.SecretKey,
 			cfg.Secrets.EtcdBackup.AccessKeyID, cfg.Secrets.EtcdBackup.SecretAccessKey,
 			cfg.Secrets.Velero.AccessKeyID, cfg.Secrets.Velero.SecretAccessKey,
+			cfg.Secrets.Harbor.S3AccessKeyID, cfg.Secrets.Harbor.S3SecretAccessKey,
 			cfg.Secrets.Global.OpenStackPassword,
 		)
 	}
 	message := security.MaskSecrets(err.Error(), values...)
 	return fmt.Errorf("%s", message)
+}
+
+func publicCredentialID(service, id string) string {
+	if service == "harbor" {
+		return ""
+	}
+	return id
 }

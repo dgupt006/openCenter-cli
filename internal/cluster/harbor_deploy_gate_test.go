@@ -29,7 +29,11 @@ func harborBootstrapConfig(t *testing.T, clusterName, organization, target strin
 	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = false
 	cfg.OpenCenter.ManagedServices = make(v2.ServiceMap)
 
-	harbor := &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: true}}
+	baseHarbor := cfg.OpenCenter.Services["harbor"].(*services.HarborConfig)
+	harborValue := *baseHarbor
+	harbor := &harborValue
+	harbor.Enabled = true
+	harbor.S3Endpoint = "https://s3.example"
 	switch target {
 	case "regular":
 		cfg.OpenCenter.Services["harbor"] = harbor
@@ -41,9 +45,11 @@ func harborBootstrapConfig(t *testing.T, clusterName, organization, target strin
 	}
 	if configured {
 		cfg.Secrets.Harbor = v2.HarborSecrets{
-			AdminPassword:    "admin-configured",
-			RegistryPassword: "registry-configured",
-			DatabasePassword: "database-configured",
+			AdminPassword:     "admin-configured",
+			RegistryPassword:  "registry-configured",
+			DatabasePassword:  "database-configured",
+			S3AccessKeyID:     "s3-access-configured",
+			S3SecretAccessKey: "s3-secret-configured",
 		}
 	}
 	return cfg
@@ -154,5 +160,33 @@ func TestBootstrapRejectsManagedHarborBeforeLifecycleRunner(t *testing.T) {
 	}
 	if runner.calls != 0 {
 		t.Fatalf("lifecycle runner calls = %d, want 0", runner.calls)
+	}
+}
+
+func TestGenerateHarborSecretsPreservesAuthoritativeS3Credentials(t *testing.T) {
+	cfg, err := v2.NewV2Default("harbor-init-s3", "kind")
+	if err != nil {
+		t.Fatalf("NewV2Default() error = %v", err)
+	}
+	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = true
+	cfg.Secrets.Harbor.S3AccessKeyID = "s3-access-authoritative"
+	cfg.Secrets.Harbor.S3SecretAccessKey = "s3-secret-authoritative"
+	configMap := make(map[string]any)
+
+	service := &InitService{}
+	if err := service.generateHarborSecrets(cfg, configMap); err != nil {
+		t.Fatalf("generateHarborSecrets() error = %v", err)
+	}
+	if cfg.Secrets.Harbor.S3AccessKeyID != "s3-access-authoritative" || cfg.Secrets.Harbor.S3SecretAccessKey != "s3-secret-authoritative" {
+		t.Fatalf("authoritative Harbor S3 credentials changed: %#v", cfg.Secrets.Harbor)
+	}
+	for name, value := range map[string]string{
+		"admin_password":    cfg.Secrets.Harbor.AdminPassword,
+		"registry_password": cfg.Secrets.Harbor.RegistryPassword,
+		"database_password": cfg.Secrets.Harbor.DatabasePassword,
+	} {
+		if value == "" || value == v2.PlaceholderSecret {
+			t.Fatalf("init did not generate local Harbor %s: %#v", name, cfg.Secrets.Harbor)
+		}
 	}
 }

@@ -307,7 +307,8 @@ func applyValidation(schema map[string]any, tag string) {
 		case token == "semver":
 			schema["pattern"] = `^v?[0-9]+(\.[0-9]+){1,2}([-+][0-9A-Za-z.-]+)?$`
 		case token == "dns1123":
-			schema["pattern"] = `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+			schema["pattern"] = `^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$`
+			schema["maxLength"] = 253
 		default:
 			retained = append(retained, token)
 		}

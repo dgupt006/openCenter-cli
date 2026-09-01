@@ -238,3 +238,20 @@ func stringSliceAt(t *testing.T, node map[string]any, key string) []string {
 	}
 	return values
 }
+
+func TestGenerateDefaultStorageClassDNS1123Pattern(t *testing.T) {
+	schema := generatedSchemaMap(t)
+	storageClass := schemaAt(t, schema,
+		"properties", "opencenter",
+		"properties", "infrastructure",
+		"properties", "storage",
+		"properties", "default_storage_class",
+	)
+	pattern, ok := storageClass["pattern"].(string)
+	if !ok || pattern == "" {
+		t.Fatalf("default_storage_class pattern = %#v, want DNS-1123 pattern", storageClass["pattern"])
+	}
+	if got := storageClass["maxLength"]; got != float64(253) {
+		t.Fatalf("default_storage_class maxLength = %#v, want 253", got)
+	}
+}

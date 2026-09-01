@@ -42,9 +42,11 @@ type configSecretMetadata struct {
 }
 
 type harborSecretPatch struct {
-	AdminPassword    *string `yaml:"admin_password"`
-	RegistryPassword *string `yaml:"registry_password"`
-	DatabasePassword *string `yaml:"database_password"`
+	AdminPassword     *string `yaml:"admin_password"`
+	RegistryPassword  *string `yaml:"registry_password"`
+	DatabasePassword  *string `yaml:"database_password"`
+	S3AccessKeyID     *string `yaml:"s3_access_key_id"`
+	S3SecretAccessKey *string `yaml:"s3_secret_access_key"`
 }
 
 func applyHarborSecretPatch(cfg *v2.Config, payload []byte) error {
@@ -84,6 +86,12 @@ func applyHarborSecretPatch(cfg *v2.Config, payload []byte) error {
 		return err
 	}
 	if err := apply("secrets.harbor.database_password", patch.DatabasePassword, &candidate.DatabasePassword); err != nil {
+		return err
+	}
+	if err := apply("secrets.harbor.s3_access_key_id", patch.S3AccessKeyID, &candidate.S3AccessKeyID); err != nil {
+		return err
+	}
+	if err := apply("secrets.harbor.s3_secret_access_key", patch.S3SecretAccessKey, &candidate.S3SecretAccessKey); err != nil {
 		return err
 	}
 	if provided == 0 {
@@ -164,11 +172,11 @@ func configSecretCatalog() []configSecretEntry {
 			Name:        "harbor-credentials",
 			Type:        "credentials",
 			Location:    "config: secrets.harbor",
-			Description: "Harbor administrator, registry, and database credentials",
+			Description: "Harbor administrator, registry, database, and S3 credentials",
 			PayloadKind: configSecretObject,
 			Present: func(cfg *v2.Config) bool {
 				secret := cfg.Secrets.Harbor
-				return secret.AdminPassword != "" || secret.RegistryPassword != "" || secret.DatabasePassword != ""
+				return secret.AdminPassword != "" || secret.RegistryPassword != "" || secret.DatabasePassword != "" || secret.S3AccessKeyID != "" || secret.S3SecretAccessKey != ""
 			},
 			Get: func(cfg *v2.Config) interface{} {
 				return cfg.Secrets.Harbor

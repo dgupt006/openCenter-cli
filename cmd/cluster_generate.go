@@ -118,6 +118,8 @@ sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from set
 	}
 
 	cmd.Flags().Bool("force", false, "overwrite existing GitOps repository")
+	cmd.Flags().Bool("prune", true, "remove stale generated files (use --prune=false to report but retain them)")
+	cmd.Flags().Bool("adopt-generated", false, "claim differing planned files after creating backups")
 	cmd.Flags().Bool("skip-validation", false, "skip configuration validation before generation")
 	cmd.Flags().BoolVar(&renderOnly, "render-only", false, "render templates without running repository setup")
 	cmd.Flags().String("gitops-auth", "", "GitOps authentication method for base repo sources (ssh, token); defaults to cluster_defaults.gitops_auth_method")
@@ -162,6 +164,8 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 
 	// Parse flags into SetupOptions
 	force, _ := cmd.Flags().GetBool("force")
+	prune, _ := cmd.Flags().GetBool("prune")
+	adoptGenerated, _ := cmd.Flags().GetBool("adopt-generated")
 	dryRun := getGlobalOptions(cmd).DryRun
 	skipValidation, _ := cmd.Flags().GetBool("skip-validation")
 
@@ -171,6 +175,8 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 		DryRun:           dryRun,
 		SkipValidation:   skipValidation,
 		Force:            force,
+		Prune:            &prune,
+		AdoptGenerated:   adoptGenerated,
 		GitopsAuthMethod: gitopsAuth,
 	}
 

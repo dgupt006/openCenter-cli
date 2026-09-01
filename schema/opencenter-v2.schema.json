@@ -489,7 +489,8 @@
                     "type": "object"
                   },
                   "name": {
-                    "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                    "maxLength": 253,
+                    "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
                     "type": "string"
                   },
                   "os": {
@@ -667,7 +668,8 @@
               "type": "string"
             },
             "cluster_name": {
-              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
               "type": "string"
             },
             "kubernetes": {
@@ -1799,7 +1801,8 @@
                         "type": "object"
                       },
                       "name": {
-                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "maxLength": 253,
+                        "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
                         "type": "string"
                       },
                       "taints": {
@@ -1893,7 +1896,8 @@
                         "type": "object"
                       },
                       "name": {
-                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "maxLength": 253,
+                        "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
                         "type": "string"
                       },
                       "server_group_affinity": {
@@ -2328,6 +2332,8 @@
                   "type": "array"
                 },
                 "default_storage_class": {
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
                   "type": "string"
                 },
                 "master_volume_delete_on_termination": {
@@ -2905,6 +2911,10 @@
                 "database_user": {
                   "type": "string"
                 },
+                "database_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "emit_certificate": {
                   "type": "boolean"
                 },
@@ -2929,13 +2939,26 @@
                   },
                   "type": "object"
                 },
+                "jobservice_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "namespace": {
                   "type": "string"
                 },
+                "redis_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "registry_volume_size": {
+                  "minimum": 1,
                   "type": "integer"
                 },
                 "s3_bucket": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "format": "uri",
                   "type": "string"
                 },
                 "s3_region": {
@@ -2956,8 +2979,18 @@
                   },
                   "type": "object"
                 },
-                "storage_type": {
+                "storage_class": {
                   "type": "string"
+                },
+                "storage_type": {
+                  "enum": [
+                    "s3"
+                  ],
+                  "type": "string"
+                },
+                "trivy_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
                 }
               },
               "type": "object"
@@ -4809,6 +4842,10 @@
                 "database_user": {
                   "type": "string"
                 },
+                "database_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "emit_certificate": {
                   "type": "boolean"
                 },
@@ -4833,13 +4870,26 @@
                   },
                   "type": "object"
                 },
+                "jobservice_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "namespace": {
                   "type": "string"
                 },
+                "redis_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "registry_volume_size": {
+                  "minimum": 1,
                   "type": "integer"
                 },
                 "s3_bucket": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "format": "uri",
                   "type": "string"
                 },
                 "s3_region": {
@@ -4860,8 +4910,18 @@
                   },
                   "type": "object"
                 },
-                "storage_type": {
+                "storage_class": {
                   "type": "string"
+                },
+                "storage_type": {
+                  "enum": [
+                    "s3"
+                  ],
+                  "type": "string"
+                },
+                "trivy_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
                 }
               },
               "type": "object"
@@ -6219,7 +6279,8 @@
               "type": "boolean"
             },
             "name": {
-              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "maxLength": 253,
+              "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
               "type": "string"
             },
             "organization": {
@@ -6788,6 +6849,10 @@
                 "database_user": {
                   "type": "string"
                 },
+                "database_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "emit_certificate": {
                   "type": "boolean"
                 },
@@ -6812,13 +6877,26 @@
                   },
                   "type": "object"
                 },
+                "jobservice_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "namespace": {
                   "type": "string"
                 },
+                "redis_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
                 "registry_volume_size": {
+                  "minimum": 1,
                   "type": "integer"
                 },
                 "s3_bucket": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "format": "uri",
                   "type": "string"
                 },
                 "s3_region": {
@@ -6839,8 +6917,18 @@
                   },
                   "type": "object"
                 },
-                "storage_type": {
+                "storage_class": {
                   "type": "string"
+                },
+                "storage_type": {
+                  "enum": [
+                    "s3"
+                  ],
+                  "type": "string"
+                },
+                "trivy_volume_size": {
+                  "minimum": 1,
+                  "type": "integer"
                 }
               },
               "type": "object"

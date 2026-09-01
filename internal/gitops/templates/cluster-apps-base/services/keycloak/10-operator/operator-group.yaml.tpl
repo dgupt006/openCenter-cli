@@ -5,4 +5,4 @@ metadata:
   namespace: keycloak-operator
 spec:
   targetNamespaces:
-    - keycloak-operator
+    - keycloak

@@ -33,7 +33,7 @@ const (
 	defaultGitBaseRepoURL             = "ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git"
 	defaultGitBaseRepoRelease         = "2026.01"
 	defaultGitopsAuthMethod           = "token"
-	defaultDefaultStorageClass        = "Performance"
+	defaultDefaultStorageClass        = "standard"
 	defaultWorkerVolumeType           = "Performance"
 	defaultOpenStackProjectID         = "project-id-placeholder"
 	defaultOpenStackProjectName       = "project-name-placeholder"
@@ -735,38 +735,89 @@ func normalizeGitopsAuthMethod(authMethod string) string {
 	}
 }
 
-func defaultServiceMap(clusterFQDN string) ServiceMap {
-	return ServiceMap{
-		"calico":                   &services.CalicoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "calico-system"}, KubeAPIServer: ""},
-		"cert-manager":             &services.CertManagerConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"}},
-		"etcd-backup":              &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kube-system"}},
-		"external-snapshotter":     &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "external-snapshotter"}},
-		"fluxcd":                   &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
-		"gateway":                  &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "gateway"}},
-		"gateway-api":              &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "envoy-gateway-system"}},
-		"headlamp":                 &services.HeadlampConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "headlamp"}, Hostname: fmt.Sprintf("dashboard.%s", clusterFQDN)},
-		"keycloak":                 &services.KeycloakConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"}, Hostname: fmt.Sprintf("auth.%s", clusterFQDN), StartOptimized: false, ResourceRequestsCPU: "500m", ResourceLimitsCPU: "2", Instances: 3},
-		"postgres-operator":        &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "postgres-operator"}},
-		"rbac-manager":             &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system"}},
-		"sources":                  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}},
-		"kube-prometheus-stack":    &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
-		"kyverno":                  &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kyverno"}},
-		"loki":                     &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
-		"openstack-ccm":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-ccm"}},
-		"openstack-csi":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-csi"}},
-		"tempo":                    &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}},
-		"velero":                   &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero"}},
-		"harbor":                   &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}},
-		"metallb":                  &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "metallb-system"}},
-		"olm":                      &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "olm"}},
-		"kafka-cluster":            &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "strimzi"}},
-		"vsphere-csi":              &services.VSphereCSIConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "vmware-system-csi"}},
-		"weave-gitops":             &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "flux-system"}},
-		"longhorn":                 &services.LonghornConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "longhorn-system"}, Hostname: fmt.Sprintf("longhorn.%s", clusterFQDN)},
-		"mimir":                    &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}},
-		"opentelemetry-kube-stack": &services.OpenTelemetryConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}},
-		"sealed-secrets":           &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "sealed-secrets"}},
+// NewDefaultServiceConfig returns the public desired-state defaults for a built-in
+// service. Renderer-owned source and image metadata is intentionally left empty.
+// The boolean is false for an unknown service, which callers may materialize as a
+// generic custom service configuration.
+func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
+	switch serviceName {
+	case "calico":
+		return &services.CalicoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "calico-system"}, KubeAPIServer: ""}, true
+	case "cert-manager":
+		return &services.CertManagerConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"}}, true
+	case "etcd-backup":
+		return &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kube-system"}}, true
+	case "external-snapshotter":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "external-snapshotter"}}, true
+	case "fluxcd":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}}, true
+	case "gateway":
+		return &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "gateway"}}, true
+	case "gateway-api":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "envoy-gateway-system"}}, true
+	case "headlamp":
+		return &services.HeadlampConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "headlamp"}, Hostname: fmt.Sprintf("dashboard.%s", clusterFQDN)}, true
+	case "keycloak":
+		return &services.KeycloakConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "keycloak"}, Hostname: fmt.Sprintf("auth.%s", clusterFQDN), StartOptimized: false, ResourceRequestsCPU: "500m", ResourceLimitsCPU: "2", Instances: 3}, true
+	case "postgres-operator":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "postgres-operator"}}, true
+	case "rbac-manager":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "rbac-system"}}, true
+	case "sources":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "flux-system"}}, true
+	case "kube-prometheus-stack":
+		return &services.PrometheusStackConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}, true
+	case "kyverno":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kyverno"}}, true
+	case "loki":
+		return &services.LokiConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}, true
+	case "openstack-ccm":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-ccm"}}, true
+	case "openstack-csi":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-csi"}}, true
+	case "tempo":
+		return &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}, true
+	case "velero":
+		return &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero"}}, true
+	case "harbor":
+		return &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}, StorageType: "s3", RegistryVolumeSize: 100, JobserviceVolumeSize: 5, DatabaseVolumeSize: 10, RedisVolumeSize: 5, TrivyVolumeSize: 5}, true
+	case "metallb":
+		return &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "metallb-system"}}, true
+	case "olm":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "olm"}}, true
+	case "kafka-cluster":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "strimzi"}}, true
+	case "vsphere-csi":
+		return &services.VSphereCSIConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "vmware-system-csi"}}, true
+	case "weave-gitops":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "flux-system"}}, true
+	case "longhorn":
+		return &services.LonghornConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "longhorn-system"}, Hostname: fmt.Sprintf("longhorn.%s", clusterFQDN)}, true
+	case "mimir":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
+	case "opentelemetry-kube-stack":
+		return &services.OpenTelemetryConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
+	case "sealed-secrets":
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "sealed-secrets"}}, true
+	default:
+		return nil, false
 	}
+}
+
+func defaultServiceMap(clusterFQDN string) ServiceMap {
+	serviceNames := []string{
+		"calico", "cert-manager", "etcd-backup", "external-snapshotter", "fluxcd", "gateway", "gateway-api",
+		"headlamp", "keycloak", "postgres-operator", "rbac-manager", "sources", "kube-prometheus-stack", "kyverno",
+		"loki", "openstack-ccm", "openstack-csi", "tempo", "velero", "harbor", "metallb", "olm", "kafka-cluster",
+		"vsphere-csi", "weave-gitops", "longhorn", "mimir", "opentelemetry-kube-stack", "sealed-secrets",
+	}
+	result := make(ServiceMap, len(serviceNames))
+	for _, serviceName := range serviceNames {
+		if service, ok := NewDefaultServiceConfig(serviceName, clusterFQDN); ok {
+			result[serviceName] = service
+		}
+	}
+	return result
 }
 
 func storagePluginDefaults(provider string) StoragePluginConfig {

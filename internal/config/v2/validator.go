@@ -17,12 +17,109 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/go-playground/validator/v10"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 )
+
+// ResolveObjectStorageBackend returns the explicitly configured Loki/Tempo
+// backend. When omitted, OpenStack uses Swift and all other providers use S3,
+// matching the Loki and Tempo renderer contract.
+func ResolveObjectStorageBackend(cfg *Config, serviceName string) string {
+	var storageType string
+	if service := configuredService(cfg, serviceName); service != nil {
+		switch serviceName {
+		case "loki":
+			if loki, ok := service.(*services.LokiConfig); ok {
+				storageType = loki.StorageType
+			}
+		case "tempo":
+			if tempo, ok := service.(*services.TempoConfig); ok {
+				storageType = tempo.StorageType
+			}
+		}
+	}
+	storageType = strings.ToLower(strings.TrimSpace(storageType))
+	if storageType != "" {
+		return storageType
+	}
+	if cfg != nil && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") {
+		return "swift"
+	}
+	return "s3"
+}
+
+func configuredService(cfg *Config, serviceName string) any {
+	if cfg == nil {
+		return nil
+	}
+	if service, ok := cfg.OpenCenter.Services[serviceName]; ok {
+		return service
+	}
+	if service, ok := cfg.OpenCenter.ManagedServices[serviceName]; ok {
+		return service
+	}
+	return nil
+}
+
+// ValidateS3Endpoint validates a concrete S3-compatible endpoint. A blank
+// endpoint is never a usable S3 configuration.
+func ValidateS3Endpoint(raw string) error {
+	endpoint := strings.TrimSpace(raw)
+	if endpoint == "" {
+		return fmt.Errorf("S3 endpoint must be configured")
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return fmt.Errorf("S3 endpoint must be an absolute HTTP(S) URL")
+	}
+	if strings.Contains(strings.ToUpper(parsed.Path), "/V1/AUTH_") {
+		return fmt.Errorf("S3 endpoint must not be a Swift /v1/AUTH_* endpoint")
+	}
+	return nil
+}
+
+// ValidateHarborConfig validates the public Harbor storage contract. The YAML
+// decoder supplies defaults for omitted PVC fields; explicit non-positive values
+// are rejected by runtime validation and the generated schema.
+func ValidateHarborConfig(config *services.HarborConfig) error {
+	if config == nil {
+		return fmt.Errorf("Harbor configuration must not be nil")
+	}
+	storageType := strings.ToLower(strings.TrimSpace(config.StorageType))
+	if storageType != "" && storageType != "s3" {
+		return fmt.Errorf("Harbor storage_type %q is unsupported; only s3 is supported", config.StorageType)
+	}
+	endpoint := strings.TrimSpace(config.S3Endpoint)
+	if endpoint == "" {
+		if config.Enabled {
+			return fmt.Errorf("Harbor s3_endpoint is required when Harbor is enabled")
+		}
+	} else {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return fmt.Errorf("Harbor s3_endpoint must be an absolute HTTP(S) URL")
+		}
+		if strings.Contains(strings.ToUpper(parsed.Path), "/V1/AUTH_") {
+			return fmt.Errorf("Harbor s3_endpoint must not be a Swift /v1/AUTH_* endpoint")
+		}
+	}
+	for name, size := range map[string]int{
+		"registry":   config.RegistryVolumeSize,
+		"jobservice": config.JobserviceVolumeSize,
+		"database":   config.DatabaseVolumeSize,
+		"redis":      config.RedisVolumeSize,
+		"trivy":      config.TrivyVolumeSize,
+	} {
+		if size <= 0 {
+			return fmt.Errorf("Harbor %s PVC size must be greater than zero", name)
+		}
+	}
+	return nil
+}
 
 // Validator performs multi-layered validation of v2 configurations.
 // Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7
@@ -54,21 +151,7 @@ func NewValidator() Validator {
 func registerSchemaValidations(v *validator.Validate) error {
 	if err := v.RegisterValidation("dns1123", func(fl validator.FieldLevel) bool {
 		value := fl.Field().String()
-		if value == "" {
-			return true
-		}
-		if len(value) > 253 {
-			return false
-		}
-		for i, c := range value {
-			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
-				return false
-			}
-			if (i == 0 || i == len(value)-1) && (c == '-' || c == '.') {
-				return false
-			}
-		}
-		return true
+		return value == "" || isRFC1123DNSSubdomain(value)
 	}); err != nil {
 		return err
 	}
@@ -300,7 +383,19 @@ func (v *defaultValidator) ValidateDeployment(cfg *Config) error {
 // ValidateServices validates service dependencies and required secrets.
 // Requirements: 11.5
 func (v *defaultValidator) ValidateServices(cfg *Config) error {
-	if cfg == nil || !isServiceEnabled(cfg, "metallb") {
+	if cfg == nil {
+		return nil
+	}
+	if service, ok := cfg.OpenCenter.Services["harbor"]; ok {
+		harbor, ok := service.(*services.HarborConfig)
+		if !ok {
+			return fmt.Errorf("harbor service has unexpected configuration type %T", service)
+		}
+		if err := ValidateHarborConfig(harbor); err != nil {
+			return err
+		}
+	}
+	if !isServiceEnabled(cfg, "metallb") {
 		return nil
 	}
 
@@ -452,27 +547,37 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 
 	// Loki secrets
 	if isServiceEnabled(cfg, "loki") {
-		if isMissingSecret(cfg.GetLokiSwiftApplicationCredentialSecret()) {
-			placeholders = append(placeholders, "secrets.loki.swift_application_credential_secret")
-		}
-		if cfg.Secrets.Loki.S3AccessKeyID == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.loki.s3_access_key_id")
-		}
-		if cfg.Secrets.Loki.S3SecretAccessKey == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.loki.s3_secret_access_key")
+		switch ResolveObjectStorageBackend(cfg, "loki") {
+		case "swift":
+			if isMissingSecret(cfg.GetLokiSwiftApplicationCredentialSecret()) {
+				placeholders = append(placeholders, "secrets.loki.swift_application_credential_secret")
+			}
+		case "s3":
+			accessKey, secretKey := cfg.GetLokiS3Credentials()
+			if isMissingSecret(accessKey) {
+				placeholders = append(placeholders, "secrets.loki.s3_access_key_id")
+			}
+			if isMissingSecret(secretKey) {
+				placeholders = append(placeholders, "secrets.loki.s3_secret_access_key")
+			}
 		}
 	}
 
 	// Tempo secrets
 	if isServiceEnabled(cfg, "tempo") {
-		if isMissingSecret(cfg.GetTempoSwiftApplicationCredentialSecret()) {
-			placeholders = append(placeholders, "secrets.tempo.swift_application_credential_secret")
-		}
-		if cfg.Secrets.Tempo.AccessKey == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.tempo.access_key")
-		}
-		if cfg.Secrets.Tempo.SecretKey == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.tempo.secret_key")
+		switch ResolveObjectStorageBackend(cfg, "tempo") {
+		case "swift":
+			if isMissingSecret(cfg.GetTempoSwiftApplicationCredentialSecret()) {
+				placeholders = append(placeholders, "secrets.tempo.swift_application_credential_secret")
+			}
+		case "s3":
+			accessKey, secretKey := cfg.GetTempoS3Credentials()
+			if isMissingSecret(accessKey) {
+				placeholders = append(placeholders, "secrets.tempo.access_key")
+			}
+			if isMissingSecret(secretKey) {
+				placeholders = append(placeholders, "secrets.tempo.secret_key")
+			}
 		}
 	}
 

@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation/validators"
+	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 	testhelpers "github.com/opencenter-cloud/opencenter-cli/internal/testing"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
@@ -28,7 +30,11 @@ func createTestSetupService(pathResolver *paths.PathResolver) *SetupService {
 	loader := v2.NewConfigIOHandler(fileSystem)
 	configMgr := config.NewConfigurationManagerWithDeps(loader, validator, cache, pathResolver, fileSystem)
 
-	return NewSetupServiceWithConfigMgr(pathResolver, validator, configMgr)
+	service := NewSetupServiceWithConfigMgr(pathResolver, validator, configMgr)
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error {
+		return nil
+	})
+	return service
 }
 
 func TestNewSetupService(t *testing.T) {
@@ -144,6 +150,7 @@ func TestSetupService_generateGitOpsManifests_DryRun(t *testing.T) {
 
 	validationEngine := validation.NewValidationEngine()
 	service := NewSetupService(pathResolver, validationEngine)
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error { return nil })
 
 	count, err := service.generateGitOpsManifests(ctx, cfg, clusterPaths, true)
 
@@ -354,6 +361,7 @@ func TestSetupService_OpenStackSetupDoesNotUseLegacyConfigValidator(t *testing.T
 	cfg := mustNewClusterTestConfig(clusterName, "openstack")
 	cfg.OpenCenter.Meta.Organization = organization
 	cfg.OpenCenter.GitOps.Repository.LocalDir = gitDir
+	makeSetupConfigGenerationReady(&cfg)
 
 	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
 
@@ -368,6 +376,18 @@ func TestSetupService_OpenStackSetupDoesNotUseLegacyConfigValidator(t *testing.T
 	configMgr := config.NewConfigurationManagerWithDeps(loader, validator, cache, pathResolver, fileSystem)
 
 	service := NewSetupServiceWithConfigMgr(pathResolver, validator, configMgr)
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error { return nil })
+	validatedTofu := false
+	service.manifestValidator = func(root string) error {
+		for _, name := range []string{"provider.tf", "terraform.tfvars"} {
+			path := filepath.Join(root, "infrastructure", "clusters", clusterName, name)
+			if _, err := os.Stat(path); err != nil {
+				return fmt.Errorf("staged OpenTofu file %s missing during validation: %w", name, err)
+			}
+		}
+		validatedTofu = true
+		return nil
+	}
 	result, err := service.Setup(ctx, SetupOptions{
 		ClusterName:    clusterName,
 		Organization:   organization,
@@ -379,6 +399,18 @@ func TestSetupService_OpenStackSetupDoesNotUseLegacyConfigValidator(t *testing.T
 	}
 	if result == nil || result.ManifestsCreated == 0 {
 		t.Fatalf("expected dry-run setup result with manifest count, got %#v", result)
+	}
+	if !validatedTofu {
+		t.Fatal("dry-run setup did not validate staged OpenTofu files")
+	}
+	for _, name := range []string{"provider.tf", "terraform.tfvars"} {
+		rel := filepath.ToSlash(filepath.Join("infrastructure", "clusters", clusterName, name))
+		if !containsString(result.Promotion.Added, rel) {
+			t.Fatalf("dry-run promotion missing staged OpenTofu path %q: %+v", rel, result.Promotion)
+		}
+		if _, err := os.Stat(filepath.Join(gitDir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("dry-run wrote live OpenTofu file %q: %v", rel, err)
+		}
 	}
 }
 
@@ -447,6 +479,7 @@ func TestSetupService_Setup_KindProviderRendersKindConfigOnly(t *testing.T) {
 	if err := applyClusterProviderDefaults(&cfg, "kind"); err != nil {
 		t.Fatalf("apply provider defaults: %v", err)
 	}
+	makeSetupConfigGenerationReady(&cfg)
 
 	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
 
@@ -595,5 +628,271 @@ func TestSetupService_Setup_WithForce(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("Setup() returned nil result")
+	}
+}
+
+func TestSetupService_SetupBlocksGenerationValidationBeforeTargetMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*v2.Config)
+	}{
+		{
+			name: "missing dependency",
+			mutate: func(cfg *v2.Config) {
+				cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig).Enabled = false
+			},
+		},
+		{
+			name: "placeholder required secret",
+			mutate: func(cfg *v2.Config) {
+				cfg.Secrets.Keycloak.AdminPassword = v2.PlaceholderSecret
+			},
+		},
+		{
+			name: "static provider incompatibility",
+			mutate: func(cfg *v2.Config) {
+				cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = true
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			ctx := context.Background()
+			clusterName := "invalid-generation"
+			organization := "opencenter"
+			target := filepath.Join(tmpDir, "target")
+			pathResolver := paths.NewPathResolver(tmpDir)
+			if err := pathResolver.CreateClusterDirectories(ctx, clusterName, organization); err != nil {
+				t.Fatalf("create cluster directories: %v", err)
+			}
+
+			cfg := generationReadySetupConfig(t, clusterName, target)
+			tt.mutate(&cfg)
+			testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
+			writeTargetSentinel(t, target)
+			before := snapshotTargetTree(t, target)
+
+			service := createTestSetupService(pathResolver)
+			service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error {
+				t.Fatal("generation reached encryption after failed offline validation")
+				return nil
+			})
+
+			_, err := service.Setup(ctx, SetupOptions{ClusterName: clusterName, Organization: organization})
+			if err == nil || !strings.Contains(err.Error(), "offline generation validation") {
+				t.Fatalf("Setup() error = %v, want offline generation validation failure", err)
+			}
+			assertTargetTreeEquals(t, target, before)
+		})
+	}
+}
+
+func TestSetupService_SetupSkipValidationExplicitlyBypassesGenerationGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	clusterName := "skip-generation-validation"
+	organization := "opencenter"
+	target := filepath.Join(tmpDir, "target")
+	pathResolver := paths.NewPathResolver(tmpDir)
+	if err := pathResolver.CreateClusterDirectories(ctx, clusterName, organization); err != nil {
+		t.Fatalf("create cluster directories: %v", err)
+	}
+
+	cfg := generationReadySetupConfig(t, clusterName, target)
+	cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig).Enabled = false
+	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
+
+	service := createTestSetupService(pathResolver)
+	service.manifestValidator = func(string) error {
+		t.Fatal("explicit --skip-validation bypass still invoked manifest validation")
+		return nil
+	}
+	result, err := service.Setup(ctx, SetupOptions{
+		ClusterName:    clusterName,
+		Organization:   organization,
+		DryRun:         true,
+		SkipValidation: true,
+	})
+	if err != nil {
+		t.Fatalf("Setup() with explicit validation bypass error = %v", err)
+	}
+	if result == nil || result.ManifestsCreated == 0 {
+		t.Fatalf("Setup() bypass result = %#v, want generated dry-run plan", result)
+	}
+}
+
+func TestSetupService_SetupRejectsStagedManifestBeforePromotion(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	clusterName := "invalid-manifest"
+	organization := "opencenter"
+	target := filepath.Join(tmpDir, "target")
+	pathResolver := paths.NewPathResolver(tmpDir)
+	if err := pathResolver.CreateClusterDirectories(ctx, clusterName, organization); err != nil {
+		t.Fatalf("create cluster directories: %v", err)
+	}
+
+	cfg := generationReadySetupConfig(t, clusterName, target)
+	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
+	writeTargetSentinel(t, target)
+	before := snapshotTargetTree(t, target)
+
+	service := createTestSetupService(pathResolver)
+	encrypted := false
+	service.overlayEncryptor = overlayFileEncryptorFunc(func(context.Context, string, *v2.Config) error {
+		encrypted = true
+		return nil
+	})
+	service.manifestValidator = func(path string) error {
+		if path == target || strings.HasPrefix(path, target+string(os.PathSeparator)) {
+			t.Fatalf("manifest validation ran against live target %q", path)
+		}
+		if !encrypted {
+			t.Fatal("manifest validation ran before staged encryption finalized bytes")
+		}
+		return fmt.Errorf("synthetic invalid manifest")
+	}
+
+	_, err := service.Setup(ctx, SetupOptions{ClusterName: clusterName, Organization: organization})
+	if err == nil || !strings.Contains(err.Error(), "synthetic invalid manifest") {
+		t.Fatalf("Setup() error = %v, want fatal staged manifest validation failure", err)
+	}
+	assertTargetTreeEquals(t, target, before)
+}
+
+func TestSetupService_SetupValidatesStagedManifestOnValidDryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	clusterName := "valid-generation"
+	organization := "opencenter"
+	target := filepath.Join(tmpDir, "target")
+	pathResolver := paths.NewPathResolver(tmpDir)
+	if err := pathResolver.CreateClusterDirectories(ctx, clusterName, organization); err != nil {
+		t.Fatalf("create cluster directories: %v", err)
+	}
+
+	cfg := generationReadySetupConfig(t, clusterName, target)
+	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
+
+	service := createTestSetupService(pathResolver)
+	validated := false
+	service.manifestValidator = func(path string) error {
+		validated = true
+		if path == target {
+			t.Fatal("valid generation was validated only after promotion")
+		}
+		return nil
+	}
+
+	result, err := service.Setup(ctx, SetupOptions{ClusterName: clusterName, Organization: organization, DryRun: true})
+	if err != nil {
+		t.Fatalf("Setup() valid dry-run error = %v", err)
+	}
+	if !validated {
+		t.Fatal("Setup() did not validate staged generated manifests")
+	}
+	if result == nil || !result.ValidationPassed || result.ManifestsCreated == 0 {
+		t.Fatalf("Setup() valid dry-run result = %#v", result)
+	}
+}
+
+func generationReadySetupConfig(t *testing.T, name, target string) v2.Config {
+	t.Helper()
+	cfg := mustNewClusterTestConfig(name, "kind")
+	cfg.OpenCenter.Meta.Organization = "opencenter"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = target
+	makeSetupConfigGenerationReady(&cfg)
+	return cfg
+}
+
+func makeSetupConfigGenerationReady(cfg *v2.Config) {
+	cfg.OpenCenter.GitOps.Repository.URL = "https://github.com/example/cluster.git"
+	cfg.OpenCenter.GitOps.Auth.SSH = nil
+	cfg.OpenCenter.GitOps.Auth.Token = &v2.GitOpsTokenAuth{Provider: "github", Token: "test-token"}
+	cfg.Secrets.Global.AWS.Application.AccessKey = "global-application-access"
+	cfg.Secrets.Global.AWS.Application.SecretAccessKey = "global-application-secret"
+	cfg.Secrets.Keycloak.ClientSecret = "keycloak-client-secret"
+	cfg.Secrets.Keycloak.AdminPassword = "keycloak-admin-password"
+	cfg.Secrets.Headlamp.OIDCClientSecret = "headlamp-client-secret"
+	cfg.Secrets.Loki.SwiftApplicationCredentialSecret = "loki-swift-secret"
+	cfg.Secrets.Loki.S3AccessKeyID = "loki-s3-access"
+	cfg.Secrets.Loki.S3SecretAccessKey = "loki-s3-secret"
+	cfg.Secrets.Tempo.SwiftApplicationCredentialSecret = "tempo-swift-secret"
+	cfg.Secrets.Tempo.AccessKey = "tempo-s3-access"
+	cfg.Secrets.Tempo.SecretKey = "tempo-s3-secret"
+	if loki, ok := cfg.OpenCenter.Services["loki"].(*services.LokiConfig); ok {
+		loki.S3Endpoint = "https://loki-s3.example"
+	}
+	if tempo, ok := cfg.OpenCenter.Services["tempo"].(*services.TempoConfig); ok {
+		tempo.S3Endpoint = "https://tempo-s3.example"
+	}
+	if keycloak, ok := cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig); ok {
+		keycloak.Instances = 2
+	}
+	if openstack := cfg.OpenCenter.Infrastructure.Cloud.OpenStack; openstack != nil {
+		openstack.ApplicationCredentialID = "openstack-application-credential-id"
+		openstack.ApplicationCredentialSecret = "openstack-application-credential-secret"
+	}
+}
+
+func writeTargetSentinel(t *testing.T, target string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(target, "custom"), 0o755); err != nil {
+		t.Fatalf("create target sentinel directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "custom", "sentinel.txt"), []byte("unchanged\n"), 0o644); err != nil {
+		t.Fatalf("write target sentinel: %v", err)
+	}
+}
+
+func snapshotTargetTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snapshot := map[string]string{}
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		snapshot[filepath.ToSlash(rel)] = string(data)
+		return nil
+	}); err != nil {
+		t.Fatalf("snapshot target tree: %v", err)
+	}
+	return snapshot
+}
+
+func assertTargetTreeEquals(t *testing.T, root string, want map[string]string) {
+	t.Helper()
+	got := snapshotTargetTree(t, root)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("target tree mutated:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestFormatDryRunPromotionIncludesPruneCandidates(t *testing.T) {
+	lines := formatDryRunPromotion(&gitops.PromoteResult{
+		PruneCandidates: []string{"applications/base/stale.yaml", "clusters/demo/old.yaml"},
+	})
+	output := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"prune-candidates=2",
+		"prune candidate (retained): applications/base/stale.yaml",
+		"prune candidate (retained): clusters/demo/old.yaml",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("dry-run promotion output missing %q:\n%s", want, output)
+		}
 	}
 }

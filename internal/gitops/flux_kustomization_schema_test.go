@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	configservices "github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -255,6 +256,7 @@ func newDefaultServiceConfig(t *testing.T) v2.Config {
 	cfg, err := v2.NewV2Default("k8s-plan", "openstack")
 	require.NoError(t, err)
 	require.NotEmpty(t, cfg.OpenCenter.Services, "default service map is empty")
+	cfg.OpenCenter.Services["harbor"].(*configservices.HarborConfig).S3Endpoint = "https://harbor-s3.example"
 
 	return *cfg
 }
