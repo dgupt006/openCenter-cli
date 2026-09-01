@@ -99,7 +99,8 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 			output := runKustomizeBuild(t, overlayRoot)
 			docs, err := decodeYAMLDocuments([]byte(output))
 			require.NoError(t, err)
-			require.Len(t, docs, 3)
+			// 3 patched upstream policies + 1 supplemental bundle-unpack policy (OCTR-705).
+			require.Len(t, docs, 4)
 			for _, name := range []string{"olm-operator", "catalog-operator", "packageserver"} {
 				expected := policyExpectations[name]
 				doc := findNetworkPolicyDocument(t, docs, name)
@@ -139,6 +140,21 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 				require.True(t, ok, "%s policyTypes has unexpected shape", name)
 				require.ElementsMatch(t, []any{"Ingress", "Egress"}, policyTypes)
 			}
+
+			// OCTR-705: supplemental NetworkPolicy for bundle-unpack Job pods.
+			unpack := findNetworkPolicyDocument(t, docs, "olm-bundle-unpack-api-egress")
+			require.Equal(t, "true", nestedString(unpack, "spec", "podSelector", "matchLabels", "olm.managed"))
+			unpackTypes, ok := nestedValue(unpack, "spec", "policyTypes").([]any)
+			require.True(t, ok, "bundle-unpack policyTypes has unexpected shape")
+			require.ElementsMatch(t, []any{"Egress"}, unpackTypes)
+			unpackEgress, ok := nestedValue(unpack, "spec", "egress").([]any)
+			require.True(t, ok, "bundle-unpack egress has unexpected shape")
+			require.Len(t, unpackEgress, 1)
+			unpackPorts := egressPorts(unpackEgress)
+			require.Contains(t, unpackPorts, strconv.Itoa(tc.port)+"/TCP", "bundle-unpack must permit egress to the API port")
+			require.Contains(t, unpackPorts, "50051/TCP", "bundle-unpack must permit gRPC catalog egress")
+			require.Contains(t, unpackPorts, "53/TCP", "bundle-unpack must permit DNS/TCP egress")
+			require.Contains(t, unpackPorts, "53/UDP", "bundle-unpack must permit DNS/UDP egress")
 		})
 	}
 }
