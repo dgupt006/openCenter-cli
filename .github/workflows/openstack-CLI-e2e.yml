@@ -1,20 +1,21 @@
 name: OpenStack CLI E2E
 
-# Phase 1 scaffold: exercises init -> provider apply -> generate -> secrets
-# sync -> security validation against a real OpenStack region, entirely
-# locally on the runner. No cluster is provisioned and nothing is pushed to
-# a GitOps repo yet - `cluster deploy` / `cluster destroy` are deliberately
-# left out until credential storage, target project, and GitOps repo
-# conventions for CI are confirmed with Pratik.
+# Phase 1 (always runs): init -> provider apply -> generate -> secrets sync
+# -> validate-manifests --security-only, entirely local to the runner.
+#
+# Phase 2 (opt-in via the run_deploy input): creates a throwaway GitOps repo,
+# pushes generated manifests to it, runs a real `cluster deploy` against
+# SJC3, then `cluster destroy` and deletes the throwaway repo in cleanup
+# regardless of how deploy went. Real infra, real cost, ~40+ minutes.
 #
 # Manual trigger only, per Victor's directive to start manual/manual-only.
 #
 # OCTR-631 (OLM NetworkPolicy hardcoded port 6443) and the Keycloak
 # OperatorGroup conflict are both fixed on main as of 2026-08-31/28 - no live
-# patch step needs to be baked into a future deploy phase for either. The
-# bundle-unpacker Job pod zero-egress gap (found independently, not yet
-# filed) is NOT covered by either fix and will still need one when deploy is
-# added here.
+# patch step needs to be baked into deploy for either. The bundle-unpacker
+# Job pod zero-egress gap (found independently, not yet filed) is NOT
+# covered by either fix and will surface if deploy ever tries to install an
+# OLM operator.
 
 on:
   workflow_dispatch:
@@ -30,6 +31,11 @@ on:
         description: "Prefix for the generated cluster name (a run number is always appended for uniqueness)"
         required: false
         default: "cli-ci"
+      run_deploy:
+        description: "Also run cluster deploy + destroy against real infra (~40+ min). Leave off for a fast validate-only pass."
+        required: true
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -37,7 +43,7 @@ env:
 jobs:
   validate:
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       CLUSTER_ORG: opencenter-cli-ci
     steps:
@@ -76,6 +82,7 @@ jobs:
           fqdn="${name}.sjc3.k8s.opencenter.cloud"
           echo "cluster_name=$name" >> "$GITHUB_OUTPUT"
           echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
+          echo "gitops_repo=${name}-gitops" >> "$GITHUB_OUTPUT"
 
       - name: Write clouds.yaml
         run: |
@@ -102,10 +109,6 @@ jobs:
             --type openstack \
             --force
 
-      # region/cluster_fqdn/dns_zone_name don't cascade from a single field
-      # today - each location needs its own explicit set. NTP servers and
-      # per-service hostnames are known gaps too but left out of this first
-      # pass until `cluster set`'s handling of list fields is confirmed.
       - name: Fix up region-dependent fields
         run: |
           set -euo pipefail
@@ -122,6 +125,99 @@ jobs:
             opencenter.infrastructure.compute.flavor_master=gp.0.4.8 \
             opencenter.infrastructure.compute.flavor_worker=gp.0.4.16 \
             opencenter.infrastructure.compute.flavor_worker_windows=gp.0.4.16
+
+      # opencenter.services.* is a generic map, and `cluster set` can't reach
+      # into map-typed fields (setField: "setting nested fields in maps is
+      # not supported"). Patch the generated YAML directly instead - same
+      # fields fixed by hand for the sjc3cli1/sjc3cli2 builds.
+      - name: Fix up map-typed service fields
+        env:
+          CONFIG_PATH: /Users/dinesh.gupta/.config/opencenter/clusters/blueprints/${{ env.CLUSTER_ORG }}/${{ steps.name.outputs.cluster_name }}/${{ steps.name.outputs.cluster_name }}-config.yaml
+          CLUSTER_NAME: ${{ steps.name.outputs.cluster_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+
+          path = os.environ["CONFIG_PATH"]
+          name = os.environ["CLUSTER_NAME"]
+
+          with open(path) as f:
+              content = f.read()
+
+          replacements = [
+              ("suffix: DFW3", "suffix: SJC3"),
+              (f"hostname: dashboard.{name}.dfw3.k8s.opencenter.cloud",
+               f"hostname: dashboard.{name}.sjc3.k8s.opencenter.cloud"),
+              (f"hostname: auth.{name}.dfw3.k8s.opencenter.cloud",
+               f"hostname: auth.{name}.sjc3.k8s.opencenter.cloud"),
+              (f"hostname: longhorn.{name}.dfw3.k8s.opencenter.cloud",
+               f"hostname: longhorn.{name}.sjc3.k8s.opencenter.cloud"),
+              (f"http_route_fqdn: alerts.{name}.dfw3.k8s.opencenter.cloud",
+               f"http_route_fqdn: alerts.{name}.sjc3.k8s.opencenter.cloud"),
+              ("    loki:\n      enabled: true\n      namespace: observability\n",
+               "    loki:\n      enabled: true\n      namespace: observability\n"
+               "      storage_type: s3\n"
+               f"      bucket_name: {name}-loki\n"
+               "      s3_endpoint: s3.ap-southeast-4.amazonaws.com\n"
+               "      s3_region: ap-southeast-4\n"),
+              ("    tempo:\n      enabled: true\n      namespace: observability\n",
+               "    tempo:\n      enabled: true\n      namespace: observability\n"
+               "      storage_type: s3\n"
+               f"      bucket_name: {name}-tempo\n"
+               "      s3_endpoint: s3.ap-southeast-4.amazonaws.com\n"
+               "      s3_region: ap-southeast-4\n"),
+          ]
+
+          missing = []
+          for old, new in replacements:
+              if old not in content:
+                  missing.append(old)
+                  continue
+              content = content.replace(old, new, 1)
+
+          with open(path, "w") as f:
+              f.write(content)
+
+          if missing:
+              print("::warning::Some expected patterns were not found in the generated config:")
+              for m in missing:
+                  print(f"::warning::  {m!r}")
+          else:
+              print("Patched map-typed service fields")
+          PYEOF
+
+      # Phase 2 only: point the cluster at a throwaway GitOps repo before
+      # generate/secrets-sync run, since deploy needs Flux to pull from
+      # somewhere real. Deleted again in cleanup regardless of outcome.
+      - name: Create throwaway GitOps repo
+        if: ${{ inputs.run_deploy }}
+        env:
+          GH_TOKEN: ${{ secrets.CI_GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+          gh repo create "dgupt006/${{ steps.name.outputs.gitops_repo }}" \
+            --private \
+            --description "Ephemeral CI GitOps repo for ${{ steps.name.outputs.cluster_name }} - safe to delete, cleaned up automatically"
+
+      - name: Point cluster at GitOps repo and set deploy-only secrets
+        if: ${{ inputs.run_deploy }}
+        env:
+          CI_GITHUB_PAT: ${{ secrets.CI_GITHUB_PAT }}
+          CI_S3_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
+          CI_S3_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          keycloak_password=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
+          opencenter cluster set "$name" \
+            opencenter.gitops.repository.url="https://github.com/dgupt006/${{ steps.name.outputs.gitops_repo }}.git" \
+            opencenter.gitops.repository.path="clusters/${name}" \
+            opencenter.gitops.auth.token.token="$CI_GITHUB_PAT" \
+            secrets.loki.s3_access_key_id="$CI_S3_ACCESS_KEY" \
+            secrets.loki.s3_secret_access_key="$CI_S3_SECRET_KEY" \
+            secrets.tempo.access_key="$CI_S3_ACCESS_KEY" \
+            secrets.tempo.secret_key="$CI_S3_SECRET_KEY" \
+            secrets.keycloak.admin_password="$keycloak_password"
 
       - name: cluster provider openstack apply
         run: |
@@ -162,8 +258,43 @@ jobs:
             ~/.config/opencenter/clusters/gitops/${{ env.CLUSTER_ORG }}/**
           retention-days: 14
 
-      # Nothing is provisioned in OpenStack by this workflow yet, so cleanup
-      # is local-disk only. Runs even if an earlier step failed.
+      - name: Commit and push GitOps content
+        if: ${{ inputs.run_deploy }}
+        env:
+          CI_GITHUB_PAT: ${{ secrets.CI_GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+          gitops_dir="$HOME/.config/opencenter/clusters/gitops/${CLUSTER_ORG}"
+          cd "$gitops_dir"
+          git config user.name "openCenter CI"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${CI_GITHUB_PAT}@github.com/dgupt006/${{ steps.name.outputs.gitops_repo }}.git"
+          git add -A
+          git commit -m "Initial generate for ${{ steps.name.outputs.cluster_name }} (CI)"
+          git push -u origin main
+
+      - name: cluster deploy
+        if: ${{ inputs.run_deploy }}
+        run: |
+          set -euo pipefail
+          opencenter cluster deploy "${{ steps.name.outputs.cluster_name }}" --yes
+
+      - name: cluster destroy
+        if: ${{ inputs.run_deploy && always() }}
+        run: |
+          set -euo pipefail
+          opencenter cluster destroy "${{ steps.name.outputs.cluster_name }}" --force --remove-files
+
+      - name: Delete throwaway GitOps repo
+        if: ${{ inputs.run_deploy && always() }}
+        env:
+          GH_TOKEN: ${{ secrets.CI_GITHUB_PAT }}
+        run: |
+          gh repo delete "dgupt006/${{ steps.name.outputs.gitops_repo }}" --yes || \
+            echo "::warning::Failed to delete throwaway repo dgupt006/${{ steps.name.outputs.gitops_repo }} - clean up manually"
+
+      # Local-disk safety net regardless of path taken above. No-op if
+      # `cluster destroy --remove-files` already cleaned everything.
       - name: Clean up local cluster state
         if: always()
         run: |
