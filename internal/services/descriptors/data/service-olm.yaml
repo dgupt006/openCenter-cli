@@ -8,4 +8,5 @@ files:
   - template: services/sources/opencenter-olm.yaml.tpl
   - template: services/sources/opencenter-olm-config.yaml.tpl
   - template: services/olm/kustomization.yaml.tpl
+  - template: services/olm/bundle-unpack-netpol.yaml.tpl
   - template: services/fluxcd/olm.yaml.tpl

@@ -3,6 +3,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../base/olm
+  - bundle-unpack-netpol.yaml
 patches:
   - target:
       group: networking.k8s.io
