@@ -1,0 +1,168 @@
+name: OpenStack CLI E2E
+
+# Phase 1 scaffold: exercises init -> provider apply -> generate -> secrets
+# sync -> security validation against a real OpenStack region, entirely
+# locally on the runner. No cluster is provisioned and nothing is pushed to
+# a GitOps repo yet - `cluster deploy` / `cluster destroy` are deliberately
+# left out until credential storage, target project, and GitOps repo
+# conventions for CI are confirmed with Pratik.
+#
+# Manual trigger only, per Victor's directive to start manual/manual-only.
+#
+# OCTR-631 (OLM NetworkPolicy hardcoded port 6443) and the Keycloak
+# OperatorGroup conflict are both fixed on main as of 2026-08-31/28 - no live
+# patch step needs to be baked into a future deploy phase for either. The
+# bundle-unpacker Job pod zero-egress gap (found independently, not yet
+# filed) is NOT covered by either fix and will still need one when deploy is
+# added here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Target OpenStack region"
+        required: true
+        default: "SJC3"
+        type: choice
+        options:
+          - SJC3
+      cluster_name_prefix:
+        description: "Prefix for the generated cluster name (a run number is always appended for uniqueness)"
+        required: false
+        default: "cli-ci"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    env:
+      CLUSTER_ORG: opencenter-cli-ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build opencenter binary
+        run: |
+          set -euo pipefail
+          go build -trimpath -o /tmp/opencenter-ci-bin .
+          sudo install -m 0755 /tmp/opencenter-ci-bin /usr/local/bin/opencenter || \
+            install -m 0755 /tmp/opencenter-ci-bin /usr/local/bin/opencenter
+          opencenter --version
+
+      # Cluster names must never be reused across runs - a reused name can
+      # inherit stale ansible fact caches and stale kubeconfig state from an
+      # earlier build (see OCTR punch-list). The run number guarantees a
+      # fresh name every time.
+      - name: Derive unique cluster name
+        id: name
+        run: |
+          set -euo pipefail
+          name="${{ inputs.cluster_name_prefix }}-${{ github.run_number }}"
+          fqdn="${name}.sjc3.k8s.opencenter.cloud"
+          echo "cluster_name=$name" >> "$GITHUB_OUTPUT"
+          echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Write clouds.yaml
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/openstack"
+          cat > "$HOME/.config/openstack/clouds.yaml" <<EOF
+          clouds:
+            sjc3:
+              auth:
+                auth_url: ${{ vars.CI_OS_SJC3_AUTH_URL }}
+                application_credential_id: ${{ secrets.CI_OS_SJC3_APP_CRED_ID }}
+                application_credential_secret: ${{ secrets.CI_OS_SJC3_APP_CRED_SECRET }}
+              auth_type: v3applicationcredential
+              region_name: SJC3
+              interface: public
+              identity_api_version: 3
+          EOF
+
+      - name: cluster init
+        run: |
+          set -euo pipefail
+          opencenter cluster init "${{ steps.name.outputs.cluster_name }}" \
+            --org "$CLUSTER_ORG" \
+            --type openstack \
+            --force
+
+      # region/cluster_fqdn/dns_zone_name don't cascade from a single field
+      # today - each location needs its own explicit set. NTP servers and
+      # per-service hostnames are known gaps too but left out of this first
+      # pass until `cluster set`'s handling of list fields is confirmed.
+      - name: Fix up region-dependent fields
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          fqdn="${{ steps.name.outputs.cluster_fqdn }}"
+          opencenter cluster set "$name" \
+            opencenter.meta.region=SJC3 \
+            opencenter.infrastructure.cloud.openstack.region=SJC3 \
+            opencenter.cluster.cluster_fqdn="$fqdn" \
+            opencenter.infrastructure.networking.dns_zone_name="$fqdn" \
+            opencenter.infrastructure.cloud.openstack.dns_zone_name="$fqdn" \
+            opencenter.infrastructure.cloud.openstack.networking.designate.dns_zone_name="$fqdn" \
+            opencenter.infrastructure.compute.flavor_bastion=gp.0.2.4 \
+            opencenter.infrastructure.compute.flavor_master=gp.0.4.8 \
+            opencenter.infrastructure.compute.flavor_worker=gp.0.4.16 \
+            opencenter.infrastructure.compute.flavor_worker_windows=gp.0.4.16
+
+      - name: cluster provider openstack apply
+        run: |
+          set -euo pipefail
+          opencenter cluster provider openstack apply "${{ steps.name.outputs.cluster_name }}" \
+            --os-cloud sjc3 \
+            --import-auth \
+            --create-internal-network \
+            --external-network-id "${{ vars.CI_OS_SJC3_EXTERNAL_NETWORK_ID }}" \
+            --availability-zone az1 \
+            --image-id "${{ vars.CI_OS_SJC3_IMAGE_ID }}" \
+            --windows-image-id "${{ vars.CI_OS_SJC3_WINDOWS_IMAGE_ID }}" \
+            --replace \
+            --yes
+
+      - name: cluster generate
+        run: |
+          set -euo pipefail
+          opencenter cluster generate "${{ steps.name.outputs.cluster_name }}"
+
+      - name: secrets sync
+        run: |
+          set -euo pipefail
+          opencenter secrets sync "${{ steps.name.outputs.cluster_name }}"
+
+      - name: Validate manifests (security only)
+        run: |
+          set -euo pipefail
+          opencenter cluster validate-manifests "${{ steps.name.outputs.cluster_name }}" --security-only
+
+      - name: Upload rendered config and manifests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencenter-ci-${{ steps.name.outputs.cluster_name }}
+          path: |
+            ~/.config/opencenter/clusters/blueprints/${{ env.CLUSTER_ORG }}/${{ steps.name.outputs.cluster_name }}/**
+            ~/.config/opencenter/clusters/gitops/${{ env.CLUSTER_ORG }}/**
+          retention-days: 14
+
+      # Nothing is provisioned in OpenStack by this workflow yet, so cleanup
+      # is local-disk only. Runs even if an earlier step failed.
+      - name: Clean up local cluster state
+        if: always()
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          rm -rf "$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/$name"
+          rm -rf "$HOME/.config/opencenter/clusters/secrets/$CLUSTER_ORG/$name"
+          rm -rf "$HOME/.config/opencenter/clusters/gitops/$CLUSTER_ORG"
