@@ -58,10 +58,11 @@ jobs:
       - name: Build opencenter binary
         run: |
           set -euo pipefail
-          go build -trimpath -o /tmp/opencenter-ci-bin .
-          sudo install -m 0755 /tmp/opencenter-ci-bin /usr/local/bin/opencenter || \
-            install -m 0755 /tmp/opencenter-ci-bin /usr/local/bin/opencenter
-          opencenter --version
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -trimpath -o "$RUNNER_TEMP/bin/opencenter" .
+          chmod 0755 "$RUNNER_TEMP/bin/opencenter"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/opencenter" --version
 
       # Cluster names must never be reused across runs - a reused name can
       # inherit stale ansible fact caches and stale kubeconfig state from an
