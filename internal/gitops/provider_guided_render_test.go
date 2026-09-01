@@ -147,6 +147,53 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 	}
 }
 
+func TestRenderMimirOverrideValues(t *testing.T) {
+	cfg := newDefault("mimir-guided")
+
+	mimirValues := renderOverrideValues(t, cfg, "mimir")
+	if !strings.Contains(mimirValues, "dnsService: coredns") {
+		t.Fatalf("expected global.dnsService: coredns in Mimir values:\n%s", mimirValues)
+	}
+	if strings.Contains(mimirValues, "ingest_storage:") || strings.Contains(mimirValues, "kafka:") {
+		t.Fatalf("did not expect Kafka ingest storage when kafka-cluster is disabled:\n%s", mimirValues)
+	}
+
+	kafka := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
+	kafka.Enabled = true
+	kafka.Namespace = "strimzi"
+	mimirValues = renderOverrideValues(t, cfg, "mimir")
+	if !strings.Contains(mimirValues, "address: kafka-cluster-kafka-brokers.strimzi.svc.cluster.local:9092") {
+		t.Fatalf("expected configured Kafka namespace in Mimir values:\n%s", mimirValues)
+	}
+}
+
+func TestRenderLokiOverrideValuesAffinity(t *testing.T) {
+	cfg := newDefault("loki-affinity-guided")
+	lokiValues := renderOverrideValues(t, cfg, "loki")
+
+	for _, component := range []string{"write", "read", "backend"} {
+		expected := component + ":\n    affinity:\n        podAntiAffinity:\n            requiredDuringSchedulingIgnoredDuringExecution: []\n            preferredDuringSchedulingIgnoredDuringExecution:\n                - weight: 100\n                  podAffinityTerm:\n                      topologyKey: kubernetes.io/hostname\n                      labelSelector:\n                          matchLabels:\n                              app.kubernetes.io/name: loki\n                              app.kubernetes.io/instance: loki\n                              app.kubernetes.io/component: " + component
+		if !strings.Contains(lokiValues, expected) {
+			t.Fatalf("expected soft hostname anti-affinity for Loki %s:\n%s", component, lokiValues)
+		}
+	}
+}
+
+func renderOverrideValues(t *testing.T, cfg v2.Config, serviceName string) string {
+	t.Helper()
+
+	spec, ok := newBuiltInRenderCatalog().Lookup(serviceName)
+	if !ok || spec.OverrideValuesRenderer == nil {
+		t.Fatalf("missing override-values renderer for %q", serviceName)
+	}
+
+	values, err := spec.OverrideValuesRenderer(cfg)
+	if err != nil {
+		t.Fatalf("render %s override-values: %v", serviceName, err)
+	}
+	return values
+}
+
 func TestRenderClusterAppsTempoSwift(t *testing.T) {
 	dst := t.TempDir()
 	cfg := newDefault("tempo-swift-guided")

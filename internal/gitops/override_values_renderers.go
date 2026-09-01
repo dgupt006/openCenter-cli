@@ -325,6 +325,45 @@ loki:
               index:
                   prefix: loki_index_
                   period: 24h
+write:
+    affinity:
+        podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution: []
+            preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                          matchLabels:
+                              app.kubernetes.io/name: loki
+                              app.kubernetes.io/instance: loki
+                              app.kubernetes.io/component: write
+read:
+    affinity:
+        podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution: []
+            preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                          matchLabels:
+                              app.kubernetes.io/name: loki
+                              app.kubernetes.io/instance: loki
+                              app.kubernetes.io/component: read
+backend:
+    affinity:
+        podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution: []
+            preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                          matchLabels:
+                              app.kubernetes.io/name: loki
+                              app.kubernetes.io/instance: loki
+                              app.kubernetes.io/component: backend
 `
 
 const tempoTemplate = `{{- $tempo := index .OpenCenter.Services "tempo" -}}
@@ -370,12 +409,14 @@ mimir:
                 endpoint: swift.api.{{ .OpenCenter.Meta.Region }}.rackspacecloud.com
                 access_key_id: {{ .Secrets.Global.AWS.Application.AccessKey | default "PLACEHOLDER-MIMIR-ACCESS-KEY" }}
                 secret_access_key: {{ .Secrets.Global.AWS.Application.SecretAccessKey | default "PLACEHOLDER-MIMIR-SECRET-KEY" }}
+{{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
         ingest_storage:
             kafka:
                 address: kafka-cluster-kafka-brokers.{{ $kafkaNamespace }}.svc.cluster.local:9092
                 topic: mimir-ingest
                 auto_create_topic_enabled: true
                 auto_create_topic_default_partitions: 1000
+{{- end }}
 `
 
 const otelTemplate = `collectors:
