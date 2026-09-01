@@ -48,7 +48,12 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          # This ad-hoc runner can't reach the Actions cache blob storage
+          # endpoint (uploads stall at 0%) even though it reaches the GitHub
+          # API fine - disable caching here rather than hang the job. Worth
+          # asking Pratik whether the org's real runners have this network
+          # path open and this one just doesn't.
+          cache: false
 
       - name: Build opencenter binary
         run: |
