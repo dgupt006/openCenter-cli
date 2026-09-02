@@ -56,9 +56,13 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 		name string
 		data any
 	}
+	// keycloak is intentionally omitted: its admin/client secrets are never
+	// consumed by any rendered manifest (admin bootstrap comes from the realm-import,
+	// DB creds from postgres-operator), so materializing services/keycloak/secret.yaml
+	// only created an orphaned artifact.
 	fixed := []source{
 		{"cert-manager", cfg.Secrets.CertManager}, {"loki", cfg.Secrets.Loki},
-		{"keycloak", cfg.Secrets.Keycloak}, {"headlamp", cfg.Secrets.Headlamp},
+		{"headlamp", cfg.Secrets.Headlamp},
 		{"weave-gitops", cfg.Secrets.WeaveGitOps}, {"grafana", cfg.Secrets.Grafana},
 		{"tempo", cfg.Secrets.Tempo}, {"alert-proxy", cfg.Secrets.AlertProxy},
 		{"vsphere-csi", cfg.Secrets.VSphereCsi},

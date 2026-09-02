@@ -144,16 +144,11 @@ var serviceSecretMappings = []ServiceSecretMapping{
 			},
 		},
 	},
-	{
-		Service: "keycloak",
-		Requirements: []SecretRequirement{
-			{
-				SecretPath:  "service_secrets.keycloak.admin_password",
-				Condition:   "always",
-				Description: "Keycloak admin password",
-			},
-		},
-	},
+	// Keycloak intentionally has no required secret: the admin bootstrap user is
+	// provisioned via the realm-import manifest and DB credentials come from the
+	// postgres-operator managed secret. The former KeycloakSecrets (admin_password/
+	// client_secret) were never consumed by any rendered manifest, so requiring or
+	// materializing them only produced an orphaned secret.yaml.
 }
 
 // SecretsValidator validates that required secrets are configured for enabled services

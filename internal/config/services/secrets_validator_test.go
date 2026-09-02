@@ -277,7 +277,9 @@ func TestSecretsValidator_ValidateRequiredSecrets_VeleroMultipleStorageTypes(t *
 func TestSecretsValidator_ValidateRequiredSecrets_KeycloakAlways(t *testing.T) {
 	validator := NewSecretsValidator()
 
-	// Test keycloak which always requires admin password
+	// Keycloak has no required secret: the admin user is provisioned via the
+	// realm-import manifest and DB creds via postgres-operator, so no keycloak
+	// secret is required or materialized.
 	services := map[string]any{
 		"keycloak": &KeycloakConfig{
 			BaseConfig: BaseConfig{
@@ -286,21 +288,15 @@ func TestSecretsValidator_ValidateRequiredSecrets_KeycloakAlways(t *testing.T) {
 		},
 	}
 
-	// Missing admin password
+	// No secrets configured
 	secrets := map[string]any{
-		"service_secrets": map[string]any{
-			"keycloak": map[string]any{},
-		},
+		"service_secrets": map[string]any{},
 	}
 
 	errors := validator.ValidateRequiredSecrets(services, secrets)
 
-	if len(errors) != 1 {
-		t.Errorf("Expected 1 error for missing admin password, got %d", len(errors))
-	}
-
-	if len(errors) > 0 && !strings.Contains(errors[0], "admin_password") {
-		t.Error("Expected error to mention admin_password")
+	if len(errors) != 0 {
+		t.Errorf("Expected no required-secret errors for keycloak, got %d: %v", len(errors), errors)
 	}
 }
 
@@ -363,10 +359,10 @@ func TestSecretsValidator_ValidateRequiredSecrets_MultipleServices(t *testing.T)
 	// Should have errors for:
 	// - cert-manager: aws_access_key, aws_secret_key (2)
 	// - loki: swift_password (1)
-	// - keycloak: admin_password (1)
-	// Total: 4 errors
-	if len(errors) != 4 {
-		t.Errorf("Expected 4 errors for multiple services with missing secrets, got %d: %v", len(errors), errors)
+	// - keycloak: none (admin user provisioned via realm-import)
+	// Total: 3 errors
+	if len(errors) != 3 {
+		t.Errorf("Expected 3 errors for multiple services with missing secrets, got %d: %v", len(errors), errors)
 	}
 }
 

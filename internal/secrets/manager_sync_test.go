@@ -478,14 +478,14 @@ secrets:
   sops_age_key_file: ` + keyPath + `
   cert_manager:
     aws_access_key: cert-manager
-  keycloak:
-    client_secret: keycloak
+  grafana:
+    admin_password: grafana
 `
 	writeManagerTestConfig(t, cluster, configData)
 	overlay := filepath.Join(repoDir, "applications", "overlays", cluster)
 	paths := map[string]string{
-		"services/cert-manager/secret.yaml": "cert-manager manifest",
-		"services/keycloak/secret.yaml":     "keycloak manifest",
+		"services/cert-manager/secret.yaml":         "cert-manager manifest",
+		"services/kube-prometheus-stack/secret.yaml": "grafana manifest",
 	}
 	state := artifactState{Version: secretartifacts.OwnershipStateVersion}
 	for relative, contents := range paths {
@@ -533,7 +533,7 @@ secrets:
 
 	bDone := make(chan syncOutcome, 1)
 	go func() {
-		result, err := managerB.SyncSecrets(context.Background(), SyncOptions{Cluster: cluster, Services: []string{"keycloak"}})
+		result, err := managerB.SyncSecrets(context.Background(), SyncOptions{Cluster: cluster, Services: []string{"grafana"}})
 		bDone <- syncOutcome{result: result, err: err}
 	}()
 	select {
