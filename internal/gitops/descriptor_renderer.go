@@ -452,7 +452,7 @@ func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []se
 			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
-		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor)
+		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor, artifacts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -614,7 +614,7 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 			return nil, nil, err
 		}
 		actions = append(actions, expanded...)
-		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor)
+		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor, artifacts)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	descriptorcfg "github.com/opencenter-cloud/opencenter-cli/internal/services/descriptors"
 )
 
@@ -52,7 +53,7 @@ type catalogConditionalDependency struct {
 	WhenEnabled string
 }
 
-type dynamicActionPlanner func(v2.Config) ([]clusterAppAction, error)
+type dynamicActionPlanner func(v2.Config, []secretartifacts.Artifact) ([]clusterAppAction, error)
 
 type catalogDynamicPlanner struct {
 	descriptorName string
@@ -223,7 +224,7 @@ func (c RenderCatalog) dynamicPlannerForDescriptor(descriptorName string) (dynam
 	return nil, false
 }
 
-func (c RenderCatalog) planDynamicActionsForDescriptor(cfg v2.Config, descriptor descriptorcfg.Descriptor) ([]clusterAppAction, error) {
+func (c RenderCatalog) planDynamicActionsForDescriptor(cfg v2.Config, descriptor descriptorcfg.Descriptor, artifacts []secretartifacts.Artifact) ([]clusterAppAction, error) {
 	planner, ok := c.dynamicPlannerForDescriptor(descriptor.Name)
 	if !ok {
 		return nil, nil
@@ -231,7 +232,7 @@ func (c RenderCatalog) planDynamicActionsForDescriptor(cfg v2.Config, descriptor
 	if planner == nil {
 		return nil, fmt.Errorf("render catalog dynamic planner for descriptor %q is nil", descriptor.Name)
 	}
-	actions, err := planner(cfg)
+	actions, err := planner(cfg, artifacts)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic planner for descriptor %q: %w", descriptor.Name, err)
 	}

@@ -23,6 +23,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 )
 
 const (
@@ -50,7 +51,7 @@ func renderInlineTemplateContent(tmplStr, filename string, data any) (string, er
 // planCertManagerDynamicActions returns the dynamic cert-manager files as
 // ordinary render actions. Keeping them in the plan preserves atomic promotion
 // and makes single-service rendering use the same ownership model as full render.
-func planCertManagerDynamicActions(cfg v2.Config) ([]clusterAppAction, error) {
+func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Artifact) ([]clusterAppAction, error) {
 	certManagerSvc, exists := cfg.OpenCenter.Services["cert-manager"]
 	if !exists || IsServiceDisabled(certManagerSvc) {
 		return nil, nil
@@ -140,7 +141,11 @@ func planCertManagerDynamicActions(cfg v2.Config) ([]clusterAppAction, error) {
 	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok {
 		hasDesignate = dnsProvider == "designate"
 	}
-	content, err := renderInlineTemplateContent(kustomizationTemplate, "kustomization.yaml", kustomizationData{Credentials: credentials, HasDesignate: hasDesignate})
+	content, err := renderInlineTemplateContent(kustomizationTemplate, "kustomization.yaml", kustomizationData{
+		Credentials:           credentials,
+		HasDesignate:          hasDesignate,
+		HasMaterializedSecret: secretArtifactTargetMaterialized(cfg, "cert-manager", artifacts),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +421,9 @@ resources:
 {{- end }}
   - "./letsencrypt-{{ .Name }}-issuer.yaml"
 {{- end }}
+{{- if .HasMaterializedSecret }}
+  - "./secret.yaml"
+{{- end }}
 secretGenerator:
   - name: cert-manager-values-override
     files: [override.yaml=helm-values/override-values.yaml]
@@ -425,6 +433,7 @@ secretGenerator:
 
 // kustomizationData holds the template context for the cert-manager kustomization.yaml.
 type kustomizationData struct {
-	Credentials  []certManagerCredentialData
-	HasDesignate bool
+	Credentials           []certManagerCredentialData
+	HasDesignate          bool
+	HasMaterializedSecret bool
 }

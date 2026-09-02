@@ -73,7 +73,7 @@ func TestCertManagerCredentialNamesRejectTraversalBeforePlanning(t *testing.T) {
 			cfg := newDefault("unsafe-cert-credential")
 			tt.cfg(&cfg)
 
-			actions, err := planCertManagerDynamicActions(cfg)
+			actions, err := planCertManagerDynamicActions(cfg, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.want)
 			require.Empty(t, actions)
