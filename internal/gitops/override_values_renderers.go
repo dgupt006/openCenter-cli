@@ -388,13 +388,14 @@ storage:
 {{- else }}
         s3:
             bucket: {{ $bucketName }}
-            endpoint: {{ $tempo.S3Endpoint }}
+            endpoint: {{ $tempo.S3Endpoint | trimPrefix "https://" | trimPrefix "http://" }}
             access_key: {{ .GetTempoS3AccessKey }}
             secret_key: {{ .GetTempoS3SecretKey }}
             region: {{ $tempo.S3Region | default .OpenCenter.Meta.Region }}
             forcepathstyle: {{ $tempo.S3ForcePathStyle }}
             insecure: {{ $tempo.S3Insecure }}
 {{- end }}
+reportingEnabled: false
 `
 
 const mimirTemplate = `{{- $openstack := .OpenCenter.Infrastructure.Cloud.OpenStack -}}
