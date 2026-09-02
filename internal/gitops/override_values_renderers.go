@@ -300,8 +300,10 @@ loki:
             auth_version: {{ $loki.SwiftAuthVersion | default 3 }}
             auth_url: {{ $loki.SwiftAuthURL }}
             region_name: {{ $loki.SwiftRegion | default .OpenCenter.Meta.Region }}
-            application_credential_id: {{ $loki.SwiftApplicationCredentialID }}
-            application_credential_secret: {{ .GetLokiSwiftApplicationCredentialSecret }}
+            username: {{ $loki.SwiftUsername }}
+            password: {{ .GetLokiSwiftPassword }}
+            project_name: {{ $loki.SwiftProjectName }}
+            project_domain_name: {{ $loki.SwiftProjectDomainName | default $loki.SwiftDomainName }}
             user_domain_name: {{ $loki.SwiftUserDomainName }}
             domain_name: {{ $loki.SwiftDomainName }}
             container_name: {{ $loki.SwiftContainerName | default $bucketName }}
