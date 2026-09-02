@@ -105,7 +105,25 @@ func (c Config) GetHarborS3Credentials() (accessKey, secretKey string) {
 	return c.GetAWSApplicationCredentials()
 }
 
+// GetLokiSwiftPassword returns the Loki Swift Keystone password for username/password auth.
+func (c Config) GetLokiSwiftPassword() string {
+	if value := strings.TrimSpace(c.Secrets.Loki.SwiftPassword); value != "" {
+		return value
+	}
+	if raw, ok := c.Secrets.ServiceSecrets["loki"]; ok {
+		if mapped, ok := raw.(map[string]any); ok {
+			if value, ok := mapped["swift_password"].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return strings.TrimSpace(c.Secrets.Global.AWS.Application.SecretAccessKey)
+}
+
 // GetLokiSwiftApplicationCredentialSecret returns the Loki Swift application credential secret.
+//
+// Deprecated: Loki's Swift driver uses username/password auth (GetLokiSwiftPassword);
+// this getter is retained for backward compatibility and is no longer used by lokiTemplate.
 func (c Config) GetLokiSwiftApplicationCredentialSecret() string {
 	if value := strings.TrimSpace(c.Secrets.Loki.SwiftApplicationCredentialSecret); value != "" {
 		return value

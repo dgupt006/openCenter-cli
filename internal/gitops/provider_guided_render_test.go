@@ -110,18 +110,20 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 	cfg := newDefault("loki-swift-guided")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
 	cfg.OpenCenter.Services["loki"] = &configservices.LokiConfig{
-		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability"},
-		StorageType:                  "swift",
-		BucketName:                   "loki-container",
-		SwiftAuthURL:                 "https://identity.api.example.com/v3",
-		SwiftRegion:                  "SJC3",
-		SwiftAuthVersion:             3,
-		SwiftApplicationCredentialID: "app-cred-id",
-		SwiftContainerName:           "loki-container",
-		SwiftUserDomainName:          "rackspace",
-		SwiftDomainName:              "rackspace",
+		BaseConfig:             configservices.BaseConfig{Enabled: true, Namespace: "observability"},
+		StorageType:            "swift",
+		BucketName:             "loki-container",
+		SwiftAuthURL:           "https://identity.api.example.com/v3",
+		SwiftRegion:            "SJC3",
+		SwiftAuthVersion:       3,
+		SwiftUsername:          "loki-svc",
+		SwiftProjectName:       "loki-project",
+		SwiftProjectDomainName: "rackspace",
+		SwiftContainerName:     "loki-container",
+		SwiftUserDomainName:    "rackspace",
+		SwiftDomainName:        "rackspace",
 	}
-	cfg.Secrets.Loki.SwiftApplicationCredentialSecret = "swift-secret"
+	cfg.Secrets.Loki.SwiftPassword = "swift-secret"
 
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("RenderClusterApps() error = %v", err)
@@ -131,8 +133,14 @@ func TestRenderClusterAppsLokiSwift(t *testing.T) {
 	if !strings.Contains(overrideValues, "type: swift") {
 		t.Fatalf("expected swift storage type in Loki values:\n%s", overrideValues)
 	}
-	if !strings.Contains(overrideValues, "application_credential_secret: swift-secret") {
-		t.Fatalf("expected swift application credential secret in Loki values:\n%s", overrideValues)
+	if !strings.Contains(overrideValues, "username: loki-svc") {
+		t.Fatalf("expected swift username in Loki values:\n%s", overrideValues)
+	}
+	if !strings.Contains(overrideValues, "password: swift-secret") {
+		t.Fatalf("expected swift password in Loki values:\n%s", overrideValues)
+	}
+	if !strings.Contains(overrideValues, "project_name: loki-project") {
+		t.Fatalf("expected swift project_name in Loki values:\n%s", overrideValues)
 	}
 	if !strings.Contains(overrideValues, "container_name: loki-container") {
 		t.Fatalf("expected swift container name in Loki values:\n%s", overrideValues)
