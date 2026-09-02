@@ -178,10 +178,18 @@ func TestRenderMimirOverrideValues(t *testing.T) {
 
 	kafka := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
 	kafka.Enabled = true
+	// kafka-cluster ignores the namespace field and always deploys to
+	// kafka-system, so the Mimir address must point there regardless.
 	kafka.Namespace = "strimzi"
 	mimirValues = renderOverrideValues(t, cfg, "mimir")
-	if !strings.Contains(mimirValues, "address: kafka-cluster-kafka-brokers.strimzi.svc.cluster.local:9092") {
-		t.Fatalf("expected configured Kafka namespace in Mimir values:\n%s", mimirValues)
+	if !strings.Contains(mimirValues, "address: kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092") {
+		t.Fatalf("expected Mimir Kafka address to point at kafka-system:\n%s", mimirValues)
+	}
+	if strings.Contains(mimirValues, "strimzi") {
+		t.Fatalf("Mimir Kafka address must not follow the non-functional configured namespace:\n%s", mimirValues)
+	}
+	if !strings.Contains(mimirValues, "kafka:\n    enabled: false") {
+		t.Fatalf("expected bundled Kafka disabled when external kafka-cluster is enabled:\n%s", mimirValues)
 	}
 }
 
