@@ -198,6 +198,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "sealed-secrets", DefaultNamespace: "sealed-secrets", HasOverrideValues: true,
 			SourceName: "opencenter-sealed-secrets", SourceGroup: "sealed-secrets", EmitSource: true,
 			BasePath: "applications/base/services/sealed-secrets", OverrideValues: "keyrenewperiod: \"0\"\n",
+			ExtraDependencies: []string{"sealed-secrets-override"}, OverrideDependsOn: []string{"sources"},
 		},
 	}, dynamicPlanners: []catalogDynamicPlanner{
 		{descriptorName: "service-cert-manager", planner: planCertManagerDynamicActions},
