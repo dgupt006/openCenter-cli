@@ -41,7 +41,7 @@ openCenter provides two complementary backup solutions:
 
 ### 1. Edit Cluster Configuration
 
-Enable etcd backup service:
+Enable and configure etcd backup:
 
 ```bash
 opencenter cluster edit my-cluster
@@ -49,43 +49,37 @@ opencenter cluster edit my-cluster
 
 ### 2. Configure etcd Backup
 
-Add etcd backup configuration:
+When enabled, etcd-backup requires an absolute HTTP(S) S3 endpoint, bucket, region, and service-specific credentials:
 
 ```yaml
 opencenter:
   services:
     etcd-backup:
       enabled: true
-
-      # S3 configuration
-      s3_endpoint: "s3.amazonaws.com"  # Or your S3-compatible endpoint
-      s3_bucket: "my-cluster-etcd-backups"
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
       s3_region: "us-east-1"
-      s3_access_key: "AKIAIOSFODNN7EXAMPLE"  # Will be encrypted with SOPS
-      s3_secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"  # Will be encrypted
 
-      # Backup schedule (cron format)
-      schedule: "0 2 * * *"  # Daily at 2 AM
-
-      # Retention policy
-      retention_days: 30  # Keep backups for 30 days
-
-      # Backup compression
-      compression: true
+secrets:
+  etcd_backup:
+    access_key_id: "<access-key-id>"
+    secret_access_key: "<secret-access-key>"
 ```
 
 **Configuration options:**
 
-* `s3_endpoint`: S3 API endpoint
-* `s3_bucket`: S3 bucket name (must exist)
-* `s3_region`: S3 region
-* `s3_access_key`: S3 access key (encrypted with SOPS)
-* `s3_secret_key`: S3 secret key (encrypted with SOPS)
-* `schedule`: Cron schedule for automated backups
-* `retention_days`: Number of days to keep backups
-* `compression`: Enable gzip compression
+* `opencenter.services.etcd-backup.enabled`: Disabled by default; enable only with the required storage and secrets configuration.
+* `opencenter.services.etcd-backup.s3_endpoint`: Required absolute HTTP(S) S3-compatible endpoint URL. Runtime prefers this full endpoint.
+* `opencenter.services.etcd-backup.s3_bucket_name`: Required target bucket name; the configured value is honored.
+* `opencenter.services.etcd-backup.s3_region`: Required S3 signing region.
+* `secrets.etcd_backup.access_key_id`: Required service-specific S3 access key ID.
+* `secrets.etcd_backup.secret_access_key`: Required service-specific S3 secret access key.
+* `opencenter.services.etcd-backup.s3_host`: Legacy compatibility field; runtime prefers `s3_endpoint`.
+* `opencenter.services.etcd-backup.s3_credential_id`: Non-secret OpenStack credential lifecycle metadata, not a pod secret.
 
-**Evidence:** `internal/config/defaults.go:308-314` etcd-backup service
+The service does not use global AWS credentials as a fallback. It runs nightly at 01:00, uses SigV4, materializes its SOPS-managed Secret through generated kustomization, and uses a digest-pinned image. Backup retention and encryption-at-rest policies, if required, must be configured in the object-storage service; they are not etcd-backup configuration fields.
+
+**Evidence:** `internal/config/v2/readiness.go` and `internal/gitops/templates/cluster-apps-base/services/etcd-backup/cronjob.yaml`
 
 ### 3. Apply Configuration
 
@@ -111,34 +105,30 @@ flux reconcile kustomization etcd-backup-base
 Verify etcd backup is running:
 
 ```bash
-# Check etcd-backup pods
-kubectl get pods -n kube-system -l app=etcd-backup
-
-# Check backup CronJob
+# Check the generated CronJob
 kubectl get cronjob -n kube-system etcd-backup
+# Expected schedule: 0 1 * * *
 
-# Check recent backups in S3
-aws s3 ls s3://my-cluster-etcd-backups/
+# Check recent backups in the configured S3-compatible endpoint
+aws s3 ls s3://my-cluster-etcd-backups/ \
+  --endpoint-url https://s3.example.com
 
-# Expected output:
-# 2026-02-17-02-00-00-etcd-snapshot.db.gz
-# 2026-02-16-02-00-00-etcd-snapshot.db.gz
-# 2026-02-15-02-00-00-etcd-snapshot.db.gz
+# Expected object names include:
+# etcd-snapshot-2026-02-17.db
+# etcd-snapshot-2026-02-16.db
 ```
 
 ### 5. Test etcd Backup
 
-Trigger manual backup:
+Trigger a manual backup job:
 
 ```bash
-# Create manual backup job
 kubectl create job --from=cronjob/etcd-backup etcd-backup-manual -n kube-system
-
-# Watch backup progress
 kubectl logs -n kube-system job/etcd-backup-manual -f
 
-# Verify backup in S3
-aws s3 ls s3://my-cluster-etcd-backups/ | grep manual
+# Verify the uploaded snapshot
+aws s3 ls s3://my-cluster-etcd-backups/ \
+  --endpoint-url https://s3.example.com
 ```
 
 ## Part 2: Configure Velero Backup
@@ -266,12 +256,12 @@ velero backup get
 ssh ubuntu@<control-plane-1>
 sudo systemctl stop kube-apiserver
 
-# 2. Download etcd backup from S3
-aws s3 cp s3://my-cluster-etcd-backups/2026-02-17-02-00-00-etcd-snapshot.db.gz /tmp/
-gunzip /tmp/2026-02-17-02-00-00-etcd-snapshot.db.gz
+# 2. Download an etcd backup from the configured S3-compatible endpoint
+aws s3 cp s3://my-cluster-etcd-backups/etcd-snapshot-2026-02-17.db /tmp/ \
+  --endpoint-url https://s3.example.com
 
 # 3. Restore etcd snapshot
-sudo ETCDCTL_API=3 etcdctl snapshot restore /tmp/2026-02-17-02-00-00-etcd-snapshot.db \
+sudo ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd-snapshot-2026-02-17.db \
   --data-dir=/var/lib/etcd-restore \
   --name=<node-name> \
   --initial-cluster=<cluster-config> \
@@ -368,7 +358,8 @@ Verify backup and restore capabilities:
 kubectl get cronjob -n kube-system etcd-backup
 
 # 2. Verify recent etcd backups
-aws s3 ls s3://my-cluster-etcd-backups/ | tail -5
+aws s3 ls s3://my-cluster-etcd-backups/ \
+  --endpoint-url https://s3.example.com | tail -5
 
 # 3. Verify Velero installation
 velero version
@@ -407,14 +398,15 @@ kubectl logs -n kube-system job/etcd-backup-<timestamp>
 **Solution:**
 
 ```bash
-# Verify S3 credentials
+# Verify the configured endpoint, bucket, and credentials
 aws s3 ls s3://my-cluster-etcd-backups/ \
-  --profile my-cluster
+  --endpoint-url https://s3.example.com
 
-# Create S3 bucket if missing
-aws s3 mb s3://my-cluster-etcd-backups
+# Create the bucket if missing (using the storage provider's credentials)
+aws s3 mb s3://my-cluster-etcd-backups \
+  --endpoint-url https://s3.example.com
 
-# Update S3 credentials in configuration
+# Update service-specific credentials and endpoint in configuration
 opencenter cluster edit my-cluster
 ```
 
@@ -491,10 +483,10 @@ velero restore create pv-restore \
 
 1. **Test restores regularly:** Verify backups are restorable (monthly)
 2. **Multiple backup locations:** Use different S3 buckets/regions for redundancy
-3. **Separate etcd and Velero backups:** Different schedules and retention
+3. **Separate etcd and Velero backups:** Different schedules and storage policies
 4. **Monitor backup status:** Alert on backup failures
 5. **Document restore procedures:** Step-by-step runbooks
-6. **Encrypt backups:** Use S3 server-side encryption
+6. **Protect backups:** Apply encryption and retention policies in the object-storage service; etcd-backup does not configure these features
 7. **Offsite backups:** Store backups in different region/provider
 8. **Backup before changes:** Manual backup before major changes
 
@@ -502,17 +494,17 @@ velero restore create pv-restore \
 
 **Development:**
 
-* etcd: Daily, 7-day retention
+* etcd: Nightly at 01:00; configure any retention policy in object storage
 * Velero: Daily, 7-day retention
 
 **Staging:**
 
-* etcd: Daily, 14-day retention
+* etcd: Nightly at 01:00; configure any retention policy in object storage
 * Velero: Daily, 14-day retention
 
 **Production:**
 
-* etcd: Every 6 hours, 30-day retention
+* etcd: Nightly at 01:00; configure any retention policy in object storage
 * Velero: Daily, 90-day retention
 * Velero weekly: Weekly, 1-year retention
 
@@ -529,7 +521,7 @@ velero restore create pv-restore \
 
 This guide is based on:
 
-* etcd backup service: `internal/config/defaults.go:308-314`
+* etcd backup service: `internal/config/v2/readiness.go` and generated etcd-backup templates
 * Velero service: `internal/config/defaults.go:371-376`
 * Backup configuration: Ecosystem.md infrastructure services
 * Velero documentation: Official Velero docs

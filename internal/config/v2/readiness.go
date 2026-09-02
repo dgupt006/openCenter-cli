@@ -581,6 +581,7 @@ func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 		r.requireSecret("secrets.grafana.admin_password", cfg.Secrets.Grafana.AdminPassword, "Grafana admin password is required when kube-prometheus-stack is enabled.")
 	}
 	r.validateCertManagerSecrets(cfg)
+	r.validateEtcdBackupSecrets(cfg)
 	r.validateLokiSecrets(cfg)
 	r.validateTempoSecrets(cfg)
 	r.validateMimirSecrets(cfg)
@@ -617,6 +618,27 @@ func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 	case "cloudflare":
 		r.requireSecret("secrets.cert_manager.cloudflare_api_token", cfg.Secrets.CertManager.CloudflareAPIToken, "cert-manager Cloudflare DNS requires API token.")
 	}
+}
+
+func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
+	if !serviceEnabled(cfg, "etcd-backup") {
+		return
+	}
+	service := configuredService(cfg, "etcd-backup")
+	etcdBackup, ok := service.(*services.EtcdBackupConfig)
+	if !ok || etcdBackup == nil {
+		r.addError(CategoryServices, "opencenter.services.etcd-backup", fmt.Sprintf("etcd-backup has unexpected configuration type %T.", service), "Use the canonical etcd-backup service configuration.")
+		return
+	}
+	r.requireS3Endpoint("opencenter.services.etcd-backup.s3_endpoint", etcdBackup.S3Endpoint, "etcd-backup requires a configured S3 endpoint.")
+	if strings.TrimSpace(etcdBackup.S3BucketName) == "" {
+		r.addError(CategoryServices, "opencenter.services.etcd-backup.s3_bucket_name", "etcd-backup requires a bucket name.", "Set a non-empty S3 bucket name.")
+	}
+	if strings.TrimSpace(etcdBackup.S3Region) == "" {
+		r.addError(CategoryServices, "opencenter.services.etcd-backup.s3_region", "etcd-backup requires an S3 region.", "Set a non-empty S3 region.")
+	}
+	r.requireSecret("secrets.etcd_backup.access_key_id", cfg.Secrets.EtcdBackup.AccessKeyID, "etcd-backup requires an access key ID.")
+	r.requireSecret("secrets.etcd_backup.secret_access_key", cfg.Secrets.EtcdBackup.SecretAccessKey, "etcd-backup requires a secret access key.")
 }
 
 func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {

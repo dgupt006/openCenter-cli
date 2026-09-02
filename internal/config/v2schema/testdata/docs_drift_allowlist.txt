@@ -67,12 +67,6 @@ docs/getting-started/vmware-deployment.md:opencenter.services.vsphere-csi.vcente
 docs/operations/add-worker-pools.md:opencenter.cluster.additional_server_pools
 docs/operations/add-worker-pools.md:opencenter.cluster.worker_count
 docs/operations/add-worker-pools.md:opencenter.cluster.worker_flavor
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.compression
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.retention_days
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_access_key
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_bucket
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.s3_secret_key
-docs/operations/backup-and-restore.md:opencenter.services.etcd-backup.schedule
 docs/operations/backup-and-restore.md:opencenter.services.velero.backup_schedule
 docs/operations/backup-and-restore.md:opencenter.services.velero.retention_days
 docs/operations/backup-and-restore.md:opencenter.services.velero.s3_bucket

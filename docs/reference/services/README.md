@@ -56,7 +56,7 @@ Quick-reference directory for all openCenter platform services. Each file docume
 | Service | Default | Secrets | Key Config |
 |---------|---------|---------|------------|
 | [velero](velero.md) | ✅ Enabled | Swift/S3/GCS/Azure creds per `storage_type` | `backup_bucket`, `storage_type` |
-| [etcd-backup](etcd-backup.md) | ✅ Enabled | Global AWS creds | `s3_host`, `s3_region` |
+| [etcd-backup](etcd-backup.md) | ❌ Disabled | `secrets.etcd_backup.access_key_id`, `secrets.etcd_backup.secret_access_key` | `s3_endpoint`, `s3_bucket_name`, `s3_region` |
 
 ### Management
 

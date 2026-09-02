@@ -746,7 +746,7 @@ func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
 	case "cert-manager":
 		return &services.CertManagerConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "cert-manager"}}, true
 	case "etcd-backup":
-		return &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "kube-system"}}, true
+		return &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "kube-system"}}, true
 	case "external-snapshotter":
 		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "external-snapshotter"}}, true
 	case "fluxcd":

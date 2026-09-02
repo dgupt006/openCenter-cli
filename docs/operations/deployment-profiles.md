@@ -58,7 +58,7 @@ The smallest set that still produces a working, GitOps-managed cluster with ingr
 | `kube-prometheus-stack`, `loki`, `tempo` | Observability stack. Enable when you need it. |
 | `velero`, `etcd-backup`, `external-snapshotter` | Backup stack. See note below. |
 
-> **Backup note:** `etcd-backup` has no dependencies and is cheap disaster-recovery insurance. If you can point it at object storage, consider leaving it enabled even in a minimal deployment.
+> **Backup note:** `etcd-backup` is disabled by default. Enable it only after configuring an absolute `s3_endpoint`, `s3_bucket_name`, `s3_region`, and `secrets.etcd_backup.access_key_id` plus `secret_access_key`. It runs nightly at 01:00 when enabled.
 
 **Configuration**
 
@@ -115,12 +115,12 @@ opencenter:
     external-snapshotter:
       enabled: false
     etcd-backup:
-      enabled: false           # consider true for DR insurance
+      enabled: false          # enable only with endpoint, bucket, region, and secrets configured
 ```
 
 ## Enterprise profile (recommended for production)
 
-Everything in the minimal profile plus identity, RBAC, full observability, backup, and management tooling. This matches the openCenter default service set.
+Everything in the minimal profile plus identity, RBAC, full observability, backup, and management tooling. Configure `etcd-backup` with its required S3 settings and service-specific secrets before enabling it.
 
 **Enabled (in addition to the minimal core)**
 
@@ -200,6 +200,16 @@ opencenter:
       enabled: true
     etcd-backup:
       enabled: true
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
+      s3_region: "us-east-1"
+    external-snapshotter:
+      enabled: true
+
+secrets:
+  etcd_backup:
+    access_key_id: "<access-key-id>"
+    secret_access_key: "<secret-access-key>"
 ```
 
 ## Provider notes

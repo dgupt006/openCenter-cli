@@ -176,8 +176,13 @@ func etcdBackupPayload(cfg *v2.Config) map[string]interface{} {
 		"ACCESS_KEY":  cfg.Secrets.EtcdBackup.AccessKeyID, "SECRET_KEY": cfg.Secrets.EtcdBackup.SecretAccessKey,
 	}
 	if service != nil {
-		payload["S3_HOST"] = service.S3Host
+		endpoint := strings.TrimSpace(service.S3Endpoint)
+		if endpoint == "" {
+			endpoint = strings.TrimSpace(service.S3Host)
+		}
+		payload["S3_HOST"] = endpoint
 		payload["S3_REGION"] = service.S3Region
+		payload["S3_BUCKET_NAME"] = service.S3BucketName
 	}
 	return payload
 }
