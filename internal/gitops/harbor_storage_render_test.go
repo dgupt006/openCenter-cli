@@ -18,10 +18,10 @@ func TestRenderHarborPVCDefaultsAndInfrastructureStorageClass(t *testing.T) {
 	pvc := harborPVCValues(t, values)
 	for component, want := range map[string]string{
 		"registry":   "100Gi",
-		"jobservice": "5Gi",
+		"jobservice": "10Gi",
 		"database":   "10Gi",
-		"redis":      "5Gi",
-		"trivy":      "5Gi",
+		"redis":      "10Gi",
+		"trivy":      "10Gi",
 	} {
 		got := harborPVCSize(t, pvc, component)
 		if got != want {

@@ -16,10 +16,10 @@ type HarborConfig struct {
 	// Storage
 	StorageType          string `yaml:"storage_type,omitempty" json:"storage_type,omitempty" validate:"oneof=s3" jsonschema:"description=Storage backend type,enum=s3,default=s3"`
 	RegistryVolumeSize   int    `yaml:"registry_volume_size,omitempty" json:"registry_volume_size,omitempty" validate:"min=1" jsonschema:"description=Registry PVC size in GB; retained for compatibility and required Harbor cache/state,default=100"`
-	JobserviceVolumeSize int    `yaml:"jobservice_volume_size,omitempty" json:"jobservice_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor jobservice log PVC size in GB,default=5"`
+	JobserviceVolumeSize int    `yaml:"jobservice_volume_size,omitempty" json:"jobservice_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor jobservice log PVC size in GB (min 10 on Cinder-backed regions e.g. Rackspace SJC3),default=10"`
 	DatabaseVolumeSize   int    `yaml:"database_volume_size,omitempty" json:"database_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor internal database PVC size in GB,default=10"`
-	RedisVolumeSize      int    `yaml:"redis_volume_size,omitempty" json:"redis_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Redis PVC size in GB,default=5"`
-	TrivyVolumeSize      int    `yaml:"trivy_volume_size,omitempty" json:"trivy_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Trivy PVC size in GB,default=5"`
+	RedisVolumeSize      int    `yaml:"redis_volume_size,omitempty" json:"redis_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Redis PVC size in GB (min 10 on Cinder-backed regions e.g. Rackspace SJC3),default=10"`
+	TrivyVolumeSize      int    `yaml:"trivy_volume_size,omitempty" json:"trivy_volume_size,omitempty" validate:"min=1" jsonschema:"description=Harbor Trivy PVC size in GB (min 10 on Cinder-backed regions e.g. Rackspace SJC3),default=10"`
 	StorageClass         string `yaml:"storage_class,omitempty" json:"storage_class,omitempty" jsonschema:"description=Storage class for Harbor PVCs; defaults to infrastructure storage.default_storage_class"`
 	S3Bucket             string `yaml:"s3_bucket,omitempty" json:"s3_bucket,omitempty" jsonschema:"description=S3 bucket name for image storage"`
 	S3Region             string `yaml:"s3_region,omitempty" json:"s3_region,omitempty" jsonschema:"description=S3 region"`
@@ -59,16 +59,16 @@ func (c *HarborConfig) UnmarshalYAML(node *yaml.Node) error {
 		c.RegistryVolumeSize = 100
 	}
 	if !provided["jobservice_volume_size"] {
-		c.JobserviceVolumeSize = 5
+		c.JobserviceVolumeSize = 10
 	}
 	if !provided["database_volume_size"] {
 		c.DatabaseVolumeSize = 10
 	}
 	if !provided["redis_volume_size"] {
-		c.RedisVolumeSize = 5
+		c.RedisVolumeSize = 10
 	}
 	if !provided["trivy_volume_size"] {
-		c.TrivyVolumeSize = 5
+		c.TrivyVolumeSize = 10
 	}
 	return nil
 }

@@ -79,7 +79,7 @@ func TestHarborYAMLDefaultsPreserveExplicitNonPositiveValuesForValidation(t *tes
 	if err := yaml.Unmarshal([]byte("storage_type: s3\n"), &omitted); err != nil {
 		t.Fatal(err)
 	}
-	if omitted.RegistryVolumeSize != 100 || omitted.JobserviceVolumeSize != 5 || omitted.DatabaseVolumeSize != 10 || omitted.RedisVolumeSize != 5 || omitted.TrivyVolumeSize != 5 {
+	if omitted.RegistryVolumeSize != 100 || omitted.JobserviceVolumeSize != 10 || omitted.DatabaseVolumeSize != 10 || omitted.RedisVolumeSize != 10 || omitted.TrivyVolumeSize != 10 {
 		t.Fatalf("omitted Harbor PVC defaults = %#v", omitted)
 	}
 
