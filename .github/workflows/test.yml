@@ -23,6 +23,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install SOPS
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/bin"
+          mkdir -p "${install_dir}"
+          GOBIN="${install_dir}" go install github.com/getsops/sops/v3/cmd/sops@v3.13.3
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          "${install_dir}/sops" --version
+
       - name: Run unit tests with race detector
         run: go test ./internal/... ./cmd/... -count=1 -race
 
