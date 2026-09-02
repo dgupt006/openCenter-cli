@@ -186,6 +186,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		{
 			ServiceName: "mimir", DefaultNamespace: "observability", HasOverrideValues: true,
 			SourceName: "opencenter-observability", SourceGroup: "observability", BasePath: "applications/base/services/observability/mimir",
+			ExtraDependencies: []string{"observability-namespace", "observability-sources", "mimir-override"}, OverrideDependsOn: []string{"sources"},
 			OverrideValuesRenderer: templateRenderer(mimirTemplate),
 		},
 		{
