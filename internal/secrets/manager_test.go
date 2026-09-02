@@ -157,10 +157,10 @@ func TestExtractSecretsFromConfig(t *testing.T) {
 		assert.Equal(t, "AKIAIOSFODNN7EXAMPLE", secretsMap["loki"]["s3_access_key_id"])
 		assert.Equal(t, "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", secretsMap["loki"]["s3_secret_access_key"])
 
-		// Verify Keycloak secrets
-		assert.Contains(t, secretsMap, "keycloak")
-		assert.Equal(t, "test-client-secret", secretsMap["keycloak"]["client_secret"])
-		assert.Equal(t, "test-admin-password", secretsMap["keycloak"]["admin_password"])
+		// Keycloak is no longer harvested: its admin/client secrets are not
+		// consumed by any manifest (admin via realm-import, DB via postgres-operator),
+		// so the typed KeycloakSecrets struct is not materialized.
+		assert.NotContains(t, secretsMap, "keycloak")
 
 		// Verify Grafana secrets
 		assert.Contains(t, secretsMap, "grafana")
@@ -367,7 +367,7 @@ func TestSyncSecrets(t *testing.T) {
 		require.GreaterOrEqual(t, len(secretsMap), 3, "Config should have at least 3 services")
 		require.Contains(t, secretsMap, "cert-manager")
 		require.Contains(t, secretsMap, "loki")
-		require.Contains(t, secretsMap, "keycloak")
+		require.Contains(t, secretsMap, "grafana")
 
 		// Test filtering to only cert-manager
 		manifestPaths, err := manager.mapSecretsToManifests(cfg, secretsMap, []string{"cert-manager"})
@@ -377,19 +377,17 @@ func TestSyncSecrets(t *testing.T) {
 		assert.Len(t, manifestPaths, 1)
 		assert.Contains(t, manifestPaths, "cert-manager")
 		assert.NotContains(t, manifestPaths, "loki")
-		assert.NotContains(t, manifestPaths, "keycloak")
 		assert.NotContains(t, manifestPaths, "grafana")
 
 		// Test filtering to multiple services
-		manifestPaths, err = manager.mapSecretsToManifests(cfg, secretsMap, []string{"cert-manager", "keycloak"})
+		manifestPaths, err = manager.mapSecretsToManifests(cfg, secretsMap, []string{"cert-manager", "grafana"})
 		require.NoError(t, err)
 
-		// Should include both cert-manager and keycloak
+		// Should include both cert-manager and grafana
 		assert.Len(t, manifestPaths, 2)
 		assert.Contains(t, manifestPaths, "cert-manager")
-		assert.Contains(t, manifestPaths, "keycloak")
+		assert.Contains(t, manifestPaths, "grafana")
 		assert.NotContains(t, manifestPaths, "loki")
-		assert.NotContains(t, manifestPaths, "grafana")
 
 		// Test with empty filter (should include all services)
 		manifestPaths, err = manager.mapSecretsToManifests(cfg, secretsMap, []string{})

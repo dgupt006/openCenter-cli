@@ -752,6 +752,12 @@ func createPropertyTestConfig(clusterName string, tmpDir string, certManager Cer
 		ClientSecret:  keycloak.ClientSecret,
 		AdminPassword: keycloak.AdminPassword,
 	}
+	// Keycloak is no longer harvested by the secret planner (its secrets are
+	// consumed by no manifest). Populate grafana as the third extractable service
+	// so filter/round-trip properties still exercise a real materialized secret.
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{
+		AdminPassword: keycloak.AdminPassword,
+	}
 	return cfg
 }
 
@@ -1562,7 +1568,7 @@ func TestProperty_ServiceFilterCorrectness(t *testing.T) {
 				t.Logf("Expected at least 3 services, got %d", len(allSecrets))
 				return false
 			}
-			for _, service := range []string{"cert-manager", "loki", "keycloak"} {
+			for _, service := range []string{"cert-manager", "loki", "grafana"} {
 				if _, exists := allSecrets[service]; !exists {
 					t.Logf("Expected service %s in extracted secrets", service)
 					return false
@@ -1589,21 +1595,21 @@ func TestProperty_ServiceFilterCorrectness(t *testing.T) {
 				serviceFilter = []string{"loki"}
 				expectedServices = map[string]bool{"loki": true}
 			case 2:
-				// Filter to keycloak only
-				serviceFilter = []string{"keycloak"}
-				expectedServices = map[string]bool{"keycloak": true}
+				// Filter to grafana only
+				serviceFilter = []string{"grafana"}
+				expectedServices = map[string]bool{"grafana": true}
 			case 3:
 				// Filter to cert-manager and loki
 				serviceFilter = []string{"cert-manager", "loki"}
 				expectedServices = map[string]bool{"cert-manager": true, "loki": true}
 			case 4:
-				// Filter to cert-manager and keycloak
-				serviceFilter = []string{"cert-manager", "keycloak"}
-				expectedServices = map[string]bool{"cert-manager": true, "keycloak": true}
+				// Filter to cert-manager and grafana
+				serviceFilter = []string{"cert-manager", "grafana"}
+				expectedServices = map[string]bool{"cert-manager": true, "grafana": true}
 			case 5:
-				// Filter to loki and keycloak
-				serviceFilter = []string{"loki", "keycloak"}
-				expectedServices = map[string]bool{"loki": true, "keycloak": true}
+				// Filter to loki and grafana
+				serviceFilter = []string{"loki", "grafana"}
+				expectedServices = map[string]bool{"loki": true, "grafana": true}
 			case 6:
 				// No filter (all services)
 				serviceFilter = nil
@@ -1822,7 +1828,7 @@ func TestProperty_ServiceFilterCorrectness_Sanity(t *testing.T) {
 	require.GreaterOrEqual(t, len(allSecrets), 3, "Should have at least 3 services")
 	require.Contains(t, allSecrets, "cert-manager", "Should contain cert-manager")
 	require.Contains(t, allSecrets, "loki", "Should contain loki")
-	require.Contains(t, allSecrets, "keycloak", "Should contain keycloak")
+	require.Contains(t, allSecrets, "grafana", "Should contain grafana")
 	allServiceSet := serviceSet(allSecrets)
 
 	// Test 1: Filter to single service
@@ -1832,7 +1838,7 @@ func TestProperty_ServiceFilterCorrectness_Sanity(t *testing.T) {
 		require.Len(t, manifestPaths, 1, "Should have 1 service")
 		require.Contains(t, manifestPaths, "cert-manager", "Should contain cert-manager")
 		require.NotContains(t, manifestPaths, "loki", "Should not contain loki")
-		require.NotContains(t, manifestPaths, "keycloak", "Should not contain keycloak")
+		require.NotContains(t, manifestPaths, "grafana", "Should not contain grafana")
 	})
 
 	// Test 2: Filter to multiple services
@@ -1842,17 +1848,17 @@ func TestProperty_ServiceFilterCorrectness_Sanity(t *testing.T) {
 		require.Len(t, manifestPaths, 2, "Should have 2 services")
 		require.Contains(t, manifestPaths, "cert-manager", "Should contain cert-manager")
 		require.Contains(t, manifestPaths, "loki", "Should contain loki")
-		require.NotContains(t, manifestPaths, "keycloak", "Should not contain keycloak")
+		require.NotContains(t, manifestPaths, "grafana", "Should not contain grafana")
 	})
 
 	// Test 3: Filter to all services
 	t.Run("filter to all services", func(t *testing.T) {
-		manifestPaths, err := manager.mapSecretsToManifests(cfg, allSecrets, []string{"cert-manager", "loki", "keycloak"})
+		manifestPaths, err := manager.mapSecretsToManifests(cfg, allSecrets, []string{"cert-manager", "loki", "grafana"})
 		require.NoError(t, err)
 		require.Len(t, manifestPaths, 3, "Should have 3 services")
 		require.Contains(t, manifestPaths, "cert-manager", "Should contain cert-manager")
 		require.Contains(t, manifestPaths, "loki", "Should contain loki")
-		require.Contains(t, manifestPaths, "keycloak", "Should contain keycloak")
+		require.Contains(t, manifestPaths, "grafana", "Should contain grafana")
 	})
 
 	// Test 4: No filter (nil)

@@ -437,8 +437,9 @@ func doesServiceProviderRequireSecrets(serviceType string, providerType string) 
 		// designate doesn't require service-specific secrets
 		return dnsProvider != "designate"
 	case "keycloak":
-		// Always requires admin password
-		return true
+		// Keycloak requires no secret: admin user comes from the realm-import,
+		// DB creds from postgres-operator.
+		return false
 	case "loki", "tempo", "velero":
 		// Always require storage credentials
 		return true
