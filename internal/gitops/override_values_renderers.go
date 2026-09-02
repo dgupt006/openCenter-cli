@@ -398,14 +398,16 @@ storage:
 `
 
 const mimirTemplate = `{{- $openstack := .OpenCenter.Infrastructure.Cloud.OpenStack -}}
-{{- $kafkaNamespace := "strimzi" -}}
-{{- if index .OpenCenter.Services "kafka-cluster" -}}
-{{- with (index .OpenCenter.Services "kafka-cluster").Namespace -}}{{- $kafkaNamespace = . -}}{{- end -}}
-{{- end -}}
 global:
     dnsService: coredns
 minio:
     enabled: false
+{{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
+# External kafka-cluster provides ingest storage, so disable the chart's
+# bundled demo Kafka broker (chart default is kafka.enabled: true).
+kafka:
+    enabled: false
+{{- end }}
 mimir:
     structuredConfig:
         blocks_storage:
@@ -422,7 +424,10 @@ mimir:
 {{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
         ingest_storage:
             kafka:
-                address: kafka-cluster-kafka-brokers.{{ $kafkaNamespace }}.svc.cluster.local:9092
+                # kafka-cluster always deploys to the kafka-system namespace
+                # (hardcoded in its kustomization/flux templates); the
+                # kafka-cluster.namespace config field is not honored there.
+                address: kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092
                 topic: mimir-ingest
                 auto_create_topic_enabled: true
                 auto_create_topic_default_partitions: 1000

@@ -786,7 +786,10 @@ func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
 	case "olm":
 		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "olm"}}, true
 	case "kafka-cluster":
-		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "strimzi"}}, true
+		// NOTE: the namespace field is not honored for kafka-cluster — its
+		// kustomization and flux templates hardcode the kafka-system namespace.
+		// The default is set to match that real deployment location.
+		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "kafka-system"}}, true
 	case "vsphere-csi":
 		return &services.VSphereCSIConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "vmware-system-csi"}}, true
 	case "weave-gitops":
