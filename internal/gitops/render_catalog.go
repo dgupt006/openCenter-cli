@@ -196,10 +196,10 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			OverrideValuesRenderer: staticRenderer(otelTemplate),
 		},
 		{
-			ServiceName: "sealed-secrets", DefaultNamespace: "sealed-secrets", HasOverrideValues: true,
+			ServiceName: "sealed-secrets", DefaultNamespace: "sealed-secrets", HasOverrideValues: true, NamespaceStage: true,
 			SourceName: "opencenter-sealed-secrets", SourceGroup: "sealed-secrets", EmitSource: true,
 			BasePath: "applications/base/services/sealed-secrets", OverrideValues: "keyrenewperiod: \"0\"\n",
-			ExtraDependencies: []string{"sealed-secrets-override"}, OverrideDependsOn: []string{"sources"},
+			ExtraDependencies: []string{"sealed-secrets-override"}, OverrideDependsOn: []string{"sources", "sealed-secrets-namespace"},
 		},
 	}, dynamicPlanners: []catalogDynamicPlanner{
 		{descriptorName: "service-cert-manager", planner: planCertManagerDynamicActions},
