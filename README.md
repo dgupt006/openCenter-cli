@@ -218,6 +218,7 @@ complete site map.
 - [Providers](docs/reference/providers.md)
 - [Audit Signing Key](docs/reference/audit-key.md)
 - [Mise Tasks](docs/reference/mise-tasks.md)
+- [GitHub Actions Workflows](docs/reference/github-actions-workflows.md)
 
 ### 🌐 Providers
 - [Providers Overview](docs/providers/README.md)

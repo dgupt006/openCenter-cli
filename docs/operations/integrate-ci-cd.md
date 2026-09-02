@@ -11,7 +11,7 @@ tags: [ci-cd, github-actions, gitlab-ci, jenkins, automation]
 
 **Purpose:** For DevOps engineers, shows how to integrate openCenter into CI/CD pipelines for automated cluster deployment and testing.
 
-This guide covers integrating openCenter with popular CI/CD platforms (GitHub Actions, GitLab CI, Jenkins) for automated cluster lifecycle management.
+This guide covers end-user CI/CD integration patterns for GitHub Actions, GitLab CI, and Jenkins. The YAML examples are illustrative and are not the repository's own automation. For the authoritative workflow matrix, runner contracts, permissions, tool pins, and release outputs in this repository, see [GitHub Actions Workflows](../reference/github-actions-workflows.md). The OpenStack E2E section below remains a separate design because it requires cloud-network access and credentials.
 
 ## Prerequisites
 

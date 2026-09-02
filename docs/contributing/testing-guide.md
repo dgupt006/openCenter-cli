@@ -59,11 +59,11 @@ mise run test-properties
 ### Run Specific Test Suites
 
 ```bash
-# Security tests only
-mise run test-security
+# Vulnerability analysis
+mise run govulncheck
 
-# Integration tests only
-mise run test-integration
+# Integration checks
+mise run integration
 
 # V2 configuration tests only
 mise run test-v2
@@ -465,21 +465,25 @@ func TestSomething(t *testing.T) {
 
 ## Continuous Integration
 
-Tests run automatically on:
+The repository's current CI coverage is defined by the workflows under `.github/workflows/`:
 
-* Every pull request
-* Every commit to main branch
-* Nightly builds
+* `test.yml` runs on pull requests and pushes to `main`. Its `go-test` job runs the internal and command package suite with the race detector and runs `go vet ./...`; its independent `property-tests` job runs tests selected by `TestProperty`.
+* `pre-commit.yaml` runs the manual-stage pre-commit hooks for changed files on every pull request using Python 3.10.
+* `vulncheck.yml` runs `govulncheck ./...` on pull requests, on a Monday 06:00 UTC schedule, and by manual dispatch.
+* `docs-p0.yml` runs for pull requests changing Markdown, but its referenced `scripts/docs/p0-docs-check.sh` is absent in the current repository. Do not claim the Docs P0 check passes until that limitation is resolved.
+* `deploy-kind.yml` is a manually dispatched disposable Kind/Gitea workflow, not a per-commit test job.
 
-CI runs:
+The CI workflows do not run the BDD suite, the full integration task, documentation generator checks, or the full `mise run test:all` task. Run those locally when the change requires them:
 
 ```bash
-mise run build
-mise run test
 mise run godog
+mise run integration
+mise run test-docs
+mise run test-docs-idempotency
+mise run test:all
 ```
 
-All tests must pass before merge.
+For the complete workflow matrix, runner contract, permissions, tool pins, and artifact behavior, see [GitHub Actions Workflows](../reference/github-actions-workflows.md).
 
 ---
 
@@ -487,11 +491,9 @@ All tests must pass before merge.
 
 This documentation is based on the following repository files:
 
-* Test execution: `.mise.toml:64-67,69-72,74-77,79-82,84-87` (test tasks)
-* Testing strategy: `.kiro/steering/tech.md:125-135`
-* BDD tests: `tests/features/*.feature` (20+ feature files)
-* Step definitions: `tests/features/steps/` directory
-* Unit tests: `internal/**/*_test.go` (276 test files)
-* Property tests: `internal/**/*_property_test.go` files
-* Test utilities: `internal/testutil/` directory
-* Pre-commit workflow: `.kiro/steering/tech.md:103-118`
+* Test tasks: `.mise.toml`
+* CI workflows: `.github/workflows/test.yml`, `.github/workflows/pre-commit.yaml`, `.github/workflows/vulncheck.yml`, `.github/workflows/docs-p0.yml`
+* BDD features: `tests/features/*.feature`
+* BDD step definitions: `tests/features/steps/`
+* Unit and property tests: `internal/**/*_test.go`, `cmd/**/*_test.go`
+* Test utilities: `internal/testutil/`

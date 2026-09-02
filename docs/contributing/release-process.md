@@ -11,6 +11,8 @@ tags: [contributing]
 
 **Purpose:** For maintainers, shows how to create and publish releases of openCenter-cli.
 
+The exact GitHub Actions triggers, permissions, runner requirements, and release assets are documented in [GitHub Actions Workflows](../reference/github-actions-workflows.md).
+
 ## Prerequisites
 
 Before creating a release, you need:
@@ -90,29 +92,25 @@ mise run godog
 # Schema verification
 mise run schema-verify
 
-# Security tests
-mise run test-security
+# Vulnerability analysis
+mise run govulncheck
 
-# Integration tests
-mise run test-integration
+# Integration checks
+mise run integration
 ```
 
-All tests must pass before proceeding.
+All required checks must pass before proceeding.
 
 ## Step 2: Push The Release Tag
 
-The GitHub Actions release workflow is the source of truth for published artifacts.
-Pushing the tag also runs the container image workflow, which publishes the
-multi-architecture CLI image to `ghcr.io/opencenter-cloud/opencenter-cli`.
+The GitHub Actions release workflow is the source of truth for published artifacts. Pushing a `v*` tag starts `.github/workflows/release.yml`; a manual dispatch is also available.
 
 ```bash
 git tag -a v1.2.0 -m "Release 1.2.0"
 git push origin v1.2.0
 ```
 
-The tag-triggered workflow builds the supported Linux and macOS binaries, generates
-`checksums.txt`, signs the release assets with cosign keyless signing, emits an SBOM,
-and creates the GitHub release automatically.
+The workflow builds four CLI binaries and four `opencenter-local` plugin binaries for Linux amd64/arm64 and macOS amd64/arm64. It generates `checksums.txt`, signs every binary and the checksum file with keyless cosign, generates `opencenter.spdx.json` with Syft, and creates the GitHub release.
 
 ## Step 3: Watch The Release Workflow
 
@@ -129,16 +127,12 @@ gh run watch
 
 Verify the GitHub release contains:
 
-* the four platform binaries
+* the four CLI binaries and four `opencenter-local` plugin binaries
 * `checksums.txt`
-* cosign signature and certificate files
+* a cosign `.bundle` file next to each signed binary and `checksums.txt`
 * `opencenter.spdx.json`
 
-Verify the GitHub Container Registry package contains:
-
-* `ghcr.io/opencenter-cloud/opencenter-cli:1.2.0`
-* `ghcr.io/opencenter-cloud/opencenter-cli:1.2`
-* the corresponding `sha-*` tag
+The workflow does not publish a container image or GHCR package.
 
 ### Local Dry Run Helper
 
@@ -217,8 +211,7 @@ Before releasing, verify:
 - [ ] Release notes generated (`mise run publish 1.2.0`)
 - [ ] Binaries tested on target platforms
 - [ ] Git tag created and pushed
-- [ ] GitHub release created with binaries
-- [ ] GHCR image published for the release tag
+- [ ] Cosign `.bundle` files and SPDX JSON attached
 - [ ] Release verified by downloading and testing
 - [ ] Documentation updated with new version
 - [ ] Release announced to team

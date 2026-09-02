@@ -27,10 +27,14 @@ All build configuration is in `.mise.toml`:
 
 ```toml
 [tools]
-golang = "1.26.3"
+golang = "1.26.6"
+golangci-lint = "2.11.4"
 kubectl = "latest"
 kind = "latest"
 helm = "latest"
+sops = "3.13.3"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
+"aqua:gitleaks/gitleaks" = "latest"
 
 [env]
 KIND_EXPERIMENTAL_PROVIDER = "podman"
@@ -38,21 +42,20 @@ CONTAINER_RUNTIME = "podman"
 
 [tasks]
 # Task definitions
-build = '''#!/usr/bin/env bash
-...
-'''
+build = ["mise run build-cli", "mise run build-local-plugin"]
 ```
 
 ## Tool Management
 
 ### Installed Tools
 
-Mise manages these tools:
+Mise manages these declared tools:
 
-* **Go 1.26.3** - Primary language
-* **kubectl** - Kubernetes CLI
-* **kind** - Local Kubernetes clusters
-* **helm** - Kubernetes package manager
+* **Go 1.26.6** - Primary language
+* **golangci-lint 2.11.4** - Go linting
+* **kubectl**, **kind**, and **helm** - Kubernetes and local-cluster tooling; currently declared as `latest`
+* **SOPS 3.13.3** - Secret encryption tooling
+* **govulncheck** and **gitleaks** - Vulnerability and secret scanning; currently declared as `latest`
 
 ### Install Tools
 
@@ -60,25 +63,16 @@ Mise manages these tools:
 # Install all tools
 mise install
 
-# Install specific tool
-mise install go
+# Install a declared tool
+mise install golang
 
-# Update tool
-mise install go@latest
-
-# List installed tools
+# List installed tools and versions
 mise list
 ```
 
 ### Tool Versions
 
-Tool versions are pinned in `.mise.toml` for reproducibility:
-
-```toml
-[tools]
-golang = "1.26.3"  # Specific version
-kubectl = "latest" # Always latest
-```
+The Go and SOPS versions are pinned in `.mise.toml`; kubectl, Kind, Helm, govulncheck, and gitleaks currently use `latest`. Workflow-specific pins take precedence for that workflow; for example, `.github/workflows/deploy-kind.yml` pins Kind `v0.29.0`, kubectl `v1.35.4`, Helm `v3.19.0`, Flux `v2.6.4`, and SOPS `3.13.3`. See [GitHub Actions Workflows](../reference/github-actions-workflows.md) for the complete CI matrix.
 
 ## Task System
 
@@ -88,20 +82,25 @@ Tasks are organized by function:
 
 **Build tasks:**
 
-* `build` - Build binary with version info
+* `build` - Build the CLI and local workflow plugin
+* `build-cli` - Build the CLI with version info
+* `build-local-plugin` - Build the local workflow plugin
 * `build-linux` - Build for Linux
 * `build-all` - Build for all platforms
-* `release` - Build release binaries
+* `release` - Build versioned release binaries
 * `publish` - Generate release notes
 
 **Test tasks:**
 
 * `test` - Run unit tests
-* `godog` - Run BDD tests
-* `godog-wip` - Run WIP scenarios
+* `test-race` - Run the CI package set with the race detector
+* `test-build` - Compile every Go package
+* `godog` - Run non-`@wip` BDD scenarios
+* `godog-wip` - Run `@wip` BDD scenarios
 * `test-properties` - Run property tests
-* `test-security` - Run security tests
-* `test-integration` - Run integration tests
+* `integration` - Run selected integration checks
+* `govulncheck` - Run Go vulnerability analysis
+* `gitleaks` - Scan repository history for potential secrets
 
 **Code quality tasks:**
 
@@ -123,6 +122,9 @@ Tasks are organized by function:
 **Documentation tasks:**
 
 * `docs-gen` - Generate CLI documentation
+* `test-docs` - Run documentation-generator tests
+* `test-docs-idempotency` - Verify stable documentation generation
+* `test-docs-frontmatter-remediation` - Audit the documented remediation corpus
 
 **Cleanup tasks:**
 
@@ -315,7 +317,7 @@ echo "Running my custom task..."
 
 ### Task Naming Conventions
 
-* Use kebab-case: `test-integration`, `build-linux`
+* Use kebab-case: `test-race`, `build-linux`
 * Prefix related tasks: `gitea-setup`, `gitea-configure`
 * Use descriptive names: `export-aws-creds`, `unset-os-creds`
 

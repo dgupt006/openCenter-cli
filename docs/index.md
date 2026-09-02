@@ -68,7 +68,7 @@ Lookup material -- structured, complete, scan-friendly.
 | --- | --- |
 | CLI and configuration | [CLI Commands](reference/cli-commands.md)<br> [Configuration Schema](reference/configuration-schema.md)<br> [Configuration Precedence](reference/configuration-precedence.md)<br> [Default Values](reference/default-values.md)<br> [Environment Variables](reference/environment-variables.md)<br> [Exit Codes](reference/exit-codes.md)<br> [File Locations](reference/file-locations.md) |
 | Platform and providers | [Platform Services](reference/platform-services.md)<br> [Providers](reference/providers.md)<br> [Validation Rules](reference/validation-rules.md) |
-| Security and tooling | [Audit Signing Key](reference/audit-key.md)<br> [Mise Tasks](reference/mise-tasks.md) |
+| Security and tooling | [Audit Signing Key](reference/audit-key.md)<br> [Mise Tasks](reference/mise-tasks.md)<br> [GitHub Actions Workflows](reference/github-actions-workflows.md) |
 
 ## Concepts
 
