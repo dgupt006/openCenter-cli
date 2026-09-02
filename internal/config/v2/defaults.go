@@ -780,7 +780,7 @@ func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
 	case "velero":
 		return &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero"}}, true
 	case "harbor":
-		return &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}, StorageType: "s3", RegistryVolumeSize: 100, JobserviceVolumeSize: 5, DatabaseVolumeSize: 10, RedisVolumeSize: 5, TrivyVolumeSize: 5}, true
+		return &services.HarborConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "harbor"}, StorageType: "s3", RegistryVolumeSize: 100, JobserviceVolumeSize: 10, DatabaseVolumeSize: 10, RedisVolumeSize: 10, TrivyVolumeSize: 10}, true
 	case "metallb":
 		return &services.MetalLBConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "metallb-system"}}, true
 	case "olm":

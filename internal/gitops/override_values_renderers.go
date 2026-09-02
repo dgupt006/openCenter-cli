@@ -528,16 +528,16 @@ persistence:
             storageClass: {{ $storageClass }}
         jobservice:
             jobLog:
-                size: {{ $harbor.JobserviceVolumeSize | default 5 }}Gi
+                size: {{ $harbor.JobserviceVolumeSize | default 10 }}Gi
                 storageClass: {{ $storageClass }}
         database:
             size: {{ $harbor.DatabaseVolumeSize | default 10 }}Gi
             storageClass: {{ $storageClass }}
         redis:
-            size: {{ $harbor.RedisVolumeSize | default 5 }}Gi
+            size: {{ $harbor.RedisVolumeSize | default 10 }}Gi
             storageClass: {{ $storageClass }}
         trivy:
-            size: {{ $harbor.TrivyVolumeSize | default 5 }}Gi
+            size: {{ $harbor.TrivyVolumeSize | default 10 }}Gi
             storageClass: {{ $storageClass }}
     # Primary image blobs use object storage; registry PVC is cache/state, not blob storage.
     imageChartStorage:
