@@ -435,6 +435,20 @@ mimir:
                 auto_create_topic_enabled: true
                 auto_create_topic_default_partitions: 1000
 {{- end }}
+# Chart defaults (1-2Gi) are below this region's Cinder minimum volume size
+# (10Gi for the "Standard" volume type), which fails PVC provisioning outright.
+ingester:
+    persistentVolume:
+        size: 10Gi
+store_gateway:
+    persistentVolume:
+        size: 10Gi
+compactor:
+    persistentVolume:
+        size: 10Gi
+alertmanager:
+    persistentVolume:
+        size: 10Gi
 `
 
 const otelTemplate = `collectors:
