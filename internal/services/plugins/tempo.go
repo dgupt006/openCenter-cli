@@ -55,14 +55,15 @@ func (p *TempoPlugin) validate(config interface{}) error {
 			return fmt.Errorf("storage_type must be 's3' or 'swift', got '%s'", cfg.StorageType)
 		}
 
-		// Swift-specific validation
+		// Swift is not supported by Tempo. Tempo's binary has no Swift storage
+		// backend upstream (it supports only S3/S3-compatible, GCS, and Azure Blob)
+		// and rejects it at startup with "unknown backend swift". Fail fast with a
+		// clear message rather than rendering a config Tempo will crash on. The
+		// swift_* fields and the enum value are retained for backward-compatibility
+		// (no schema removal); use storage_type: s3 against the Swift S3-compatible
+		// endpoint instead.
 		if cfg.StorageType == "swift" {
-			if cfg.SwiftAuthURL == "" {
-				return fmt.Errorf("swift_auth_url is required when storage_type is 'swift'")
-			}
-			if cfg.SwiftContainerName == "" {
-				return fmt.Errorf("swift_container_name is required when storage_type is 'swift'")
-			}
+			return fmt.Errorf("tempo storage_type 'swift' is not supported: Tempo has no Swift storage backend upstream (supports s3/s3-compatible, gcs, azure). Use storage_type: s3 (e.g. against the Swift S3-compatible endpoint)")
 		}
 
 		// S3-specific validation

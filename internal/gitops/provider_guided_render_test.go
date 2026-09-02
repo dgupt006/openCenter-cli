@@ -228,37 +228,40 @@ func renderOverrideValues(t *testing.T, cfg v2.Config, serviceName string) strin
 	return values
 }
 
-func TestRenderClusterAppsTempoSwift(t *testing.T) {
+func TestRenderClusterAppsTempoS3(t *testing.T) {
 	dst := t.TempDir()
-	cfg := newDefault("tempo-swift-guided")
+	cfg := newDefault("tempo-s3-guided")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
 	cfg.OpenCenter.Services["tempo"] = &configservices.TempoConfig{
-		BaseConfig:                   configservices.BaseConfig{Enabled: true, Namespace: "observability"},
-		StorageType:                  "swift",
-		BucketName:                   "tempo-container",
-		SwiftAuthURL:                 "https://identity.api.example.com/v3",
-		SwiftRegion:                  "SJC3",
-		SwiftAuthVersion:             3,
-		SwiftApplicationCredentialID: "app-cred-id",
-		SwiftContainerName:           "tempo-container",
-		SwiftUserDomainName:          "rackspace",
-		SwiftDomainName:              "rackspace",
+		BaseConfig:  configservices.BaseConfig{Enabled: true, Namespace: "observability"},
+		StorageType: "s3",
+		BucketName:  "tempo-container",
+		// Fully-qualified endpoint; template must strip the scheme (OCTR: minio-go
+		// rejects endpoints with a scheme/path).
+		S3Endpoint: "https://s3.example.com",
+		S3Region:   "SJC3",
 	}
-	cfg.Secrets.Tempo.SwiftApplicationCredentialSecret = "swift-secret"
+	cfg.Secrets.Tempo.AccessKey = "tempo-s3-access"
+	cfg.Secrets.Tempo.SecretKey = "tempo-s3-secret"
 
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("RenderClusterApps() error = %v", err)
 	}
 
 	overrideValues := mustReadFile(t, filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "tempo", "helm-values", "override-values.yaml"))
-	if !strings.Contains(overrideValues, "backend: swift") {
-		t.Fatalf("expected swift backend in Tempo values:\n%s", overrideValues)
+	if !strings.Contains(overrideValues, "backend: s3") {
+		t.Fatalf("expected s3 backend in Tempo values:\n%s", overrideValues)
 	}
-	if !strings.Contains(overrideValues, "application_credential_secret: swift-secret") {
-		t.Fatalf("expected swift application credential secret in Tempo values:\n%s", overrideValues)
+	// 5c: endpoint must have the scheme stripped (bare host, no https://).
+	if !strings.Contains(overrideValues, "endpoint: s3.example.com") {
+		t.Fatalf("expected scheme-stripped s3 endpoint in Tempo values:\n%s", overrideValues)
 	}
-	if !strings.Contains(overrideValues, "container_name: tempo-container") {
-		t.Fatalf("expected swift container name in Tempo values:\n%s", overrideValues)
+	if strings.Contains(overrideValues, "endpoint: https://") {
+		t.Fatalf("did not expect fully-qualified https endpoint in Tempo values:\n%s", overrideValues)
+	}
+	// 5a: usage-report must be disabled via the chart's top-level key.
+	if !strings.Contains(overrideValues, "reportingEnabled: false") {
+		t.Fatalf("expected reportingEnabled: false in Tempo values:\n%s", overrideValues)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestTempoPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("validation - valid swift config", func(t *testing.T) {
+	t.Run("validation - swift is rejected (unsupported by Tempo)", func(t *testing.T) {
 		plugin := NewTempoPlugin()
 		cfg := &services.TempoConfig{
 			BaseConfig: services.BaseConfig{
@@ -50,8 +50,8 @@ func TestTempoPlugin(t *testing.T) {
 		}
 
 		err := plugin.Validate(cfg)
-		if err != nil {
-			t.Errorf("expected no error, got: %v", err)
+		if err == nil {
+			t.Error("expected error: Tempo does not support storage_type 'swift', got nil")
 		}
 	})
 
@@ -102,7 +102,7 @@ func TestTempoPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("validation - missing swift auth url", func(t *testing.T) {
+	t.Run("validation - swift rejected even with partial fields set", func(t *testing.T) {
 		plugin := NewTempoPlugin()
 		cfg := &services.TempoConfig{
 			BaseConfig: services.BaseConfig{
@@ -114,23 +114,7 @@ func TestTempoPlugin(t *testing.T) {
 
 		err := plugin.Validate(cfg)
 		if err == nil {
-			t.Error("expected error for missing swift_auth_url, got nil")
-		}
-	})
-
-	t.Run("validation - missing swift container name", func(t *testing.T) {
-		plugin := NewTempoPlugin()
-		cfg := &services.TempoConfig{
-			BaseConfig: services.BaseConfig{
-				Enabled: true,
-			},
-			StorageType:  "swift",
-			SwiftAuthURL: "https://keystone.example.com/v3",
-		}
-
-		err := plugin.Validate(cfg)
-		if err == nil {
-			t.Error("expected error for missing swift_container_name, got nil")
+			t.Error("expected error: swift unsupported by Tempo, got nil")
 		}
 	})
 

@@ -125,7 +125,7 @@ func TestValidateOptionsMappings(t *testing.T) {
 	for _, tc := range []struct {
 		service, backend string
 		wantErr          bool
-	}{{"loki", "swift", false}, {"loki", "s3", false}, {"tempo", "swift", false}, {"tempo", "s3", false}, {"harbor", "s3", false}, {"harbor", "swift", true}, {"etcd-backup", "s3", false}, {"velero", "s3", false}, {"velero", "swift", true}, {"other", "s3", true}} {
+	}{{"loki", "swift", false}, {"loki", "s3", false}, {"tempo", "swift", true}, {"tempo", "s3", false}, {"harbor", "s3", false}, {"harbor", "swift", true}, {"etcd-backup", "s3", false}, {"velero", "s3", false}, {"velero", "swift", true}, {"other", "s3", true}} {
 		err := ValidateOptions(Options{Service: tc.service, Backend: tc.backend, Cluster: "prod"})
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s=%s error=%v, wantErr=%v", tc.service, tc.backend, err, tc.wantErr)
@@ -531,9 +531,9 @@ func TestStorageResultFormatsMaskCredentialValues(t *testing.T) {
 	}
 }
 
-func TestPlanIsolatesAllSixMappings(t *testing.T) {
+func TestPlanIsolatesAllValidMappings(t *testing.T) {
 	cases := []struct{ service, backend string }{
-		{"loki", "swift"}, {"loki", "s3"}, {"tempo", "swift"},
+		{"loki", "swift"}, {"loki", "s3"},
 		{"tempo", "s3"}, {"etcd-backup", "s3"}, {"velero", "s3"},
 	}
 	for _, tc := range cases {

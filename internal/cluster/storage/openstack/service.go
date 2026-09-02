@@ -139,8 +139,11 @@ func ValidateOptions(opts Options) error {
 	if opts.Backend != "swift" && opts.Backend != "s3" {
 		return fmt.Errorf("backend must be swift or s3")
 	}
+	// Tempo has no Swift storage backend upstream (rejects "unknown backend swift"
+	// at startup), so tempo is S3-only here — consistent with the tempo plugin
+	// validator. Loki supports both. Harbor/etcd-backup/velero are S3-only.
 	allowed := map[string]map[string]bool{
-		"loki": {"swift": true, "s3": true}, "tempo": {"swift": true, "s3": true},
+		"loki": {"swift": true, "s3": true}, "tempo": {"s3": true},
 		"harbor": {"s3": true}, "etcd-backup": {"s3": true}, "velero": {"s3": true},
 	}
 	if !allowed[opts.Service][opts.Backend] {
