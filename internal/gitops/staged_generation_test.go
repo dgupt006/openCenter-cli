@@ -399,8 +399,16 @@ func TestGenerateClusterTreeAllowsSecretsSyncedArtifactsOnRegenerate(t *testing.
 		{Path: "services/cert-manager/secret.yaml"},
 	})
 
-	// Second generate must succeed: the secret file is owned by secrets sync, not
-	// user-authored, so the complete-tree preflight must not refuse.
+	// secrets sync also leaves a transient lock file in the overlay that it does
+	// not always clean up; the preflight must exempt it too.
+	overlayDir := filepath.Join(repo, "applications", "overlays", cfg.ClusterName())
+	if err := os.WriteFile(filepath.Join(overlayDir, ".opencenter-secrets.lock"), nil, 0o600); err != nil {
+		t.Fatalf("write sync lock file: %v", err)
+	}
+
+	// Second generate must succeed: the secret file, ledger, and lock file are all
+	// owned by secrets sync, not user-authored, so the complete-tree preflight must
+	// not refuse.
 	if _, _, err := GenerateClusterTree(context.Background(), cfg, options); err != nil {
 		t.Fatalf("regenerate after secrets sync error = %v (secret.yaml misclassified as user-authored)", err)
 	}

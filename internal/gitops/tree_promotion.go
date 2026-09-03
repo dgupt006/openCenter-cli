@@ -13,6 +13,11 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 )
 
+// secretsSyncLockFilename mirrors the secrets package's syncLockFilename (kept as
+// a local literal to avoid an import cycle). It is a transient lock written by
+// `secrets sync` and is not part of the generator-managed tree.
+const secretsSyncLockFilename = ".opencenter-secrets.lock"
+
 type generatedTreeFile struct {
 	data []byte
 	mode os.FileMode
@@ -489,9 +494,11 @@ func scanLiveGeneratedTree(root string, roots, rootFiles map[string]bool) (map[s
 			return fs.SkipDir
 		}
 		// Skip generator/tooling state files that are not part of the managed tree:
-		// the generated-tree manifest, generated backups, and the secret-artifacts
-		// ownership ledger (written by `secrets sync`, not the generator).
-		if filepath.Base(rel) == GeneratedManifestFile || filepath.Base(rel) == secretartifacts.OwnershipStateFilename || isGeneratedBackupPath(rel) {
+		// the generated-tree manifest, generated backups, the secret-artifacts
+		// ownership ledger, and the secrets-sync lock file (all written by tooling
+		// such as `secrets sync`, not the generator).
+		base := filepath.Base(rel)
+		if base == GeneratedManifestFile || base == secretartifacts.OwnershipStateFilename || base == secretsSyncLockFilename || isGeneratedBackupPath(rel) {
 			return nil
 		}
 		if !isGeneratedTreeNamespace(rel, roots, rootFiles) {
