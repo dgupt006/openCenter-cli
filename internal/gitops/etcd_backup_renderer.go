@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"path/filepath"
+	"strings"
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
@@ -49,6 +50,7 @@ spec:
     name: flux-system
     namespace: flux-system
   path: ./applications/overlays/{{ .ClusterName }}/services/etcd-backup
+  targetNamespace: {{ .Namespace }}
   prune: true
   wait: true
   commonMetadata:
@@ -64,6 +66,7 @@ type etcdBackupKustomizationData struct {
 
 type etcdBackupFluxData struct {
 	ClusterName string
+	Namespace   string
 }
 
 // planEtcdBackupDynamicActions emits the service kustomization separately from
@@ -85,10 +88,15 @@ func planEtcdBackupDynamicActions(cfg v2.Config, artifacts []secretartifacts.Art
 		return nil, err
 	}
 
+	namespace := "kube-system"
+	if base := extractBaseConfig(service); base != nil && strings.TrimSpace(base.Namespace) != "" {
+		namespace = strings.TrimSpace(base.Namespace)
+	}
+
 	fluxContent, err := renderInlineTemplateContent(
 		etcdBackupFluxTemplate,
 		"etcd-backup.yaml",
-		etcdBackupFluxData{ClusterName: cfg.OpenCenter.Cluster.ClusterName},
+		etcdBackupFluxData{ClusterName: cfg.OpenCenter.Cluster.ClusterName, Namespace: namespace},
 	)
 	if err != nil {
 		return nil, err

@@ -178,6 +178,10 @@ func TestEtcdBackupWiredIntoFluxAggregator(t *testing.T) {
 	require.Contains(t, string(fluxBridge), "kind: Kustomization")
 	require.Contains(t, string(fluxBridge), "name: etcd-backup")
 	require.Contains(t, string(fluxBridge), "services/etcd-backup")
+	// The Flux Kustomization must set targetNamespace, or the namespace-less
+	// CronJob/ConfigMap fail to apply. etcdBackupTestConfig uses kube-system.
+	require.Contains(t, string(fluxBridge), "targetNamespace: kube-system",
+		"etcd-backup Flux Kustomization must set targetNamespace so the CronJob/ConfigMap apply")
 
 	// The aggregator must reference it, or Flux never reconciles it.
 	aggregator, err := os.ReadFile(filepath.Join(clusterRoot, "services", "fluxcd", "kustomization.yaml"))
