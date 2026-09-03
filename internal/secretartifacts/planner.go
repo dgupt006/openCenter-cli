@@ -61,7 +61,7 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 	// DB creds from postgres-operator), so materializing services/keycloak/secret.yaml
 	// only created an orphaned artifact.
 	fixed := []source{
-		{"cert-manager", cfg.Secrets.CertManager}, {"loki", cfg.Secrets.Loki},
+		{"cert-manager", certManagerPayload(cfg)}, {"loki", cfg.Secrets.Loki},
 		{"headlamp", cfg.Secrets.Headlamp},
 		{"weave-gitops", cfg.Secrets.WeaveGitOps}, {"grafana", cfg.Secrets.Grafana},
 		{"tempo", cfg.Secrets.Tempo}, {"alert-proxy", cfg.Secrets.AlertProxy},
@@ -193,6 +193,32 @@ func veleroPayload(cfg *v2.Config) map[string]interface{} {
 		return nil
 	}
 	return map[string]interface{}{"cloud": fmt.Sprintf("[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n", access, secret)}
+}
+
+// certManagerPayload emits only the flat, string-valued legacy cert-manager
+// secret fields into the generic services/cert-manager/secret.yaml. The
+// multi-credential AWS/Cloudflare maps (CertManagerSecrets.AWS/.Cloudflare) are
+// deliberately excluded: they are nested structures that are NOT valid
+// stringData (Kubernetes requires flat string values) and are already rendered
+// as flat per-credential Secrets by the cert-manager renderer
+// (opencenter-aws-credentials-secret-<name>, etc.). Marshaling the whole
+// CertManagerSecrets struct here previously produced a nested stringData.aws map
+// that failed dry-run.
+func certManagerPayload(cfg *v2.Config) map[string]interface{} {
+	payload := map[string]interface{}{}
+	if v := strings.TrimSpace(cfg.Secrets.CertManager.AWSAccessKey); v != "" {
+		payload["aws_access_key"] = v
+	}
+	if v := strings.TrimSpace(cfg.Secrets.CertManager.AWSSecretAccessKey); v != "" {
+		payload["aws_secret_access_key"] = v
+	}
+	if v := strings.TrimSpace(cfg.Secrets.CertManager.CloudflareAPIToken); v != "" {
+		payload["cloudflare_api_token"] = v
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	return payload
 }
 
 func normalizeServiceName(raw string) string {
