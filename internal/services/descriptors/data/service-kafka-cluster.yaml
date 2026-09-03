@@ -5,7 +5,7 @@ aggregate_targets:
   - services-fluxcd-aggregate
   - services-sources-aggregate
 files:
-  - template: services/kafka-cluster/kafka-persistent.yaml
+  - template: services/kafka-cluster/kafka-persistent.yaml.tpl
   - template: services/kafka-cluster/kustomization.yaml
   - template: services/sources/opencenter-strimzi-kafka-operator.yaml.tpl
   - template: services/fluxcd/strimzi-kafka-operator.yaml.tpl

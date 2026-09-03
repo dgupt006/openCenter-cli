@@ -14,6 +14,10 @@ spec:
       - id: 0
         type: persistent-claim
         size: 10Gi
+        # Pin the storage class so the PVC never relies on the ambiguous cluster
+        # default during the bootstrap window (transient Longhorn default / Cinder
+        # SC not yet created), which would bind it to the wrong backend permanently.
+        class: {{ .OpenCenter.Infrastructure.Storage.DefaultStorageClass }}
         kraftMetadata: shared
         deleteClaim: false
 ---
@@ -33,6 +37,7 @@ spec:
       - id: 0
         type: persistent-claim
         size: 20Gi
+        class: {{ .OpenCenter.Infrastructure.Storage.DefaultStorageClass }}
         kraftMetadata: shared
         deleteClaim: false
 ---

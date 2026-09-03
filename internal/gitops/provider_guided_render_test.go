@@ -252,6 +252,35 @@ func TestRenderObservabilityPVCStorageClassPinned(t *testing.T) {
 			t.Fatalf("expected Mimir %s to pin storageClass %q:\n%s", component, sc, mimirValues)
 		}
 	}
+
+	// kube-prometheus-stack pins storageClassName on Prometheus, Alertmanager, and
+	// Grafana PVCs (they default to the infra SC when no per-component class is set).
+	kpsValues := renderOverrideValues(t, cfg, "kube-prometheus-stack")
+	if got := strings.Count(kpsValues, "storageClassName: "+sc); got < 3 {
+		t.Fatalf("expected kube-prometheus-stack to pin storageClassName %q on Prometheus/Alertmanager/Grafana (>=3), got %d:\n%s", sc, got, kpsValues)
+	}
+}
+
+// TestRenderKafkaClusterPVCStorageClassPinned verifies the kafka-cluster Strimzi
+// persistent-claim volumes pin an explicit storage class, so early Kafka PVCs
+// never mis-bind to Longhorn during the bootstrap window.
+func TestRenderKafkaClusterPVCStorageClassPinned(t *testing.T) {
+	cfg := newDefault("kafka-storageclass-guided")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+	cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig).Enabled = true
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("RenderClusterApps: %v", err)
+	}
+
+	sc := cfg.OpenCenter.Infrastructure.Storage.DefaultStorageClass
+	kafkaPVC := mustReadFile(t, filepath.Join(
+		cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays",
+		cfg.ClusterName(), "services", "kafka-cluster", "kafka-persistent.yaml"))
+
+	// Both node pools (controller 10Gi, broker 20Gi) must carry the pinned class.
+	if got := strings.Count(kafkaPVC, "class: "+sc); got < 2 {
+		t.Fatalf("expected kafka-cluster to pin storage class %q on both persistent-claim volumes (>=2), got %d:\n%s", sc, got, kafkaPVC)
+	}
 }
 
 func renderOverrideValues(t *testing.T, cfg v2.Config, serviceName string) string {
