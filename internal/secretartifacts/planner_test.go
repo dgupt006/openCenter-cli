@@ -68,7 +68,7 @@ func TestPlanDefaultGrafanaSecretContainsUserAndPassword(t *testing.T) {
 func TestPlanIncludesEtcdBackupAndVeleroWorkloadSecrets(t *testing.T) {
 	cfg := &v2.Config{
 		OpenCenter: v2.OpenCenterConfig{Services: map[string]any{
-			"etcd-backup": &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true}, S3Host: "s3.example", S3Region: "RegionOne"},
+			"etcd-backup": &services.EtcdBackupConfig{BaseConfig: services.BaseConfig{Enabled: true}, S3Endpoint: "https://s3.example/v1", S3BucketName: "etcd-backups", S3Region: "RegionOne"},
 			"velero":      &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true}},
 		}},
 		Secrets: v2.SecretsConfig{
@@ -84,7 +84,10 @@ func TestPlanIncludesEtcdBackupAndVeleroWorkloadSecrets(t *testing.T) {
 	}
 	etcd := byService["etcd-backup"]
 	require.Equal(t, "etcd-access", etcd.Payload["ACCESS_KEY"])
-	require.Equal(t, "s3.example", etcd.Payload["S3_HOST"])
+	require.Equal(t, "https://s3.example/v1", etcd.Payload["S3_HOST"])
+	require.Equal(t, "RegionOne", etcd.Payload["S3_REGION"])
+	require.Equal(t, "etcd-backups", etcd.Payload["S3_BUCKET_NAME"])
+	require.NotContains(t, etcd.Payload, "S3CredentialID")
 	velero := byService["velero"]
 	require.Equal(t, "[default]\naws_access_key_id=velero-access\naws_secret_access_key=velero-secret\n", velero.Payload["cloud"])
 }

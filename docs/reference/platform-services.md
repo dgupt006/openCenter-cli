@@ -567,8 +567,8 @@ opencenter:
 ### etcd-backup
 
 **Category:** Backup\
-**Default:** Enabled\
-**Description:** Etcd backup to S3
+**Default:** Disabled\
+**Description:** Nightly etcd snapshot backup to configured S3-compatible storage
 
 **Configuration:**
 
@@ -577,16 +577,25 @@ opencenter:
   services:
     etcd-backup:
       enabled: true
-      s3_host: "https://swift.api.dfw3.rackspacecloud.com"
-      s3_region: "DFW3"
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
+      s3_region: "us-east-1"
+
+secrets:
+  etcd_backup:
+    access_key_id: "<access-key-id>"
+    secret_access_key: "<secret-access-key>"
 ```
+
+`s3_host` is retained only as a legacy compatibility field; runtime prefers the full `s3_endpoint`. `s3_credential_id` is non-secret OpenStack credential lifecycle metadata, not a pod secret.
 
 **Features:**
 
-* Scheduled etcd snapshots
-* S3 storage
-* Encryption at rest
-* Retention policies
+* Nightly CronJob at 01:00
+* Configured S3 bucket and absolute HTTP(S) endpoint
+* SigV4 uploads
+* SOPS-managed Secret wired through generated kustomization
+* Digest-pinned container image
 
 **Dependencies:** None
 

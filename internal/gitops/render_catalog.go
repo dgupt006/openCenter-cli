@@ -204,6 +204,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 		},
 	}, dynamicPlanners: []catalogDynamicPlanner{
 		{descriptorName: "service-cert-manager", planner: planCertManagerDynamicActions},
+		{descriptorName: "service-etcd-backup", planner: planEtcdBackupDynamicActions},
 	}}
 }
 

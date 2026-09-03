@@ -13,33 +13,33 @@ spec:
         spec:
           initContainers:
             - name: etcd-backup
-              image: csengteam/etcd-backup:v0.0.5
+              image: csengteam/etcd-backup@sha256:c1ba8c236d4b6ca45b61df9356b540abbb9ede20d8613b0012631b79123d84bc
               env:
                 - name: ETCDCTL_API
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ETCDCTL_API
+                      key: ETCDCTL-API
                 - name: ETCDCTL_ENDPOINTS
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ETCDCTL_ENDPOINTS
+                      key: ETCDCTL-ENDPOINTS
                 - name: ETCDCTL_CACERT
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ETCDCTL_CACERT
+                      key: ETCDCTL-CACERT
                 - name: ETCDCTL_CERT
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ETCDCTL_CERT
+                      key: ETCDCTL-CERT
                 - name: ETCDCTL_KEY
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ETCDCTL_KEY
+                      key: ETCDCTL-KEY
               command: ["/bin/bash", "-c"]
               args: ["etcdctl snapshot save /data/etcd-backup/etcd-snapshot-$(date +%Y-%m-%d).db"]
               volumeMounts:
@@ -51,31 +51,40 @@ spec:
           restartPolicy: Never
           containers:
             - name: backup-to-s3
-              image: csengteam/etcd-backup:v0.0.5
+              image: csengteam/etcd-backup@sha256:c1ba8c236d4b6ca45b61df9356b540abbb9ede20d8613b0012631b79123d84bc
               env:
                 - name: ACCESS_KEY
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: ACCESS_KEY
+                      key: ACCESS-KEY
                 - name: SECRET_KEY
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: SECRET_KEY
+                      key: SECRET-KEY
                 - name: S3_HOST
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: S3_HOST
+                      key: S3-HOST
                 - name: S3_REGION
                   valueFrom:
                     secretKeyRef:
                       name: etcd-backup-secrets
-                      key: S3_REGION
+                      key: S3-REGION
+                - name: S3_BUCKET_NAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: etcd-backup-secrets
+                      key: S3-BUCKET-NAME
               command: ["/bin/bash", "-c"]
               args: ["python /backup.py /data/etcd-backup/etcd-snapshot-$(date +%Y-%m-%d).db"]
               volumeMounts:
+                - mountPath: /backup.py
+                  name: backup-script
+                  subPath: backup.py
+                  readOnly: true
                 - mountPath: /data/etcd-backup
                   name: etcd-backup
           hostNetwork: true
@@ -102,3 +111,7 @@ spec:
               hostPath:
                 path: /data/etcd-backup
                 type: DirectoryOrCreate
+            - name: backup-script
+              configMap:
+                name: etcd-backup-upload-script
+                defaultMode: 0555

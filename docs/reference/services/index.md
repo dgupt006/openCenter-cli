@@ -39,7 +39,7 @@ tags: [services, platform, reference]
 | [fluxcd](fluxcd.md) | GitOps | Enabled | GitOps continuous delivery | Core dependency |
 | [weave-gitops](weave-gitops.md) | GitOps | Disabled | GitOps dashboard UI | |
 | [velero](velero.md) | Backup | Enabled | Cluster backup and disaster recovery | Multi-backend storage |
-| [etcd-backup](etcd-backup.md) | Backup | Enabled | etcd snapshot backup | |
+| [etcd-backup](etcd-backup.md) | Backup | Disabled | Nightly etcd snapshot backup to configured S3-compatible storage | Requires endpoint, bucket, region, and service-specific credentials |
 | [headlamp](headlamp.md) | Management | Enabled | Kubernetes dashboard with OIDC | |
 | [olm](olm.md) | Management | Enabled | Operator Lifecycle Manager | |
 | [postgres-operator](postgres-operator.md) | Management | Enabled | PostgreSQL operator (Zalando) | |
@@ -64,11 +64,13 @@ opencenter cluster service status
 
 ## Credential Fallback Chain
 
-Services that need cloud credentials follow this resolution order:
+Some services that need cloud credentials follow this resolution order:
 
 1. Service-specific secret (e.g., `secrets.loki.s3_access_key_id`)
 2. Global application credentials (`secrets.global.aws.application.*`)
 3. Global infrastructure credentials (`secrets.global.aws.infrastructure.*`)
+
+`etcd-backup` is an exception: it requires `secrets.etcd_backup.access_key_id` and `secrets.etcd_backup.secret_access_key` when enabled and does not fall back to global AWS credentials.
 
 ## Storage Provider Defaults
 

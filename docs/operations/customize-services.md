@@ -237,6 +237,27 @@ opencenter:
       region: "us-east-1"
 ```
 
+### etcd-backup Configuration
+
+`etcd-backup` is disabled by default. When enabled, it requires an absolute HTTP(S) S3 endpoint, bucket, region, and service-specific credentials:
+
+```yaml
+opencenter:
+  services:
+    etcd-backup:
+      enabled: true
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
+      s3_region: "us-east-1"
+
+secrets:
+  etcd_backup:
+    access_key_id: "<access-key-id>"
+    secret_access_key: "<secret-access-key>"
+```
+
+The service runs nightly at 01:00, uses the configured bucket with SigV4, and materializes the SOPS-managed Secret through generated kustomization. `s3_host` is legacy compatibility metadata; runtime prefers `s3_endpoint`. `s3_credential_id` is non-secret OpenStack credential lifecycle metadata.
+
 ### vSphere CSI Configuration
 
 For VMware environments only:
@@ -448,10 +469,16 @@ opencenter:
       enabled: true
     etcd-backup:
       enabled: true
-
-    # Storage
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
+      s3_region: "us-east-1"
     external-snapshotter:
       enabled: true
+
+secrets:
+  etcd_backup:
+    access_key_id: "<access-key-id>"
+    secret_access_key: "<secret-access-key>"
 ```
 
 ## Custom Service Images

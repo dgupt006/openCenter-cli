@@ -192,7 +192,6 @@ All new configurations use schema version 2.0.
 | --- | --- | --- |
 | `calico` | `true` | CNI networking |
 | `cert-manager` | `true` | TLS certificate management |
-| `etcd-backup` | `true` | Etcd backup to S3 |
 | `external-snapshotter` | `true` | Volume snapshots |
 | `fluxcd` | `true` | GitOps controller |
 | `gateway` | `true` | Gateway implementation |
@@ -216,6 +215,7 @@ All new configurations use schema version 2.0.
 | Service | Enabled | Description |
 | --- | --- | --- |
 | `alert-proxy` | `false` | Alert forwarding (requires config) |
+| `etcd-backup` | `false` | Etcd backup to S3; requires endpoint, bucket, region, and service-specific credentials when enabled |
 | `vsphere-csi` | `false` | VMware CSI driver |
 | `weave-gitops` | `false` | Weave GitOps UI |
 
@@ -231,10 +231,17 @@ All new configurations use schema version 2.0.
 
 ### etcd-backup
 
-| Field | Default |
-| --- | --- |
-| `s3_host` | `"https://swift.api.dfw3.rackspacecloud.com"` |
-| `s3_region` | `"DFW3"` |
+The service has no built-in endpoint, bucket, region, or credential defaults. When enabled, configure the following fields explicitly:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `s3_endpoint` | — | Required absolute HTTP(S) S3-compatible endpoint URL |
+| `s3_bucket_name` | — | Required target bucket name |
+| `s3_region` | — | Required S3 signing region |
+| `s3_host` | — | Legacy compatibility field; runtime prefers `s3_endpoint` |
+| `s3_credential_id` | — | Non-secret OpenStack credential lifecycle metadata |
+| `secrets.etcd_backup.access_key_id` | — | Required service-specific S3 access key ID |
+| `secrets.etcd_backup.secret_access_key` | — | Required service-specific S3 secret access key |
 
 ### headlamp
 

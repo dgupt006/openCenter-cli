@@ -68,6 +68,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [file-locations](reference/file-locations.md) | Config/key file paths |
 | [validation-rules](reference/validation-rules.md) | Validation rule catalog |
 | [mise-tasks](reference/mise-tasks.md) | Development task runner |
+| [github-actions-workflows](reference/github-actions-workflows.md) | Repository CI/CD workflows and runner contract |
 | [audit-key](reference/audit-key.md) | Audit signing key |
 | [providers](reference/providers.md) | Infrastructure providers |
 | [opencenter/](reference/opencenter/) | Auto-generated per-command reference |

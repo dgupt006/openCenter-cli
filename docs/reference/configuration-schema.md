@@ -406,8 +406,9 @@ opencenter:
       letsencrypt_server: "https://acme-v02.api.letsencrypt.org/directory"
     etcd-backup:
       enabled: true
-      s3_host: "https://swift.api.dfw3.rackspacecloud.com"
-      s3_region: "DFW3"
+      s3_endpoint: "https://s3.example.com"
+      s3_bucket_name: "my-cluster-etcd-backups"
+      s3_region: "us-east-1"
     keycloak:
       enabled: true
       hostname: "auth.my-org.my-cluster.sjc3.k8s.opencenter.cloud"
@@ -547,6 +548,9 @@ secrets:
     openstack:
       application_credential_id: ""
       application_credential_secret: ""
+  etcd_backup:
+    access_key_id: ""
+    secret_access_key: ""
   cert_manager:
     aws_access_key: ""
     aws_secret_access_key: ""
