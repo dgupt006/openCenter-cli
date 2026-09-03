@@ -627,9 +627,16 @@ exporter:
 `
 
 const kubePrometheusStackTemplate = `---
+{{- $kps := index .OpenCenter.Services "kube-prometheus-stack" -}}
+{{- $defaultSC := .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 alertmanager:
   alertmanagerSpec:
     externalUrl: https://{{ (index .OpenCenter.Services "kube-prometheus-stack").Hostname | default (printf "alertmanager.%s" .OpenCenter.Cluster.ClusterFQDN) }}
+    # Pin the PVC storage class (see prometheusSpec.storageSpec note).
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: {{ $kps.AlertmanagerStorageClass | default $defaultSC }}
   config:
     global:
       resolve_timeout: 5m
@@ -675,7 +682,17 @@ prometheus:
       cluster: {{ .OpenCenter.Meta.Name }}
       region: {{ .OpenCenter.Meta.Region }}
       customer: {{ .OpenCenter.Meta.Organization }}
+    # Pin the PVC storage class so the Prometheus TSDB volume never relies on the
+    # ambiguous cluster default during the bootstrap window (transient Longhorn
+    # default / Cinder SC not yet created), which would bind it permanently.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: {{ $kps.PrometheusStorageClass | default $defaultSC }}
 grafana:
+  # Grafana's PVC (when persistence is enabled) must likewise pin its class.
+  persistence:
+    storageClassName: {{ $kps.GrafanaStorageClass | default $defaultSC }}
   admin:
     existingSecret: "grafana-admin-password"
     userKey: admin-user
