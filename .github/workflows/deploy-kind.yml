@@ -37,21 +37,6 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  HOME: ${{ runner.temp }}/opencenter-home
-  OPENCENTER_CONFIG_DIR: ${{ runner.temp }}/opencenter-config
-  OPENCENTER_CLUSTERS_DIR: ${{ runner.temp }}/opencenter-clusters
-  OPENCENTER_STATE_DIR: ${{ runner.temp }}/opencenter-state
-  OPENCENTER_PLUGINS_DIR: ${{ runner.temp }}/opencenter-plugins
-  OPENCENTER_BLUEPRINTS_DIR: ${{ runner.temp }}/opencenter-blueprints
-  OPENCENTER_GITOPS_DIR: ${{ runner.temp }}/opencenter-gitops
-  OPENCENTER_CLUSTER_STATE_DIR: ${{ runner.temp }}/opencenter-cluster-state
-  OPENCENTER_SECRETS_DIR: ${{ runner.temp }}/opencenter-secrets
-  XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config
-  XDG_CACHE_HOME: ${{ runner.temp }}/xdg-cache
-  XDG_STATE_HOME: ${{ runner.temp }}/xdg-state
-  GOCACHE: ${{ runner.temp }}/go-cache
-  GOMODCACHE: ${{ runner.temp }}/go-mod-cache
-  KUBECONFIG: ${{ runner.temp }}/opencenter-cluster-state/kubeconfig.yaml
   SOPS_VERSION: 3.13.3
   KIND_VERSION: v0.29.0
   KUBECTL_VERSION: v1.35.4
@@ -70,6 +55,74 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Initialize runner-local environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runner_temp="${RUNNER_TEMP}"
+          [[ -n "${runner_temp}" ]] || {
+            echo "RUNNER_TEMP is empty." >&2
+            exit 1
+          }
+          case "${runner_temp}" in
+            *$'\n'*|*$'\r'*)
+              echo "RUNNER_TEMP contains a newline." >&2
+              exit 1
+              ;;
+          esac
+
+          home_dir="${runner_temp}/opencenter-home"
+          opencenter_config_dir="${runner_temp}/opencenter-config"
+          opencenter_clusters_dir="${runner_temp}/opencenter-clusters"
+          opencenter_state_dir="${runner_temp}/opencenter-state"
+          opencenter_plugins_dir="${runner_temp}/opencenter-plugins"
+          opencenter_blueprints_dir="${runner_temp}/opencenter-blueprints"
+          opencenter_gitops_dir="${runner_temp}/opencenter-gitops"
+          opencenter_cluster_state_dir="${runner_temp}/opencenter-cluster-state"
+          opencenter_secrets_dir="${runner_temp}/opencenter-secrets"
+          xdg_config_home="${runner_temp}/xdg-config"
+          xdg_cache_home="${runner_temp}/xdg-cache"
+          xdg_state_home="${runner_temp}/xdg-state"
+          go_cache="${runner_temp}/go-cache"
+          go_mod_cache="${runner_temp}/go-mod-cache"
+          initial_kubeconfig="${opencenter_cluster_state_dir}/kubeconfig.yaml"
+
+          mkdir -p \
+            "${home_dir}" \
+            "${opencenter_config_dir}" \
+            "${opencenter_clusters_dir}" \
+            "${opencenter_state_dir}" \
+            "${opencenter_plugins_dir}" \
+            "${opencenter_blueprints_dir}" \
+            "${opencenter_gitops_dir}" \
+            "${opencenter_cluster_state_dir}" \
+            "${opencenter_secrets_dir}" \
+            "${xdg_config_home}" \
+            "${xdg_cache_home}" \
+            "${xdg_state_home}" \
+            "${go_cache}" \
+            "${go_mod_cache}" \
+            "${initial_kubeconfig%/*}"
+
+          {
+            printf 'HOME=%s\n' "${home_dir}"
+            printf 'OPENCENTER_CONFIG_DIR=%s\n' "${opencenter_config_dir}"
+            printf 'OPENCENTER_CLUSTERS_DIR=%s\n' "${opencenter_clusters_dir}"
+            printf 'OPENCENTER_STATE_DIR=%s\n' "${opencenter_state_dir}"
+            printf 'OPENCENTER_PLUGINS_DIR=%s\n' "${opencenter_plugins_dir}"
+            printf 'OPENCENTER_BLUEPRINTS_DIR=%s\n' "${opencenter_blueprints_dir}"
+            printf 'OPENCENTER_GITOPS_DIR=%s\n' "${opencenter_gitops_dir}"
+            printf 'OPENCENTER_CLUSTER_STATE_DIR=%s\n' "${opencenter_cluster_state_dir}"
+            printf 'OPENCENTER_SECRETS_DIR=%s\n' "${opencenter_secrets_dir}"
+            printf 'XDG_CONFIG_HOME=%s\n' "${xdg_config_home}"
+            printf 'XDG_CACHE_HOME=%s\n' "${xdg_cache_home}"
+            printf 'XDG_STATE_HOME=%s\n' "${xdg_state_home}"
+            printf 'GOCACHE=%s\n' "${go_cache}"
+            printf 'GOMODCACHE=%s\n' "${go_mod_cache}"
+            printf 'KUBECONFIG=%s\n' "${initial_kubeconfig}"
+          } >> "${GITHUB_ENV}"
 
       - name: Set up exact Go toolchain
         uses: actions/setup-go@v6
@@ -112,20 +165,6 @@ jobs:
             fi
             cluster_name="${requested}"
           fi
-
-          mkdir -p \
-            "${HOME}" \
-            "${OPENCENTER_CONFIG_DIR}" \
-            "${OPENCENTER_CLUSTERS_DIR}" \
-            "${OPENCENTER_STATE_DIR}" \
-            "${OPENCENTER_PLUGINS_DIR}" \
-            "${OPENCENTER_BLUEPRINTS_DIR}" \
-            "${OPENCENTER_GITOPS_DIR}" \
-            "${OPENCENTER_CLUSTER_STATE_DIR}" \
-            "${OPENCENTER_SECRETS_DIR}" \
-            "${XDG_CONFIG_HOME}" \
-            "${XDG_CACHE_HOME}" \
-            "${XDG_STATE_HOME}"
 
           case "${CONTAINER_RUNTIME_INPUT}" in
             docker) kind_provider=docker ;;

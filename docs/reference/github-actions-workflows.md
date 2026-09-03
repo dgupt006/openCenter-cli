@@ -20,14 +20,14 @@ The workflow set currently contains seven files:
 | File | Workflow name | Trigger, path filter, or schedule | Jobs, dependencies, and matrix | Runner | Timeout / concurrency | Explicit permissions | Artifacts, releases, and secrets |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [`build-binaries.yml`](../../.github/workflows/build-binaries.yml) | Publish Binaries | Manual `workflow_dispatch` | `build`; 2-entry matrix: Linux amd64 and Linux arm64 | `self-hosted` | Not set | `contents: write` | Uploads one artifact per matrix entry; no release; no secrets |
-| [`deploy-kind.yml`](../../.github/workflows/deploy-kind.yml) | Deploy Disposable Kind Cluster | Manual `workflow_dispatch`; inputs for cluster name, Docker/Podman, managed CNI, cleanup, and debug | `deploy-kind`; no matrix or dependency | `[self-hosted, self-hosted-kvm]` | 90 minutes; repository-scoped concurrency, no cancellation | `contents: read` | No uploaded artifacts or release; no secrets |
+| [`deploy-kind.yml`](../../.github/workflows/deploy-kind.yml) | Deploy Disposable Kind Cluster | Manual `workflow_dispatch`; inputs for cluster name, Docker/Podman, managed CNI, cleanup, and debug | `deploy-kind`; no matrix or dependency | `[self-hosted-kvm]` | 90 minutes; repository-scoped concurrency, no cancellation | `contents: read` | No uploaded artifacts or release; no secrets |
 | [`docs-p0.yml`](../../.github/workflows/docs-p0.yml) | Docs P0 Checks | `pull_request` with `**/*.md` path filter | `docs-p0`; no matrix or dependency | `self-hosted` | Not set | Not declared; inherited repository defaults apply | No uploaded artifacts or release; no secrets |
 | [`pre-commit.yaml`](../../.github/workflows/pre-commit.yaml) | Run pull-request syntax workflows | Any `pull_request` | `pre_commit`; one-entry Python 3.10 matrix | `self-hosted` | Not set | Not declared; inherited repository defaults apply | No uploaded artifacts or release; no secrets |
 | [`release.yml`](../../.github/workflows/release.yml) | Release | Push of tags matching `v*`, or manual `workflow_dispatch` | `build-cli` and `build-plugin` run independently; `release` needs both | `self-hosted` | Not set | `contents: write`, `id-token: write`; release job declares the same two permissions | Uploads build artifacts, then creates a GitHub release; keyless cosign `.bundle` files and SPDX JSON are included; uses `secrets.GITHUB_TOKEN` |
 | [`test.yml`](../../.github/workflows/test.yml) | Go Tests | Any `pull_request`; pushes to `main` | `go-test` and `property-tests` run independently | `self-hosted` | 30 minutes per job; no concurrency | Not declared; inherited repository defaults apply | No uploaded artifacts or release; no secrets |
 | [`vulncheck.yml`](../../.github/workflows/vulncheck.yml) | Dependency Vulnerability Scan | Any `pull_request`; Monday 06:00 UTC schedule; manual `workflow_dispatch` | `govulncheck`; no matrix or dependency | `self-hosted` | 30 minutes; no concurrency | Not declared; inherited repository defaults apply | No uploaded artifacts or release; no secrets |
 
-A workflow with no `permissions` block uses the repository or organization default token permissions. A job-level declaration narrows or sets permissions for that job; it does not create a secret. Most jobs use the generic `self-hosted` runner label; `deploy-kind.yml` additionally requires the custom `self-hosted-kvm` label. The operating profiles below describe the capabilities each selected runner must provide.
+A workflow with no `permissions` block uses the repository or organization default token permissions. A job-level declaration narrows or sets permissions for that job; it does not create a secret. Most jobs use the generic `self-hosted` runner label; `deploy-kind.yml` requires the custom `self-hosted-kvm` label, which currently selects organization runner 203. The operating profiles below describe the capabilities each selected runner must provide; the custom label alone does not prove that KVM acceleration is available or required.
 
 ## Common workflow environment
 
@@ -92,7 +92,7 @@ This workflow does not run the BDD suite, full integration task, documentation g
 
 ## Runner profiles
 
-Most workflow jobs request `self-hosted` without additional labels. The disposable Kind job requires both `self-hosted` and `self-hosted-kvm`. Register runners and route jobs using profiles that match the workload:
+Most workflow jobs request `self-hosted` without additional labels. The disposable Kind job requires the custom `self-hosted-kvm` label, which currently selects organization runner 203. Register runners and route jobs using profiles that match the workload; the label itself does not prove KVM acceleration.
 
 | Profile | Workloads | Operational requirements |
 | --- | --- | --- |
@@ -108,8 +108,8 @@ Keep OpenStack E2E separate from the disposable Kind/Gitea profile. Its network,
 
 The disposable workflow is intended for a dedicated Linux amd64 self-hosted runner. The following distinction matters:
 
-* **Workflow-enforced:** the job requests `[self-hosted, self-hosted-kvm]`; the workflow validates the selected runtime as Docker or Podman, installs Linux amd64 tool binaries, checks the runtime, refuses a Kind name collision, serializes runs, times out after 90 minutes, and cleans up when `cleanup` is true.
-* **Operational recommendation:** assign `self-hosted-kvm` only to the dedicated runner that satisfies this Linux amd64 and Podman contract. The custom label selects that runner; it does not by itself prove that hardware KVM acceleration is available or required by this workflow.
+* **Workflow-enforced:** the job requests `[self-hosted-kvm]`; the workflow validates the selected runtime as Docker or Podman, installs Linux amd64 tool binaries, checks the runtime, refuses a Kind name collision, serializes runs, times out after 90 minutes, and cleans up when `cleanup` is true.
+* **Operational recommendation:** the `self-hosted-kvm` label currently selects organization runner 203. Assign it only to the dedicated runner that satisfies this Linux amd64 and Podman contract; the custom label does not itself prove that hardware KVM acceleration is available or required by this workflow.
 
 ### Capacity and host configuration
 
