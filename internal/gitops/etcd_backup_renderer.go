@@ -22,8 +22,48 @@ configMapGenerator:
       - backup.py
 `
 
+// etcdBackupFluxTemplate is the top-level Flux Kustomization that reconciles the
+// etcd-backup overlay. Without it (and its entry in the services/fluxcd
+// aggregator) Flux never sees the service. etcd-backup ships no Helm release and
+// no source of its own, so a single overlay-sourced Kustomization depending on
+// sources is sufficient.
+const etcdBackupFluxTemplate = `---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: etcd-backup
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: sources
+      namespace: flux-system
+  interval: 15m
+  retryInterval: 1m
+  timeout: 10m
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  path: ./applications/overlays/{{ .ClusterName }}/services/etcd-backup
+  prune: true
+  wait: true
+  commonMetadata:
+    labels:
+      app.kubernetes.io/part-of: etcd-backup
+      app.kubernetes.io/managed-by: flux
+      opencenter/managed-by: opencenter
+`
+
 type etcdBackupKustomizationData struct {
 	HasMaterializedSecret bool
+}
+
+type etcdBackupFluxData struct {
+	ClusterName string
 }
 
 // planEtcdBackupDynamicActions emits the service kustomization separately from
@@ -44,9 +84,26 @@ func planEtcdBackupDynamicActions(cfg v2.Config, artifacts []secretartifacts.Art
 	if err != nil {
 		return nil, err
 	}
-	return []clusterAppAction{{
-		Owner:   "service-etcd-backup",
-		Output:  filepath.ToSlash(filepath.Join("services/etcd-backup", "kustomization.yaml")),
-		Content: content,
-	}}, nil
+
+	fluxContent, err := renderInlineTemplateContent(
+		etcdBackupFluxTemplate,
+		"etcd-backup.yaml",
+		etcdBackupFluxData{ClusterName: cfg.OpenCenter.Cluster.ClusterName},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return []clusterAppAction{
+		{
+			Owner:   "service-etcd-backup",
+			Output:  filepath.ToSlash(filepath.Join("services/etcd-backup", "kustomization.yaml")),
+			Content: content,
+		},
+		{
+			Owner:   "service-etcd-backup",
+			Output:  filepath.ToSlash(filepath.Join("services/fluxcd", "etcd-backup.yaml")),
+			Content: fluxContent,
+		},
+	}, nil
 }

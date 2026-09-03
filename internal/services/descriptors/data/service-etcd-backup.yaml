@@ -1,5 +1,7 @@
 name: service-etcd-backup
 layer: services
 service: etcd-backup
+aggregate_targets:
+  - services-fluxcd-aggregate
 roots:
   - path: services/etcd-backup

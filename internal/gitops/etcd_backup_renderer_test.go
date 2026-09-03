@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,4 +160,63 @@ func actionContent(actions []clusterAppAction, output string) string {
 		}
 	}
 	return ""
+}
+
+// TestEtcdBackupWiredIntoFluxAggregator verifies etcd-backup is actually
+// reconcilable by Flux: it must produce a top-level Flux Kustomization
+// (services/fluxcd/etcd-backup.yaml) AND be listed in the services/fluxcd
+// aggregator kustomization. Without both, Flux never sees the service.
+func TestEtcdBackupWiredIntoFluxAggregator(t *testing.T) {
+	cfg := etcdBackupTestConfig(t, "etcd-flux-wiring")
+	require.NoError(t, RenderClusterApps(cfg))
+
+	clusterRoot := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName())
+
+	// Top-level Flux Kustomization must exist and point at the etcd-backup overlay.
+	fluxBridge, err := os.ReadFile(filepath.Join(clusterRoot, "services", "fluxcd", "etcd-backup.yaml"))
+	require.NoError(t, err, "etcd-backup must produce a top-level Flux Kustomization")
+	require.Contains(t, string(fluxBridge), "kind: Kustomization")
+	require.Contains(t, string(fluxBridge), "name: etcd-backup")
+	require.Contains(t, string(fluxBridge), "services/etcd-backup")
+
+	// The aggregator must reference it, or Flux never reconciles it.
+	aggregator, err := os.ReadFile(filepath.Join(clusterRoot, "services", "fluxcd", "kustomization.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(aggregator), "./etcd-backup.yaml",
+		"services/fluxcd aggregator must list etcd-backup so Flux reconciles it")
+}
+
+// TestEtcdBackupScopedRenderWiresAggregator verifies a scoped
+// `service enable etcd-backup --render` also refreshes the aggregator to list
+// etcd-backup (via the descriptor's aggregate_targets).
+func TestEtcdBackupScopedRenderWiresAggregator(t *testing.T) {
+	// Baseline full render WITHOUT etcd-backup to establish the tree + manifest.
+	baselineCfg := newDefault("etcd-flux-scoped")
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	baselineCfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	require.NoError(t, RenderClusterApps(baselineCfg))
+
+	clusterRoot := filepath.Join(repo, "applications", "overlays", baselineCfg.ClusterName())
+	aggregator := filepath.Join(clusterRoot, "services", "fluxcd", "kustomization.yaml")
+	before, err := os.ReadFile(aggregator)
+	require.NoError(t, err)
+	require.NotContains(t, string(before), "./etcd-backup.yaml")
+
+	// Now enable etcd-backup on the same repo and render only that service.
+	cfg := baselineCfg
+	cfg.OpenCenter.Services["etcd-backup"] = &services.EtcdBackupConfig{
+		BaseConfig:   services.BaseConfig{Enabled: true, Namespace: "kube-system"},
+		S3Endpoint:   "https://s3.example/v1",
+		S3BucketName: "etcd-backups",
+		S3Region:     "RegionOne",
+	}
+	cfg.Secrets.EtcdBackup.AccessKeyID = "access-key"
+	cfg.Secrets.EtcdBackup.SecretAccessKey = "secret-key"
+
+	require.NoError(t, RenderSingleService(cfg, "etcd-backup", false))
+	after, err := os.ReadFile(aggregator)
+	require.NoError(t, err)
+	require.Contains(t, string(after), "./etcd-backup.yaml",
+		"scoped etcd-backup render must refresh the aggregator to list it")
 }
