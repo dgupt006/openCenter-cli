@@ -413,6 +413,13 @@ kafka:
 {{- end }}
 mimir:
     structuredConfig:
+        # The chart's own usage_stats block only sets installation_mode; usage
+        # reporting stays enabled by default and initializes its own bucket
+        # client separately from blocks_storage, crashing every component
+        # ("unable to find the expected container <cluster>-mimir") unless
+        # explicitly disabled here.
+        usage_stats:
+            enabled: false
         blocks_storage:
             backend: swift
             swift:

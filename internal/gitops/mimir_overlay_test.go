@@ -130,3 +130,20 @@ func TestMimirStatefulPVCSizesMeetCinderMinimum(t *testing.T) {
 	require.NotContains(t, values, "size: 2Gi", "mimir must not emit a 2Gi PVC (below Cinder minimum):\n%s", values)
 	require.NotContains(t, values, "size: 1Gi", "mimir must not emit a 1Gi PVC (below Cinder minimum):\n%s", values)
 }
+
+// TestMimirUsageStatsDisabled verifies the mimir override disables usage_stats
+// reporting. The chart's own config only sets usage_stats.installation_mode;
+// reporting itself stays enabled by default and every component crashes on
+// startup trying to initialize a separate bucket client for it ("unable to
+// find the expected container <cluster>-mimir") unless explicitly disabled.
+func TestMimirUsageStatsDisabled(t *testing.T) {
+	cfg, err := v2.NewV2Default("k8s-mimir", "openstack")
+	require.NoError(t, err)
+	mimir, ok := cfg.OpenCenter.Services["mimir"].(*configservices.DefaultServiceConfig)
+	require.True(t, ok)
+	mimir.Enabled = true
+
+	values := readMimirOverrideValues(t, *cfg)
+	require.Contains(t, values, "usage_stats:\n            enabled: false",
+		"mimir override must disable usage_stats reporting:\n%s", values)
+}
