@@ -91,3 +91,52 @@ func TestPlanIncludesEtcdBackupAndVeleroWorkloadSecrets(t *testing.T) {
 	velero := byService["velero"]
 	require.Equal(t, "[default]\naws_access_key_id=velero-access\naws_secret_access_key=velero-secret\n", velero.Payload["cloud"])
 }
+
+// TestPlanCertManagerExcludesNestedCredentialMaps verifies the cert-manager
+// secret.yaml payload never contains the nested AWS/Cloudflare credential maps.
+// Those are rendered as flat per-credential Secrets by the cert-manager renderer;
+// dumping the map into stringData produced a nested value that Kubernetes rejects
+// (stringData must be flat strings), failing the override dry-run — even when the
+// credential is disabled.
+func TestPlanCertManagerExcludesNestedCredentialMaps(t *testing.T) {
+	cfg := &v2.Config{
+		Secrets: v2.SecretsConfig{
+			CertManager: v2.CertManagerSecrets{
+				// A disabled multi-credential map entry — must NOT leak into secret.yaml.
+				AWS: map[string]v2.CertManagerAWSCredential{
+					"default": {
+						Enabled:            false,
+						AWSAccessKey:       "AKIAEXAMPLE",
+						AWSSecretAccessKey: "secretexample",
+						Region:             "us-east-1",
+					},
+				},
+				// A flat legacy value that IS valid flat stringData.
+				CloudflareAPIToken: "cf-token",
+			},
+		},
+	}
+
+	artifacts, err := Plan(cfg)
+	require.NoError(t, err)
+
+	var certManager *Artifact
+	for i := range artifacts {
+		if artifacts[i].TargetService == "cert-manager" {
+			certManager = &artifacts[i]
+			break
+		}
+	}
+	require.NotNil(t, certManager, "cert-manager artifact should exist for the flat legacy token")
+
+	// The nested map key must be absent; only flat strings allowed.
+	require.NotContains(t, certManager.Payload, "aws",
+		"cert-manager secret.yaml must not contain the nested aws credential map")
+	require.NotContains(t, certManager.Payload, "cloudflare",
+		"cert-manager secret.yaml must not contain the nested cloudflare credential map")
+	require.Equal(t, "cf-token", certManager.Payload["cloudflare_api_token"])
+	for key, value := range certManager.Payload {
+		_, isString := value.(string)
+		require.Truef(t, isString, "cert-manager stringData value for %q must be a flat string, got %T", key, value)
+	}
+}
