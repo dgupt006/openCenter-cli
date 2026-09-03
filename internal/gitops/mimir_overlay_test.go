@@ -109,3 +109,24 @@ func TestMimirKafkaAddressIgnoresConfiguredNamespace(t *testing.T) {
 	require.NotContains(t, values, "kafka-prod",
 		"mimir kafka address must not follow the (non-functional) configured namespace:\n%s", values)
 }
+
+// TestMimirStatefulPVCSizesMeetCinderMinimum verifies the mimir override bumps
+// the stateful component PVC sizes to 10Gi. The chart defaults (2Gi for
+// ingester/store_gateway/compactor, 1Gi for alertmanager) are below Rackspace
+// SJC3's Cinder minimum (10Gi), which fails PVC provisioning outright.
+func TestMimirStatefulPVCSizesMeetCinderMinimum(t *testing.T) {
+	cfg, err := v2.NewV2Default("k8s-mimir", "openstack")
+	require.NoError(t, err)
+	mimir, ok := cfg.OpenCenter.Services["mimir"].(*configservices.DefaultServiceConfig)
+	require.True(t, ok)
+	mimir.Enabled = true
+
+	values := readMimirOverrideValues(t, *cfg)
+	for _, component := range []string{"ingester", "store_gateway", "compactor", "alertmanager"} {
+		require.Contains(t, values, component+":\n    persistentVolume:\n        size: 10Gi",
+			"mimir override must set %s PVC size to 10Gi (Cinder minimum):\n%s", component, values)
+	}
+	// Guard against the sub-minimum chart defaults leaking through.
+	require.NotContains(t, values, "size: 2Gi", "mimir must not emit a 2Gi PVC (below Cinder minimum):\n%s", values)
+	require.NotContains(t, values, "size: 1Gi", "mimir must not emit a 1Gi PVC (below Cinder minimum):\n%s", values)
+}

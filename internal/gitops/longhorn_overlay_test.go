@@ -97,6 +97,27 @@ func TestLonghornOverrideDependsOnGatewayAPI(t *testing.T) {
 		"longhorn-override must still depend on longhorn-base for base->override ordering")
 }
 
+// TestLonghornOverrideDisablesDefaultStorageClass verifies the longhorn override
+// sets persistence.defaultClass: false so Longhorn does not mark its own
+// StorageClass as the cluster default. The chart defaults this to true, which
+// silently hijacked the configured Cinder default and routed PVCs from other
+// services to the wrong backend.
+func TestLonghornOverrideDisablesDefaultStorageClass(t *testing.T) {
+	cfg := enableLonghorn(t, "")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+	require.NoError(t, RenderClusterApps(cfg))
+
+	override := mustReadFile(t, filepath.Join(
+		cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays",
+		cfg.ClusterName(), "services", "longhorn", "helm-values", "override-values.yaml"))
+
+	require.Contains(t, override, "persistence:", "longhorn override must set persistence values:\n%s", override)
+	require.Contains(t, override, "defaultClass: false",
+		"longhorn override must set persistence.defaultClass: false so it does not hijack the cluster default StorageClass:\n%s", override)
+	require.NotContains(t, override, "defaultClass: true",
+		"longhorn override must not leave defaultClass enabled:\n%s", override)
+}
+
 // enableLonghorn returns a default config with longhorn enabled, optionally
 // overriding its hostname.
 func enableLonghorn(t *testing.T, hostname string) v2.Config {
