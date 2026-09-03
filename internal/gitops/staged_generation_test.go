@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 )
 
 func TestCreateWorkspaceUsesPrivateGenerationRoots(t *testing.T) {
@@ -367,5 +368,46 @@ func TestGenerateClusterTreeProtectsUnknownAndCustomFiles(t *testing.T) {
 	}
 	if got, err := os.ReadFile(runtimeState); err != nil || string(got) != "runtime-state\n" {
 		t.Fatalf("OpenTofu runtime state changed: %q, %v", got, err)
+	}
+}
+
+// TestGenerateClusterTreeAllowsSecretsSyncedArtifactsOnRegenerate reproduces the
+// generate -> secrets sync -> generate workflow. After a first generate, a
+// `secrets sync` materializes per-service secret.yaml files and records them in
+// the secret-artifacts ownership ledger (.opencenter-secret-artifacts.json). A
+// second generate's complete-tree ownership preflight must NOT misclassify those
+// secrets-sync-owned files as user-authored files in generator-owned paths.
+// Regression guard for the missing secret-ledger consultation in planGeneratedTree.
+func TestGenerateClusterTreeAllowsSecretsSyncedArtifactsOnRegenerate(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("evalsymlinks: %v", err)
+	}
+	cfg := newDefault("regen-after-sync")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	options := StagedGenerationOptions{IncludeInfrastructure: true, IncludeFluxBridge: true}
+
+	// First generate establishes the tree + tree manifest.
+	if _, _, err := GenerateClusterTree(context.Background(), cfg, options); err != nil {
+		t.Fatalf("initial GenerateClusterTree() error = %v", err)
+	}
+
+	// Simulate `secrets sync`: materialize a per-service secret.yaml under a
+	// generator-owned namespace and record it in the secret-artifacts ledger.
+	// (cert-manager is enabled by default and is a generator-owned service.)
+	materializeSecretArtifacts(t, cfg, []secretartifacts.Artifact{
+		{Path: "services/cert-manager/secret.yaml"},
+	})
+
+	// Second generate must succeed: the secret file is owned by secrets sync, not
+	// user-authored, so the complete-tree preflight must not refuse.
+	if _, _, err := GenerateClusterTree(context.Background(), cfg, options); err != nil {
+		t.Fatalf("regenerate after secrets sync error = %v (secret.yaml misclassified as user-authored)", err)
+	}
+
+	// The secret file must still be present and untouched after regenerate.
+	secretPath := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "cert-manager", "secret.yaml")
+	if _, statErr := os.Stat(secretPath); statErr != nil {
+		t.Fatalf("secrets-sync-owned secret.yaml must survive regenerate: %v", statErr)
 	}
 }

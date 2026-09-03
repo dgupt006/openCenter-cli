@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 )
 
 type generatedTreeFile struct {
@@ -35,6 +37,37 @@ type generatedTreeSnapshot struct {
 // generatedTreeMutationHook is a serial-test fault injection seam. Production
 // leaves it nil.
 var generatedTreeMutationHook func(string) error
+
+// loadOwnedSecretTreePaths returns the set of secret-artifact-owned file paths,
+// expressed relative to the git-dir tree root (i.e. prefixed with
+// applications/overlays/<cluster>/), for paths whose on-disk content still
+// matches the recorded hash in the secret-artifacts ownership ledger. These are
+// managed by `secrets sync`, not the generator, so the complete-tree preflight
+// must not treat them as foreign or prune them. Mirrors promoteOverlay's
+// ownedSecretPaths logic, re-based from overlay-relative to tree-relative paths.
+func loadOwnedSecretTreePaths(targetRoot, clusterName string) map[string]bool {
+	owned := make(map[string]bool)
+	if clusterName == "" {
+		return owned
+	}
+	overlayDir := filepath.Join(targetRoot, "applications", "overlays", clusterName)
+	state, _, err := secretartifacts.LoadOwnershipState(overlayDir)
+	if err != nil {
+		// A missing/unreadable ledger simply means no owned secret paths; the
+		// preflight then behaves as before for those files.
+		return owned
+	}
+	overlayPrefix := filepath.ToSlash(filepath.Join("applications", "overlays", clusterName))
+	for _, record := range state.Artifacts {
+		full := filepath.Join(overlayDir, filepath.FromSlash(record.Path))
+		data, readErr := os.ReadFile(full)
+		if readErr == nil && secretartifacts.HashBytes(data) == record.Hash {
+			treePath := filepath.ToSlash(filepath.Join(overlayPrefix, record.Path))
+			owned[treePath] = true
+		}
+	}
+	return owned
+}
 
 func promoteGeneratedTree(stageRoot, targetRoot, clusterName string, opts PromoteOptions) (*PromoteResult, error) {
 	plan, err := planGeneratedTree(stageRoot, targetRoot, clusterName, opts)
@@ -75,7 +108,21 @@ func planGeneratedTree(stageRoot, targetRoot, clusterName string, opts PromoteOp
 	adoptionCandidates := make(map[string]bool)
 	unknown := make([]string, 0)
 
+	// Secret artifacts (services/<svc>/secret.yaml) are owned by `secrets sync`,
+	// not by the generator, so they are absent from both the tree manifest and the
+	// freshly-planned set. Without this, a second `cluster generate` after a
+	// `secrets sync` would misclassify them as user-authored files in
+	// generator-owned paths and refuse to regenerate. Consult the secret-artifacts
+	// ownership ledger (same approach as promoteOverlay) and treat hash-verified
+	// secret paths as owned. The ledger lives in the overlay and records
+	// overlay-relative paths, while this tree path is rooted at the git dir, so
+	// re-base each ledger path under applications/overlays/<cluster>/.
+	ownedSecretPaths := loadOwnedSecretTreePaths(targetRoot, clusterName)
+
 	for path, onDisk := range existing {
+		if ownedSecretPaths[path] {
+			continue
+		}
 		if expectedHash, tracked := manifest.Files[path]; tracked {
 			if hashBytes(onDisk) != expectedHash {
 				return nil, fmt.Errorf("ownership conflict: refusing to overwrite modified tracked file %s", path)
@@ -147,6 +194,10 @@ func planGeneratedTree(stageRoot, targetRoot, clusterName string, opts PromoteOp
 	prune := make([]string, 0)
 	for path := range manifest.Files {
 		if isGeneratedTreeCustomPath(path) {
+			continue
+		}
+		if ownedSecretPaths[path] {
+			// Never prune secret-artifact-owned files; they are managed by secrets sync.
 			continue
 		}
 		if _, keep := planned[path]; keep {
@@ -437,7 +488,10 @@ func scanLiveGeneratedTree(root string, roots, rootFiles map[string]bool) (map[s
 		if entry.IsDir() && (skipGeneratedTreeDir(rel) || isGeneratedTreeCustomPath(rel)) {
 			return fs.SkipDir
 		}
-		if filepath.Base(rel) == GeneratedManifestFile || isGeneratedBackupPath(rel) {
+		// Skip generator/tooling state files that are not part of the managed tree:
+		// the generated-tree manifest, generated backups, and the secret-artifacts
+		// ownership ledger (written by `secrets sync`, not the generator).
+		if filepath.Base(rel) == GeneratedManifestFile || filepath.Base(rel) == secretartifacts.OwnershipStateFilename || isGeneratedBackupPath(rel) {
 			return nil
 		}
 		if !isGeneratedTreeNamespace(rel, roots, rootFiles) {
