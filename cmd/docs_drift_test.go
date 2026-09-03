@@ -10,6 +10,7 @@ import (
 
 func TestDocsDoNotUseRemovedGACommands(t *testing.T) {
 	forbiddenTexts := removedGAForbiddenTexts()
+	forbiddenCLIFlags := removedGAForbiddenCLIFlags()
 	forbiddenTokens := []string{
 		"--config",
 		"--git-ssh-key",
@@ -75,6 +76,7 @@ func TestDocsDoNotUseRemovedGACommands(t *testing.T) {
 		}
 		if !info.IsDir() {
 			failures = append(failures, scanDocsFileForForbiddenText(t, repoRoot, path, forbiddenTexts)...)
+			failures = append(failures, scanDocsFileForForbiddenCLIFlags(t, repoRoot, path, forbiddenCLIFlags)...)
 			failures = append(failures, scanDocsFileForForbiddenTokens(t, repoRoot, path, forbiddenTokens)...)
 			failures = append(failures, scanDocsFileForForbiddenLinePatterns(t, repoRoot, path, forbiddenLinePatterns)...)
 			failures = append(failures, scanDocsFileForForbiddenTokenSequences(t, repoRoot, path, forbiddenTokenSequences)...)
@@ -96,6 +98,7 @@ func TestDocsDoNotUseRemovedGACommands(t *testing.T) {
 				return nil
 			}
 			failures = append(failures, scanDocsFileForForbiddenText(t, repoRoot, path, forbiddenTexts)...)
+			failures = append(failures, scanDocsFileForForbiddenCLIFlags(t, repoRoot, path, forbiddenCLIFlags)...)
 			failures = append(failures, scanDocsFileForForbiddenTokens(t, repoRoot, path, forbiddenTokens)...)
 			failures = append(failures, scanDocsFileForForbiddenLinePatterns(t, repoRoot, path, forbiddenLinePatterns)...)
 			failures = append(failures, scanDocsFileForForbiddenTokenSequences(t, repoRoot, path, forbiddenTokenSequences)...)
@@ -147,16 +150,63 @@ func removedGAForbiddenTexts() []string {
 		opencenterCluster + " template",
 		"secrets hooks install",
 		"opencenter " + "sops",
+		"config file path string",
+		"secrets keys " + "generate " + "--cluster",
+		"secrets keys " + "generate " + "--org",
+	}
+}
+
+// removedGAForbiddenCLIFlags are removed openCenter CLI flags. Unlike the
+// command texts above, these are matched ONLY on lines that reference the
+// openCenter CLI, so legitimate third-party command examples in docs (e.g.
+// `podman info --format ...`) are not false-flagged.
+func removedGAForbiddenCLIFlags() []string {
+	return []string{
 		"--set",
 		"--opencenter.",
 		"--json",
 		"--format",
 		"--show-active",
 		"--connectivity",
-		"config file path string",
-		"secrets keys " + "generate " + "--cluster",
-		"secrets keys " + "generate " + "--org",
 	}
+}
+
+// lineHasOpenCenterCLIContext reports whether a line looks like an openCenter
+// CLI invocation (so a removed-flag check applies). It matches the binary name
+// or a top-level openCenter command group, avoiding false positives on unrelated
+// shell commands that happen to reuse a common flag like --format.
+func lineHasOpenCenterCLIContext(line string) bool {
+	lower := strings.ToLower(line)
+	for _, marker := range []string{"opencenter", "oc ", "cluster ", "secrets "} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func scanDocsFileForForbiddenCLIFlags(t *testing.T, repoRoot string, path string, flags []string) []string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	var failures []string
+	for lineNumber, line := range strings.Split(string(content), "\n") {
+		if !lineHasOpenCenterCLIContext(line) {
+			continue
+		}
+		for _, token := range tokenFields(line) {
+			for _, flag := range flags {
+				if token == flag || strings.HasPrefix(token, flag) {
+					failures = append(failures, mustRelPath(t, repoRoot, path)+":"+itoa(lineNumber+1)+": "+flag)
+				}
+			}
+		}
+	}
+	return failures
 }
 
 type forbiddenLinePattern struct {
