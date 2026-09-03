@@ -206,9 +206,50 @@ func TestRenderLokiOverrideValuesAffinity(t *testing.T) {
 	lokiValues := renderOverrideValues(t, cfg, "loki")
 
 	for _, component := range []string{"write", "read", "backend"} {
-		expected := component + ":\n    affinity:\n        podAntiAffinity:\n            requiredDuringSchedulingIgnoredDuringExecution: []\n            preferredDuringSchedulingIgnoredDuringExecution:\n                - weight: 100\n                  podAffinityTerm:\n                      topologyKey: kubernetes.io/hostname\n                      labelSelector:\n                          matchLabels:\n                              app.kubernetes.io/name: loki\n                              app.kubernetes.io/instance: loki\n                              app.kubernetes.io/component: " + component
+		// The affinity sub-block (not required to be the first key under the
+		// component) must carry soft hostname anti-affinity for the component.
+		expected := "affinity:\n        podAntiAffinity:\n            requiredDuringSchedulingIgnoredDuringExecution: []\n            preferredDuringSchedulingIgnoredDuringExecution:\n                - weight: 100\n                  podAffinityTerm:\n                      topologyKey: kubernetes.io/hostname\n                      labelSelector:\n                          matchLabels:\n                              app.kubernetes.io/name: loki\n                              app.kubernetes.io/instance: loki\n                              app.kubernetes.io/component: " + component
 		if !strings.Contains(lokiValues, expected) {
 			t.Fatalf("expected soft hostname anti-affinity for Loki %s:\n%s", component, lokiValues)
+		}
+	}
+}
+
+// TestRenderObservabilityPVCStorageClassPinned verifies loki/tempo/mimir pin an
+// explicit storageClass on their PVCs (to the infra default), so PVCs never rely
+// on the ambiguous cluster default during the bootstrap window (transient
+// Longhorn default / Cinder SC not yet created) and never mis-bind permanently.
+func TestRenderObservabilityPVCStorageClassPinned(t *testing.T) {
+	cfg := newDefault("obs-storageclass-guided")
+	sc := cfg.OpenCenter.Infrastructure.Storage.DefaultStorageClass
+	if sc == "" {
+		t.Fatal("test config must have a default storage class")
+	}
+
+	// Loki SimpleScalable components (write/read/backend) each pin
+	// persistence.storageClass. Assert the pinned block appears once per component.
+	lokiValues := renderOverrideValues(t, cfg, "loki")
+	pinned := "persistence:\n        storageClass: " + sc
+	if got := strings.Count(lokiValues, pinned); got < 3 {
+		t.Fatalf("expected Loki to pin persistence.storageClass %q on write/read/backend (>=3 occurrences), got %d:\n%s", sc, got, lokiValues)
+	}
+	for _, component := range []string{"write", "read", "backend"} {
+		if !strings.Contains(lokiValues, "app.kubernetes.io/component: "+component) {
+			t.Fatalf("expected Loki %s component block present:\n%s", component, lokiValues)
+		}
+	}
+
+	// Tempo pins the chart-wide global.storageClass.
+	tempoValues := renderOverrideValues(t, cfg, "tempo")
+	if !strings.Contains(tempoValues, "global:\n    storageClass: "+sc) {
+		t.Fatalf("expected Tempo global.storageClass %q:\n%s", sc, tempoValues)
+	}
+
+	// Mimir pins storageClass per stateful component.
+	mimirValues := renderOverrideValues(t, cfg, "mimir")
+	for _, component := range []string{"ingester", "store_gateway", "compactor", "alertmanager"} {
+		if !strings.Contains(mimirValues, component+":\n    persistentVolume:\n        size: 10Gi\n        storageClass: "+sc) {
+			t.Fatalf("expected Mimir %s to pin storageClass %q:\n%s", component, sc, mimirValues)
 		}
 	}
 }

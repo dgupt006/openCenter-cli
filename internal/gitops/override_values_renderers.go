@@ -286,6 +286,7 @@ extraObjects:
 const lokiTemplate = `{{- $loki := index .OpenCenter.Services "loki" -}}
 {{- $storageType := objectStorageBackend "loki" -}}
 {{- $bucketName := $loki.BucketName | default (printf "%s-loki" .OpenCenter.Meta.Name) -}}
+{{- $storageClass := $loki.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 global:
     dnsService: coredns
 loki:
@@ -331,6 +332,10 @@ loki:
                   prefix: loki_index_
                   period: 24h
 write:
+    # Pin storageClass so PVCs never rely on the ambiguous cluster default during
+    # the bootstrap window (transient Longhorn default / Cinder SC not yet created).
+    persistence:
+        storageClass: {{ $storageClass }}
     affinity:
         podAntiAffinity:
             requiredDuringSchedulingIgnoredDuringExecution: []
@@ -344,6 +349,8 @@ write:
                               app.kubernetes.io/instance: loki
                               app.kubernetes.io/component: write
 read:
+    persistence:
+        storageClass: {{ $storageClass }}
     affinity:
         podAntiAffinity:
             requiredDuringSchedulingIgnoredDuringExecution: []
@@ -357,6 +364,8 @@ read:
                               app.kubernetes.io/instance: loki
                               app.kubernetes.io/component: read
 backend:
+    persistence:
+        storageClass: {{ $storageClass }}
     affinity:
         podAntiAffinity:
             requiredDuringSchedulingIgnoredDuringExecution: []
@@ -374,6 +383,13 @@ backend:
 const tempoTemplate = `{{- $tempo := index .OpenCenter.Services "tempo" -}}
 {{- $storageType := objectStorageBackend "tempo" -}}
 {{- $bucketName := $tempo.BucketName | default (printf "%s-tempo" .OpenCenter.Meta.Name) -}}
+{{- $storageClass := $tempo.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
+# Pin the storage class explicitly so PVCs never rely on the ambiguous cluster
+# default. During bootstrap there is a window where Longhorn is (transiently)
+# the cluster default and the Cinder default SC may not exist yet; an unpinned
+# StatefulSet PVC created in that window binds to the wrong backend permanently.
+global:
+    storageClass: {{ $storageClass }}
 storage:
     trace:
         backend: {{ $storageType }}
@@ -401,6 +417,7 @@ reportingEnabled: false
 `
 
 const mimirTemplate = `{{- $openstack := .OpenCenter.Infrastructure.Cloud.OpenStack -}}
+{{- $storageClass := .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 global:
     dnsService: coredns
 minio:
@@ -444,18 +461,26 @@ mimir:
 {{- end }}
 # Chart defaults (1-2Gi) are below this region's Cinder minimum volume size
 # (10Gi for the "Standard" volume type), which fails PVC provisioning outright.
+# storageClass is pinned explicitly so PVCs never rely on the ambiguous cluster
+# default (a bootstrap window can leave Longhorn as the transient default, and
+# the Cinder default SC may not exist yet); an unpinned StatefulSet PVC created
+# then binds to the wrong backend permanently.
 ingester:
     persistentVolume:
         size: 10Gi
+        storageClass: {{ $storageClass }}
 store_gateway:
     persistentVolume:
         size: 10Gi
+        storageClass: {{ $storageClass }}
 compactor:
     persistentVolume:
         size: 10Gi
+        storageClass: {{ $storageClass }}
 alertmanager:
     persistentVolume:
         size: 10Gi
+        storageClass: {{ $storageClass }}
 `
 
 const otelTemplate = `collectors:
