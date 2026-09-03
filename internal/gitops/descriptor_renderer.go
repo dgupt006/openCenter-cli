@@ -585,6 +585,20 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 			return nil, nil, renderErr
 		}
 		actions = appendCustomSeedAction(actions, ctx)
+		// Re-render the always-on aggregate descriptors so the top-level
+		// aggregator kustomizations (services/fluxcd/kustomization.yaml and
+		// services/sources/kustomization.yaml) are rebuilt from the full catalog +
+		// enabled services. Explicit-descriptor services get this via their
+		// AggregateTargets; catalog-owned auto services (including NamespaceStage
+		// services such as sealed-secrets/velero/openstack-ccm/openstack-csi) have
+		// no descriptor, so without this a scoped enable --render would add a new
+		// top-level Kustomization (e.g. <svc>-namespace.yaml) without listing it in
+		// the aggregator, leaving it stale.
+		aggregateActions, aggErr := planAutoServiceAggregateActions(cfg, view, registry, artifacts, catalog)
+		if aggErr != nil {
+			return nil, nil, aggErr
+		}
+		actions = append(actions, aggregateActions...)
 		if err := validateClusterAppActions(actions, ""); err != nil {
 			return nil, nil, fmt.Errorf("planned GitOps action output validation failed: %w", err)
 		}
@@ -625,6 +639,44 @@ func planSingleServiceActionsWithArtifacts(cfg v2.Config, serviceName string, is
 	}
 
 	return actions, artifacts, nil
+}
+
+// autoServiceAggregateDescriptors are the always-on aggregate descriptors that
+// own the top-level aggregator kustomizations. Catalog-owned (auto) services have
+// no explicit descriptor and therefore no AggregateTargets, so a scoped
+// enable --render must expand these explicitly to keep the aggregator current.
+var autoServiceAggregateDescriptors = []string{"services-fluxcd-aggregate", "services-sources-aggregate"}
+
+// planAutoServiceAggregateActions expands the always-on aggregate descriptors so
+// the aggregator kustomizations are re-derived from the full catalog + enabled
+// services, matching the behavior of a full cluster generate.
+func planAutoServiceAggregateActions(cfg v2.Config, view map[string]any, registry *descriptorcfg.Registry, artifacts []secretartifacts.Artifact, catalog RenderCatalog) ([]clusterAppAction, error) {
+	var actions []clusterAppAction
+	for _, name := range autoServiceAggregateDescriptors {
+		descriptor, ok := registry.Get(name)
+		if !ok {
+			// Aggregate descriptor is optional; skip if the registry doesn't define it.
+			continue
+		}
+		enabled, err := isDescriptorEnabled(cfg, view, descriptor)
+		if err != nil {
+			return nil, fmt.Errorf("descriptor %s: %w", descriptor.Name, err)
+		}
+		if !enabled {
+			continue
+		}
+		expanded, err := expandDescriptorActions(descriptor, cfg, view)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, expanded...)
+		dynamicActions, err := catalog.planDynamicActionsForDescriptor(cfg, descriptor, artifacts)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, dynamicActions...)
+	}
+	return actions, nil
 }
 
 func writeClusterAppActions(actions []clusterAppAction, target string, cfg v2.Config, workspace *GitOpsWorkspace) error {
