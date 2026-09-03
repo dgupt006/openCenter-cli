@@ -35,6 +35,9 @@ resources:
 {{- if (index .OpenCenter.Services "olm").Enabled }}
   - ./olm.yaml
 {{- end }}
+{{- if (index .OpenCenter.Services "etcd-backup").Enabled }}
+  - ./etcd-backup.yaml
+{{- end }}
 
 
 {{- range autoNamespaceStages }}
