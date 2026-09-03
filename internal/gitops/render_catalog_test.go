@@ -1,6 +1,8 @@
 package gitops
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,4 +149,75 @@ func TestPlanSingleServiceActionsIncludesCatalogDynamicActions(t *testing.T) {
 		}
 	}
 	require.True(t, found, "single-service plan should include cert-manager dynamic kustomization")
+}
+
+// TestRenderSingleServiceRefreshesAggregatorForAutoService verifies that a scoped
+// enable --render of a catalog-owned (auto) NamespaceStage service also re-renders
+// the top-level aggregator kustomization so the newly added namespace stage is
+// listed. Without this, sealed-secrets/velero/openstack-ccm/openstack-csi scoped
+// enables left services/fluxcd/kustomization.yaml stale (the operator had to
+// hand-patch it).
+func TestRenderSingleServiceRefreshesAggregatorForAutoService(t *testing.T) {
+	cfg := newDefault("catalog-single-aggregator")
+	cfg.OpenCenter.Cluster.ClusterName = "catalog-single-aggregator"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+
+	// Baseline full render WITHOUT sealed-secrets enabled: the aggregator must not
+	// list a sealed-secrets namespace stage yet.
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("RenderClusterApps (baseline): %v", err)
+	}
+	clusterRoot := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName())
+	aggregator := filepath.Join(clusterRoot, "services", "fluxcd", "kustomization.yaml")
+	baseline, err := os.ReadFile(aggregator)
+	require.NoError(t, err)
+	require.NotContains(t, string(baseline), "sealed-secrets-namespace",
+		"baseline aggregator should not list sealed-secrets before it is enabled")
+
+	// Enable sealed-secrets (a catalog-owned auto service with NamespaceStage: true)
+	// and render ONLY that service, as `cluster service enable --render` does.
+	cfg.OpenCenter.Services["sealed-secrets"] = &services.DefaultServiceConfig{
+		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "sealed-secrets"},
+	}
+	if err := RenderSingleService(cfg, "sealed-secrets", false); err != nil {
+		t.Fatalf("RenderSingleService(sealed-secrets): %v", err)
+	}
+
+	// The scoped render must have refreshed the aggregator to include the new
+	// top-level namespace-stage Kustomization.
+	updated, err := os.ReadFile(aggregator)
+	require.NoError(t, err)
+	require.Contains(t, string(updated), "sealed-secrets-namespace",
+		"scoped enable --render must refresh the aggregator to list the new NamespaceStage kustomization")
+}
+
+// TestSealedSecretsNamespaceStageWiring verifies the sealed-secrets fix
+// (c6a602a): sealed-secrets uses a dedicated NamespaceStage so its -override can
+// land its secretGenerator Secret into a namespace created independently of
+// -base. The -override Kustomization must depend on sealed-secrets-namespace
+// (not implicitly on -base), otherwise a second, namespace-creation deadlock
+// occurs. Also verifies the namespace stage Kustomization is actually rendered.
+func TestSealedSecretsNamespaceStageWiring(t *testing.T) {
+	cfg := newDefault("sealed-secrets-nsstage")
+	cfg.OpenCenter.Cluster.ClusterName = "sealed-secrets-nsstage"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+	cfg.OpenCenter.Services["sealed-secrets"] = &services.DefaultServiceConfig{
+		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "sealed-secrets"},
+	}
+	require.NoError(t, RenderClusterApps(cfg))
+
+	clusterRoot := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName())
+
+	// The dedicated namespace-stage Kustomization must exist.
+	nsStage := mustReadFile(t, filepath.Join(clusterRoot, "services", "fluxcd", "sealed-secrets-namespace.yaml"))
+	require.NotEmpty(t, nsStage, "sealed-secrets NamespaceStage kustomization must be rendered")
+
+	// The override must depend on the namespace stage.
+	flux := mustReadFile(t, filepath.Join(clusterRoot, "services", "fluxcd", "sealed-secrets.yaml"))
+	docs, err := decodeYAMLDocuments([]byte(flux))
+	require.NoError(t, err)
+
+	override := findFluxKustomization(t, docs, "sealed-secrets-override")
+	require.True(t, hasFluxDependency(t, override, "sealed-secrets-namespace"),
+		"sealed-secrets-override must depend on sealed-secrets-namespace so the secretGenerator Secret has a namespace to land in")
 }
