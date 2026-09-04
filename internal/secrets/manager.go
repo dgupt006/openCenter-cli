@@ -1952,7 +1952,14 @@ func (m *DefaultSecretsManager) getAgeKeyPathFromPublicKey(publicKey string) (st
 		filepath.Join(homeDir, ".config", "opencenter", "secrets", "age", "keys.txt"),
 	}
 
-	// Also check for cluster-specific keys
+	// Also check for cluster-specific keys. Cluster-owned SOPS key files are
+	// generated as <cluster-name>-key.txt (singular "key", hyphen-separated,
+	// e.g. .../clusters/secrets/<org>/<cluster>/age/keys/<cluster>-key.txt) —
+	// distinct from the legacy "_keys.txt" (plural, underscore) pattern some
+	// manually-managed key files use. Match both; matching only "_keys.txt"
+	// meant a cluster's own key was never found here, forcing every
+	// decrypt-for-comparison in secrets sync onto the slow/lossy fallback
+	// path below even when the correct key was sitting right there.
 	clustersDir := filepath.Join(homeDir, ".config", "opencenter", "clusters")
 	if _, err := os.Stat(clustersDir); err == nil {
 		// Walk clusters directory to find key files
@@ -1960,7 +1967,7 @@ func (m *DefaultSecretsManager) getAgeKeyPathFromPublicKey(publicKey string) (st
 			if err != nil {
 				return nil
 			}
-			if !info.IsDir() && strings.HasSuffix(path, "_keys.txt") {
+			if !info.IsDir() && (strings.HasSuffix(path, "_keys.txt") || strings.HasSuffix(path, "-key.txt")) {
 				possiblePaths = append(possiblePaths, path)
 			}
 			return nil

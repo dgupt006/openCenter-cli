@@ -240,6 +240,27 @@ AGE-SECRET-KEY-1GFPYYSJL7VYMDXVJZ4QQZZ7JQJQJQJQJQJQJQJQJQJQJQJQJQJQJQJQ
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Age key file not found")
 	})
+
+	// Guards against a real bug: cluster-owned SOPS key files are generated
+	// as <cluster-name>-key.txt (singular "key", hyphen-separated), but this
+	// lookup only matched the legacy "_keys.txt" (plural, underscore)
+	// pattern — so a cluster's own key was never found here on any cluster,
+	// forcing every secrets-sync re-run onto a slow, comparison-skipping
+	// fallback path (see TestSyncServiceManifestForceRequiredWhenComparisonUnavailable).
+	t.Run("finds a cluster-owned key file named <cluster>-key.txt", func(t *testing.T) {
+		clusterKeyDir := filepath.Join(tmpDir, ".config", "opencenter", "clusters", "secrets",
+			"sjc3cli9-cluster-gitops", "sjc3cli9-cluster", "age", "keys")
+		require.NoError(t, os.MkdirAll(clusterKeyDir, 0755))
+
+		publicKey := "age1jtjvwngwlq2r3yf00lt4puqu0tw5khxexzffewlsm98e8gdrc3cqqfntxj"
+		keyPath := filepath.Join(clusterKeyDir, "sjc3cli9-cluster-key.txt")
+		keyContent := "# public key: " + publicKey + "\nAGE-SECRET-KEY-1ST5H6RZ3FKXTQSFSQXUG3G8AMZVW88XTR44X6QPHGH757WW44XVSTUQK5Y\n"
+		require.NoError(t, os.WriteFile(keyPath, []byte(keyContent), 0600))
+
+		resolvedPath, err := manager.getAgeKeyPathFromPublicKey(publicKey)
+		require.NoError(t, err)
+		assert.Equal(t, keyPath, resolvedPath)
+	})
 }
 
 func TestHasSecretsChangedEdgeCases(t *testing.T) {
