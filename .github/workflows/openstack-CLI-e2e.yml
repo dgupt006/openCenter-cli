@@ -336,8 +336,7 @@ jobs:
             opencenter.gitops.auth.token.token="$CI_GITHUB_PAT" \
             secrets.keycloak.admin_password="$keycloak_password"
 
-      - name: Set validation-only storage placeholders
-        if: ${{ !inputs.run_deploy }}
+      - name: Configure regional object storage
         env:
           CI_EC2_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
           CI_EC2_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
@@ -345,8 +344,26 @@ jobs:
           set -euo pipefail
           test -n "$CI_EC2_ACCESS_KEY"
           test -n "$CI_EC2_SECRET_KEY"
+          name="${{ steps.name.outputs.cluster_name }}"
+          s3_endpoint="https://swift.api.${REGION_LOWER}.rackspacecloud.com"
+          if [[ "${{ inputs.run_deploy }}" == "true" ]]; then
+            openstack --os-cloud "$OS_CLOUD" container create \
+              "${name}-loki" \
+              "${name}-velero"
+          fi
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
+            opencenter.services.loki.storage_type=s3 \
+            opencenter.services.loki.bucket_name="${name}-loki" \
+            opencenter.services.loki.s3_endpoint="$s3_endpoint" \
+            opencenter.services.loki.s3_region="$TARGET_REGION" \
+            opencenter.services.loki.s3_force_path_style=true \
             opencenter.services.loki.s3_credential_id="$CI_EC2_ACCESS_KEY" \
+            opencenter.services.velero.storage_type=s3 \
+            opencenter.services.velero.backup_bucket="${name}-velero" \
+            opencenter.services.velero.region="$TARGET_REGION" \
+            opencenter.services.velero.s3_endpoint="$s3_endpoint" \
+            opencenter.services.velero.s3_region="$TARGET_REGION" \
+            opencenter.services.velero.s3_force_path_style=true \
             opencenter.services.velero.s3_credential_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_access_key_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_secret_access_key="$CI_EC2_SECRET_KEY" \
@@ -366,24 +383,6 @@ jobs:
             --windows-image-id "$WINDOWS_IMAGE_ID" \
             --replace \
             --yes
-
-      - name: Provision regional object storage credentials
-        if: ${{ inputs.run_deploy }}
-        run: |
-          set -euo pipefail
-          name="${{ steps.name.outputs.cluster_name }}"
-          s3_endpoint="https://swift.api.${REGION_LOWER}.rackspacecloud.com"
-          for service in loki velero; do
-            opencenter cluster service storage apply "$service" \
-              --cluster "${{ steps.name.outputs.cluster_id }}" \
-              --backend s3 \
-              --os-cloud "$OS_CLOUD" \
-              --clouds-yaml "$OS_CLIENT_CONFIG_FILE" \
-              --container "${name}-${service}" \
-              --s3-endpoint "$s3_endpoint" \
-              --rotate-credentials \
-              --yes
-          done
 
       - name: cluster generate
         run: |
