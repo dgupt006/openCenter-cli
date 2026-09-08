@@ -5,7 +5,8 @@ name: OpenStack CLI E2E
 #
 # Phase 2 (opt-in via the run_deploy input): creates workflow-owned Swift
 # containers and a throwaway GitOps repo, runs a real `cluster deploy` against
-# DFW3, verifies the cluster, then cleans up only those workflow-owned resources.
+# DFW3, and verifies the cluster. Cleanup is a separate explicit opt-in so a
+# cluster is preserved for investigation by default during the POC.
 #
 # Manual trigger only, per Victor's directive to start manual/manual-only.
 #
@@ -31,7 +32,12 @@ on:
         required: false
         default: "cli-ci-dfw3"
       run_deploy:
-        description: "Also run cluster deploy + destroy against real infra (~40+ min). Leave off for a fast validate-only pass."
+        description: "Run cluster deploy against real infrastructure. Leave off for a fast validate-only pass."
+        required: true
+        type: boolean
+        default: false
+      cleanup_after_run:
+        description: "Explicitly destroy the deployed cluster and workflow-owned resources after testing"
         required: true
         type: boolean
         default: false
@@ -371,7 +377,7 @@ jobs:
           exit 1
 
       - name: Record Cinder PVC volume IDs before cleanup
-        if: ${{ inputs.run_deploy && always() }}
+        if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -389,13 +395,13 @@ jobs:
           done
 
       - name: cluster destroy
-        if: ${{ inputs.run_deploy && always() }}
+        if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
         run: |
           set -euo pipefail
           opencenter cluster destroy "${{ steps.name.outputs.cluster_id }}" --force --remove-files
 
       - name: Remove verified residual Cinder volumes
-        if: ${{ inputs.run_deploy && always() }}
+        if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -412,7 +418,7 @@ jobs:
           done < "$volume_file"
 
       - name: Delete workflow-owned Swift containers
-        if: ${{ inputs.run_deploy && always() }}
+        if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -423,7 +429,7 @@ jobs:
           done
 
       - name: Delete throwaway GitOps repo
-        if: ${{ inputs.run_deploy && always() }}
+        if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
         env:
           GH_TOKEN: ${{ secrets.CI_GITHUB_PAT }}
         run: |
@@ -449,6 +455,7 @@ jobs:
             echo "run_attempt=$GITHUB_RUN_ATTEMPT"
             echo "commit=$GITHUB_SHA"
             echo "run_deploy=${{ inputs.run_deploy }}"
+            echo "cleanup_after_run=${{ inputs.cleanup_after_run }}"
             echo "started_utc=$BUILD_STARTED_UTC"
             echo "finished_utc=$finished_utc"
             echo "elapsed_seconds=$elapsed_seconds"
@@ -480,10 +487,10 @@ jobs:
             "$result_tar" >/dev/null
           echo "Stored result at swift://${CI_RESULTS_SWIFT_CONTAINER}/${object_name}" >> "$GITHUB_STEP_SUMMARY"
 
-      # Local-disk safety net regardless of path taken above. No-op if
-      # `cluster destroy --remove-files` already cleaned everything.
+      # Local-disk safety net used only when cleanup was explicitly requested.
+      # No-op if `cluster destroy --remove-files` already cleaned everything.
       - name: Clean up local cluster state
-        if: always()
+        if: ${{ inputs.cleanup_after_run && always() }}
         run: |
           set -euo pipefail
           name="${{ steps.name.outputs.cluster_name }}"
