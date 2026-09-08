@@ -264,7 +264,7 @@ jobs:
           test -n "$GH_TOKEN"
           gh repo create "${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}" \
             --private \
-            --description "Ephemeral CI GitOps repo for ${{ steps.name.outputs.cluster_name }} - safe to delete, cleaned up automatically"
+            --description "CI GitOps repo for ${{ steps.name.outputs.cluster_name }} - retain until cleanup is explicitly requested"
 
       - name: Set the tested GitOps and default-application secrets
         env:
@@ -337,10 +337,11 @@ jobs:
           cd "$gitops_dir"
           git config user.name "openCenter CI"
           git config user.email "ci-bot@users.noreply.github.com"
-          git remote add origin "https://x-access-token:${CI_GITHUB_PAT}@github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git"
+          git remote add origin "https://github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git"
           git add -A
           git commit -m "Initial generate for ${{ steps.name.outputs.cluster_name }} (CI)"
-          git push -u origin main
+          basic_auth=$(printf 'x-access-token:%s' "$CI_GITHUB_PAT" | base64 | tr -d '\n')
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $basic_auth" push -u origin main
 
       - name: cluster deploy
         if: ${{ inputs.run_deploy }}
