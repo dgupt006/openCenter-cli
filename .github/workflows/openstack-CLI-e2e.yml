@@ -58,15 +58,23 @@ jobs:
   validate:
     runs-on: [self-hosted, macOS]
     timeout-minutes: 120
+    environment: openstack-ci
     env:
       GITOPS_OWNER: dgupt006
-      OS_CLOUD: keystone-dfw3
+      OS_CLOUD: ci-dfw3
+      CI_RESULTS_SWIFT_CONTAINER: ${{ vars.CI_RESULTS_SWIFT_CONTAINER || 'opencenter-cli-ci-dfw3-results' }}
       DFW3_EXTERNAL_NETWORK_ID: 82be3711-cd97-4f7c-8bbd-59f5524a949e
       DFW3_IMAGE_ID: 6e3967a7-904a-49c6-870e-d5014c827944
-      DFW3_WINDOWS_IMAGE_ID: 29d0d240-3f85-4375-bf4d-197389fb25bc
+      DFW3_WINDOWS_IMAGE_ID: f0473f97-06db-42ca-8a63-6ecef6f49e08
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Start build timer
+        run: |
+          set -euo pipefail
+          echo "BUILD_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          echo "BUILD_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -114,15 +122,35 @@ jobs:
           echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
           echo "gitops_repo=${name}-gitops" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Mac runner and DFW3 access
+      - name: Configure isolated DFW3 application-credential profile
+        env:
+          CI_OS_APP_CRED_ID: ${{ secrets.CI_OS_DFW3_APP_CRED_ID }}
+          CI_OS_APP_CRED_SECRET: ${{ secrets.CI_OS_DFW3_APP_CRED_SECRET }}
         run: |
           set -euo pipefail
           test "$(uname -s)" = Darwin
-          for command in gh jq openstack sops tofu kubectl; do
+          for command in gh jq openstack sops tofu kubectl yq; do
             command -v "$command" >/dev/null
           done
+          test -n "$CI_OS_APP_CRED_ID"
+          test -n "$CI_OS_APP_CRED_SECRET"
           test -r "$HOME/.config/openstack/clouds.yaml"
-          openstack --os-cloud "$OS_CLOUD" token issue -f value -c expires >/dev/null
+          auth_url=$(yq -r '.clouds.keystone-dfw3.auth.auth_url // ""' "$HOME/.config/openstack/clouds.yaml")
+          test -n "$auth_url"
+          clouds_file="$RUNNER_TEMP/openstack-ci-clouds.yaml"
+          AUTH_URL="$auth_url" APP_CRED_ID="$CI_OS_APP_CRED_ID" APP_CRED_SECRET="$CI_OS_APP_CRED_SECRET" \
+            yq -n '
+              .clouds."ci-dfw3".auth.auth_url = strenv(AUTH_URL) |
+              .clouds."ci-dfw3".auth.application_credential_id = strenv(APP_CRED_ID) |
+              .clouds."ci-dfw3".auth.application_credential_secret = strenv(APP_CRED_SECRET) |
+              .clouds."ci-dfw3".auth_type = "v3applicationcredential" |
+              .clouds."ci-dfw3".region_name = "DFW3" |
+              .clouds."ci-dfw3".interface = "public" |
+              .clouds."ci-dfw3".identity_api_version = 3
+            ' > "$clouds_file"
+          chmod 0600 "$clouds_file"
+          echo "OS_CLIENT_CONFIG_FILE=$clouds_file" >> "$GITHUB_ENV"
+          OS_CLIENT_CONFIG_FILE="$clouds_file" openstack --os-cloud "$OS_CLOUD" token issue -f value -c expires >/dev/null
 
       - name: cluster init
         run: |
@@ -174,15 +202,23 @@ jobs:
                "      storage_type: s3\n"
                f"      bucket_name: {name}-loki\n"
                "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
-               "      s3_region: DFW3\n"),
+               "      s3_region: DFW3\n"
+               "      s3_force_path_style: true\n"),
               ("    tempo:\n      enabled: true\n      namespace: observability\n",
                "    tempo:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-tempo\n"
-               "      s3_endpoint: swift.api.dfw3.rackspacecloud.com\n"
-               "      s3_region: DFW3\n"),
-              ("      backup_bucket: velero\n",
-               f"      backup_bucket: {name}-velero\n"),
+               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
+               "      s3_region: DFW3\n"
+               "      s3_force_path_style: true\n"),
+              ("    velero:\n      enabled: true\n      namespace: velero\n",
+               "    velero:\n      enabled: true\n      namespace: velero\n"
+               f"      backup_bucket: {name}-velero\n"
+               "      region: DFW3\n"
+               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
+               "      s3_region: DFW3\n"
+               "      s3_force_path_style: true\n"
+               "      storage_type: s3\n"),
           ]
 
           missing = [old for old, _ in replacements if old not in content]
@@ -211,9 +247,8 @@ jobs:
             "${name}-tempo" \
             "${name}-velero"
 
-      # Phase 2 only: point the cluster at a throwaway GitOps repo before
-      # generate/secrets-sync run, since deploy needs Flux to pull from
-      # somewhere real. Deleted again in cleanup regardless of outcome.
+      # Phase 2 creates this repository. Phase 1 still validates the same
+      # repository settings locally, but does not create any GitHub resource.
       - name: Create throwaway GitOps repo
         if: ${{ inputs.run_deploy }}
         env:
@@ -225,8 +260,7 @@ jobs:
             --private \
             --description "Ephemeral CI GitOps repo for ${{ steps.name.outputs.cluster_name }} - safe to delete, cleaned up automatically"
 
-      - name: Point cluster at GitOps repo and set deploy-only secrets
-        if: ${{ inputs.run_deploy }}
+      - name: Set the tested GitOps and default-application secrets
         env:
           CI_GITHUB_PAT: ${{ secrets.CI_GITHUB_PAT }}
           CI_EC2_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
@@ -238,6 +272,12 @@ jobs:
           test -n "$CI_EC2_SECRET_KEY"
           name="${{ steps.name.outputs.cluster_name }}"
           keycloak_password=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
+          config_path="$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/$name/$name-config.yaml"
+          S3_CREDENTIAL_ID="$CI_EC2_ACCESS_KEY" yq -i '
+            .opencenter.services.loki.s3_credential_id = strenv(S3_CREDENTIAL_ID) |
+            .opencenter.services.tempo.s3_credential_id = strenv(S3_CREDENTIAL_ID) |
+            .opencenter.services.velero.s3_credential_id = strenv(S3_CREDENTIAL_ID)
+          ' "$config_path"
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
             opencenter.gitops.repository.url="https://github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git" \
             opencenter.gitops.repository.branch=main \
@@ -300,7 +340,11 @@ jobs:
         if: ${{ inputs.run_deploy }}
         run: |
           set -euo pipefail
+          echo "DEPLOY_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          echo "DEPLOY_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           opencenter cluster deploy "${{ steps.name.outputs.cluster_id }}" --yes
+          echo "DEPLOY_FINISHED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          echo "DEPLOY_FINISHED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       - name: Verify nodes and default applications
         if: ${{ inputs.run_deploy }}
@@ -385,6 +429,56 @@ jobs:
         run: |
           gh repo delete "${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}" --yes || \
             echo "::warning::Failed to delete throwaway repo ${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }} - clean up manually"
+
+      - name: Write timing and result summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          finished_epoch=$(date +%s)
+          finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          elapsed_seconds=$((finished_epoch - BUILD_STARTED_EPOCH))
+          result_dir="$RUNNER_TEMP/opencenter-ci-result"
+          mkdir -p "$result_dir"
+          {
+            echo "status=$JOB_STATUS"
+            echo "region=${{ inputs.region }}"
+            echo "cluster_id=${{ steps.name.outputs.cluster_id }}"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "commit=$GITHUB_SHA"
+            echo "run_deploy=${{ inputs.run_deploy }}"
+            echo "started_utc=$BUILD_STARTED_UTC"
+            echo "finished_utc=$finished_utc"
+            echo "elapsed_seconds=$elapsed_seconds"
+            if [[ -n "${DEPLOY_STARTED_EPOCH:-}" ]]; then
+              echo "deploy_started_utc=$DEPLOY_STARTED_UTC"
+              if [[ -n "${DEPLOY_FINISHED_EPOCH:-}" ]]; then
+                echo "deploy_finished_utc=$DEPLOY_FINISHED_UTC"
+                echo "deploy_elapsed_seconds=$((DEPLOY_FINISHED_EPOCH - DEPLOY_STARTED_EPOCH))"
+              else
+                echo "deploy_finished_utc=incomplete"
+                echo "deploy_elapsed_seconds=$((finished_epoch - DEPLOY_STARTED_EPOCH))"
+              fi
+            fi
+          } | tee "$result_dir/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          tar -C "$result_dir" -cf "$RUNNER_TEMP/${GITHUB_RUN_ID}.tar" summary.txt
+
+      - name: Store result in Swift
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          result_tar="$RUNNER_TEMP/${GITHUB_RUN_ID}.tar"
+          [[ -f "$result_tar" ]] || exit 0
+          object_name="job/$(date -u +%Y-%m-%d)/${GITHUB_RUN_ID}.tar"
+          openstack --os-cloud "$OS_CLOUD" container create "$CI_RESULTS_SWIFT_CONTAINER" >/dev/null
+          openstack --os-cloud "$OS_CLOUD" object create \
+            "$CI_RESULTS_SWIFT_CONTAINER" \
+            --name "$object_name" \
+            "$result_tar" >/dev/null
+          echo "Stored result at swift://${CI_RESULTS_SWIFT_CONTAINER}/${object_name}" >> "$GITHUB_STEP_SUMMARY"
 
       # Local-disk safety net regardless of path taken above. No-op if
       # `cluster destroy --remove-files` already cleaned everything.
