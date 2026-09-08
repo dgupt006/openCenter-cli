@@ -4,7 +4,7 @@ name: OpenStack CLI E2E
 # -> validate-manifests --security-only, entirely local to the runner.
 #
 # Phase 2 (opt-in via the run_deploy input): provisions workflow-owned Swift
-# containers and region-scoped EC2 credentials, creates a throwaway GitOps repo, runs a real `cluster deploy` against
+# containers using the EC2 credentials held in GitHub Environment secrets, creates a throwaway GitOps repo, runs a real `cluster deploy` against
 # the selected region, and verifies the cluster. Cleanup is a separate explicit opt-in so a
 # cluster is preserved for investigation by default during the POC.
 #
@@ -113,14 +113,9 @@ jobs:
               external_network_id="$IAD3_EXTERNAL_NETWORK_ID"
               image_id="$IAD3_IMAGE_ID"
               windows_image_id="$IAD3_WINDOWS_IMAGE_ID"
-              flavor_bastion="$IAD3_FLAVOR_BASTION"
-              flavor_master="$IAD3_FLAVOR_MASTER"
-              flavor_worker="$IAD3_FLAVOR_WORKER"
-              test -n "$external_network_id" -a -n "$image_id" -a -n "$windows_image_id" \
-                -a -n "$flavor_bastion" -a -n "$flavor_master" -a -n "$flavor_worker" || {
-                echo "::error::IAD3 image/network/flavor repository variables are not configured"
-                exit 1
-              }
+              flavor_bastion="${IAD3_FLAVOR_BASTION:-gp.5.2.4}"
+              flavor_master="${IAD3_FLAVOR_MASTER:-gp.5.4.8}"
+              flavor_worker="${IAD3_FLAVOR_WORKER:-gp.5.8.32}"
               ;;
           esac
           echo "TARGET_REGION=${{ inputs.region }}" >> "$GITHUB_ENV"
@@ -216,6 +211,29 @@ jobs:
           chmod 0600 "$clouds_file"
           echo "OS_CLIENT_CONFIG_FILE=$clouds_file" >> "$GITHUB_ENV"
           OS_CLIENT_CONFIG_FILE="$clouds_file" openstack --os-cloud "$OS_CLOUD" token issue -f value -c expires >/dev/null
+
+      - name: Verify regional catalog and quotas
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXTERNAL_NETWORK_ID" || -z "$IMAGE_ID" || -z "$WINDOWS_IMAGE_ID" ]]; then
+            echo "::group::External networks"
+            openstack --os-cloud "$OS_CLOUD" network list --external -f table
+            echo "::endgroup::"
+            echo "::group::Active images"
+            openstack --os-cloud "$OS_CLOUD" image list --status active -f table -c ID -c Name
+            echo "::endgroup::"
+            echo "::error::IAD3 network and image variables must be selected from the verified catalog above"
+            exit 1
+          fi
+          openstack --os-cloud "$OS_CLOUD" network show "$EXTERNAL_NETWORK_ID" -f value -c id -c name -c router:external
+          openstack --os-cloud "$OS_CLOUD" image show "$IMAGE_ID" -f value -c id -c name -c status
+          openstack --os-cloud "$OS_CLOUD" image show "$WINDOWS_IMAGE_ID" -f value -c id -c name -c status
+          for flavor in "$FLAVOR_BASTION" "$FLAVOR_MASTER" "$FLAVOR_WORKER"; do
+            openstack --os-cloud "$OS_CLOUD" flavor show "$flavor" -f value -c name -c vcpus -c ram -c disk
+          done
+          openstack --os-cloud "$OS_CLOUD" quota show -f yaml
+          openstack --os-cloud "$OS_CLOUD" volume quota show -f yaml
+          openstack --os-cloud "$OS_CLOUD" network quota show -f yaml
 
       - name: cluster init
         run: |
