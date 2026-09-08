@@ -54,6 +54,26 @@ func TestOCTR651ObservabilitySourcesStageForLokiAndTempoOnly(t *testing.T) {
 	}
 }
 
+func TestTempoWaitsForPrometheusCRDsWhenPrometheusStackIsEnabled(t *testing.T) {
+	dst := t.TempDir()
+	cfg := newDefault("tempo-prometheus-dependency")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+	cfg.OpenCenter.Services["kube-prometheus-stack"].(*configservices.PrometheusStackConfig).Enabled = true
+	cfg.OpenCenter.Services["tempo"].(*configservices.TempoConfig).Enabled = true
+
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("RenderClusterApps() error = %v", err)
+	}
+
+	path := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "tempo.yaml")
+	docs, err := decodeYAMLDocuments([]byte(mustReadFile(t, path)))
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	base := findFluxKustomization(t, docs, "tempo-base")
+	assertFluxDependencies(t, base, "tempo-base", "observability-sources", "kube-prometheus-stack-base")
+}
+
 func containsLine(content, want string) bool {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))

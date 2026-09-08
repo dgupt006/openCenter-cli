@@ -3,8 +3,8 @@ name: OpenStack CLI E2E
 # Phase 1 (always runs): init -> provider apply -> generate -> secrets sync
 # -> validate-manifests --security-only, entirely local to the runner.
 #
-# Phase 2 (opt-in via the run_deploy input): creates workflow-owned Swift
-# containers and a throwaway GitOps repo, runs a real `cluster deploy` against
+# Phase 2 (opt-in via the run_deploy input): provisions workflow-owned Swift
+# containers and region-scoped EC2 credentials, creates a throwaway GitOps repo, runs a real `cluster deploy` against
 # the selected region, and verifies the cluster. Cleanup is a separate explicit opt-in so a
 # cluster is preserved for investigation by default during the POC.
 #
@@ -315,16 +315,6 @@ jobs:
           print("Patched map-typed service fields")
           PYEOF
 
-      - name: Create workflow-owned Swift containers
-        if: ${{ inputs.run_deploy }}
-        run: |
-          set -euo pipefail
-          name="${{ steps.name.outputs.cluster_name }}"
-          openstack --os-cloud "$OS_CLOUD" container create \
-            "${name}-loki" \
-            "${name}-tempo" \
-            "${name}-velero"
-
       # Phase 2 creates this repository. Phase 1 still validates the same
       # repository settings locally, but does not create any GitHub resource.
       - name: Create throwaway GitOps repo
@@ -341,33 +331,37 @@ jobs:
       - name: Set the tested GitOps and default-application secrets
         env:
           CI_GITHUB_PAT: ${{ secrets.CI_GITHUB_PAT }}
-          CI_EC2_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
-          CI_EC2_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
         run: |
           set -euo pipefail
           test -n "$CI_GITHUB_PAT"
-          test -n "$CI_EC2_ACCESS_KEY"
-          test -n "$CI_EC2_SECRET_KEY"
           name="${{ steps.name.outputs.cluster_name }}"
           keycloak_password=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-          config_path="$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/$name/$name-config.yaml"
-          S3_CREDENTIAL_ID="$CI_EC2_ACCESS_KEY" yq -i '
-            .opencenter.services.loki.s3_credential_id = strenv(S3_CREDENTIAL_ID) |
-            .opencenter.services.tempo.s3_credential_id = strenv(S3_CREDENTIAL_ID) |
-            .opencenter.services.velero.s3_credential_id = strenv(S3_CREDENTIAL_ID)
-          ' "$config_path"
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
             opencenter.gitops.repository.url="https://github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git" \
             opencenter.gitops.repository.branch=main \
             opencenter.gitops.repository.path="clusters/${name}" \
             opencenter.gitops.auth.token.token="$CI_GITHUB_PAT" \
+            secrets.keycloak.admin_password="$keycloak_password"
+
+      - name: Set validation-only storage placeholders
+        if: ${{ !inputs.run_deploy }}
+        env:
+          CI_EC2_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
+          CI_EC2_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$CI_EC2_ACCESS_KEY"
+          test -n "$CI_EC2_SECRET_KEY"
+          opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
+            opencenter.services.loki.s3_credential_id="$CI_EC2_ACCESS_KEY" \
+            opencenter.services.tempo.s3_credential_id="$CI_EC2_ACCESS_KEY" \
+            opencenter.services.velero.s3_credential_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_access_key_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_secret_access_key="$CI_EC2_SECRET_KEY" \
             secrets.tempo.access_key="$CI_EC2_ACCESS_KEY" \
             secrets.tempo.secret_key="$CI_EC2_SECRET_KEY" \
             secrets.velero.access_key_id="$CI_EC2_ACCESS_KEY" \
-            secrets.velero.secret_access_key="$CI_EC2_SECRET_KEY" \
-            secrets.keycloak.admin_password="$keycloak_password"
+            secrets.velero.secret_access_key="$CI_EC2_SECRET_KEY"
 
       - name: cluster provider openstack apply
         run: |
@@ -382,6 +376,23 @@ jobs:
             --windows-image-id "$WINDOWS_IMAGE_ID" \
             --replace \
             --yes
+
+      - name: Provision regional object storage credentials
+        if: ${{ inputs.run_deploy }}
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          s3_endpoint="https://swift.api.${REGION_LOWER}.rackspacecloud.com"
+          for service in loki tempo velero; do
+            opencenter cluster service storage apply "$service" \
+              --cluster "${{ steps.name.outputs.cluster_id }}" \
+              --backend s3 \
+              --os-cloud "$OS_CLOUD" \
+              --clouds-yaml "$OS_CLIENT_CONFIG_FILE" \
+              --container "${name}-${service}" \
+              --s3-endpoint "$s3_endpoint" \
+              --yes
+          done
 
       - name: cluster generate
         run: |

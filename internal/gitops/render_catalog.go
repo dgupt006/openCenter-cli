@@ -155,7 +155,8 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "tempo", DefaultNamespace: "observability", HasOverrideValues: true,
 			SourceName: "opencenter-observability", SourceGroup: "observability", BasePath: "applications/base/services/observability/tempo",
 			ExtraDependencies: []string{"observability-namespace", "observability-sources", "tempo-override"}, OverrideDependsOn: []string{"sources"},
-			OverrideValuesRenderer: templateRenderer(tempoTemplate),
+			ConditionalDependencies: []catalogConditionalDependency{{Name: "kube-prometheus-stack-base", WhenEnabled: "kube-prometheus-stack"}},
+			OverrideValuesRenderer:  templateRenderer(tempoTemplate),
 		},
 		{
 			ServiceName: "velero", DefaultNamespace: "velero", HasOverrideValues: true, NamespaceStage: true,
