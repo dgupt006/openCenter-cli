@@ -154,6 +154,21 @@ func runClusterSyncSecrets(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sync completed with %d errors", len(result.Errors))
 	}
 
+	// Service kustomizations are rendered before encrypted secret manifests are
+	// materialized in the documented generate -> secrets sync flow. Refresh the
+	// generated tree now that the secret-artifact ownership ledger is current so
+	// Flux can actually apply each newly created secret.yaml.
+	if !dryRun {
+		fmt.Fprintln(cmd.OutOrStdout(), "Refreshing generated manifests with synchronized secrets...")
+		generateCmd := newClusterGenerateCmd()
+		generateCmd.SetContext(cmd.Context())
+		generateCmd.SetOut(cmd.OutOrStdout())
+		generateCmd.SetErr(cmd.ErrOrStderr())
+		if err := runClusterGenerate(generateCmd, []string{clusterName}); err != nil {
+			return fmt.Errorf("secrets synchronized but failed to refresh generated manifests: %w", err)
+		}
+	}
+
 	return nil
 }
 
