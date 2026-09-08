@@ -110,9 +110,9 @@ jobs:
               ;;
             IAD3)
               region_lower=iad3
-              external_network_id="$IAD3_EXTERNAL_NETWORK_ID"
-              image_id="$IAD3_IMAGE_ID"
-              windows_image_id="$IAD3_WINDOWS_IMAGE_ID"
+              external_network_id="${IAD3_EXTERNAL_NETWORK_ID:-27f1ceeb-50d5-4c72-a9eb-f90502f32ffb}"
+              image_id="${IAD3_IMAGE_ID:-f9e7af3f-9823-413b-9641-642ed2ceb53e}"
+              windows_image_id="${IAD3_WINDOWS_IMAGE_ID:-92800384-9d8a-4339-84be-4d2e4fa6541a}"
               flavor_bastion="${IAD3_FLAVOR_BASTION:-gp.5.2.4}"
               flavor_master="${IAD3_FLAVOR_MASTER:-gp.5.4.8}"
               flavor_worker="${IAD3_FLAVOR_WORKER:-gp.5.8.32}"
