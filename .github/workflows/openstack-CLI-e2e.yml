@@ -439,7 +439,14 @@ jobs:
           set -euo pipefail
           echo "DEPLOY_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           echo "DEPLOY_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
-          opencenter cluster deploy "${{ steps.name.outputs.cluster_id }}" --yes
+          # OpenTofu preserves the completed resources and provisioner state. A
+          # second invocation therefore resumes the same cluster when a brief
+          # bastion/SSH interruption breaks an Ansible provisioner.
+          if ! opencenter cluster deploy "${{ steps.name.outputs.cluster_id }}" --yes; then
+            echo "Initial deploy attempt failed; retrying the same cluster in 30 seconds..." >&2
+            sleep 30
+            opencenter cluster deploy "${{ steps.name.outputs.cluster_id }}" --yes
+          fi
           echo "DEPLOY_FINISHED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           echo "DEPLOY_FINISHED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
