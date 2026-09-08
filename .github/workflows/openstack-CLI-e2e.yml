@@ -229,7 +229,13 @@ jobs:
           openstack --os-cloud "$OS_CLOUD" image show "$IMAGE_ID" -f value -c id -c name -c status
           openstack --os-cloud "$OS_CLOUD" image show "$WINDOWS_IMAGE_ID" -f value -c id -c name -c status
           for flavor in "$FLAVOR_BASTION" "$FLAVOR_MASTER" "$FLAVOR_WORKER"; do
-            openstack --os-cloud "$OS_CLOUD" flavor show "$flavor" -f value -c name -c vcpus -c ram -c disk
+            if ! openstack --os-cloud "$OS_CLOUD" flavor show "$flavor" -f value -c name -c vcpus -c ram -c disk; then
+              echo "::group::Available flavors"
+              openstack --os-cloud "$OS_CLOUD" flavor list -f table -c Name -c VCPUs -c RAM -c Disk
+              echo "::endgroup::"
+              echo "::error::Configured flavor $flavor is not available in $TARGET_REGION"
+              exit 1
+            fi
           done
           openstack --os-cloud "$OS_CLOUD" quota show -f yaml
           openstack --os-cloud "$OS_CLOUD" volume quota show -f yaml
