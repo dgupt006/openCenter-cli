@@ -5,7 +5,7 @@ name: OpenStack CLI E2E
 #
 # Phase 2 (opt-in via the run_deploy input): creates workflow-owned Swift
 # containers and a throwaway GitOps repo, runs a real `cluster deploy` against
-# DFW3, and verifies the cluster. Cleanup is a separate explicit opt-in so a
+# the selected region, and verifies the cluster. Cleanup is a separate explicit opt-in so a
 # cluster is preserved for investigation by default during the POC.
 #
 # Manual trigger only, per Victor's directive to start manual/manual-only.
@@ -27,10 +27,12 @@ on:
         type: choice
         options:
           - DFW3
+          - SJC3
+          - IAD3
       cluster_name_prefix:
         description: "Prefix for the generated cluster name (a run number is always appended for uniqueness)"
         required: false
-        default: "cli-ci-dfw3"
+        default: "cli-ci"
       run_deploy:
         description: "Run cluster deploy against real infrastructure. Leave off for a fast validate-only pass."
         required: true
@@ -67,11 +69,6 @@ jobs:
     environment: openstack-ci
     env:
       GITOPS_OWNER: dgupt006
-      OS_CLOUD: ci-dfw3
-      CI_RESULTS_SWIFT_CONTAINER: ${{ vars.CI_RESULTS_SWIFT_CONTAINER || 'opencenter-cli-ci-dfw3-results' }}
-      DFW3_EXTERNAL_NETWORK_ID: 82be3711-cd97-4f7c-8bbd-59f5524a949e
-      DFW3_IMAGE_ID: 6e3967a7-904a-49c6-870e-d5014c827944
-      DFW3_WINDOWS_IMAGE_ID: f0473f97-06db-42ca-8a63-6ecef6f49e08
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -81,6 +78,61 @@ jobs:
           set -euo pipefail
           echo "BUILD_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           echo "BUILD_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Configure target region
+        env:
+          IAD3_EXTERNAL_NETWORK_ID: ${{ vars.CI_OS_IAD3_EXTERNAL_NETWORK_ID }}
+          IAD3_IMAGE_ID: ${{ vars.CI_OS_IAD3_IMAGE_ID }}
+          IAD3_WINDOWS_IMAGE_ID: ${{ vars.CI_OS_IAD3_WINDOWS_IMAGE_ID }}
+          IAD3_FLAVOR_BASTION: ${{ vars.CI_OS_IAD3_FLAVOR_BASTION }}
+          IAD3_FLAVOR_MASTER: ${{ vars.CI_OS_IAD3_FLAVOR_MASTER }}
+          IAD3_FLAVOR_WORKER: ${{ vars.CI_OS_IAD3_FLAVOR_WORKER }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.region }}" in
+            DFW3)
+              region_lower=dfw3
+              external_network_id=82be3711-cd97-4f7c-8bbd-59f5524a949e
+              image_id=6e3967a7-904a-49c6-870e-d5014c827944
+              windows_image_id=f0473f97-06db-42ca-8a63-6ecef6f49e08
+              flavor_bastion=gp.5.2.4
+              flavor_master=gp.5.4.8
+              flavor_worker=gp.5.8.32
+              ;;
+            SJC3)
+              region_lower=sjc3
+              external_network_id=723f8fa2-dbf7-4cec-8d5f-017e62c12f79
+              image_id=7c341c79-6d7d-4172-bb68-457d73c37e78
+              windows_image_id=d3fe4539-5850-4bd0-9f9f-fea7dcfe0772
+              flavor_bastion=gp.0.2.4
+              flavor_master=gp.0.4.8
+              flavor_worker=gp.0.8.32
+              ;;
+            IAD3)
+              region_lower=iad3
+              external_network_id="$IAD3_EXTERNAL_NETWORK_ID"
+              image_id="$IAD3_IMAGE_ID"
+              windows_image_id="$IAD3_WINDOWS_IMAGE_ID"
+              flavor_bastion="$IAD3_FLAVOR_BASTION"
+              flavor_master="$IAD3_FLAVOR_MASTER"
+              flavor_worker="$IAD3_FLAVOR_WORKER"
+              test -n "$external_network_id" -a -n "$image_id" -a -n "$windows_image_id" \
+                -a -n "$flavor_bastion" -a -n "$flavor_master" -a -n "$flavor_worker" || {
+                echo "::error::IAD3 image/network/flavor repository variables are not configured"
+                exit 1
+              }
+              ;;
+          esac
+          echo "TARGET_REGION=${{ inputs.region }}" >> "$GITHUB_ENV"
+          echo "REGION_LOWER=$region_lower" >> "$GITHUB_ENV"
+          echo "OS_CLOUD=ci-$region_lower" >> "$GITHUB_ENV"
+          echo "EXTERNAL_NETWORK_ID=$external_network_id" >> "$GITHUB_ENV"
+          echo "IMAGE_ID=$image_id" >> "$GITHUB_ENV"
+          echo "WINDOWS_IMAGE_ID=$windows_image_id" >> "$GITHUB_ENV"
+          echo "FLAVOR_BASTION=$flavor_bastion" >> "$GITHUB_ENV"
+          echo "FLAVOR_MASTER=$flavor_master" >> "$GITHUB_ENV"
+          echo "FLAVOR_WORKER=$flavor_worker" >> "$GITHUB_ENV"
+          echo "CI_RESULTS_SWIFT_CONTAINER=opencenter-cli-ci-$region_lower-results" >> "$GITHUB_ENV"
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -120,7 +172,7 @@ jobs:
           esac
           name="${NAME_PREFIX}-${{ github.run_number }}-${{ github.run_attempt }}"
           org="${name}-gitops"
-          fqdn="${name}.dfw3.k8s.opencenter.cloud"
+          fqdn="${name}.${REGION_LOWER}.k8s.opencenter.cloud"
           echo "CLUSTER_ORG=$org" >> "$GITHUB_ENV"
           echo "cluster_name=$name" >> "$GITHUB_OUTPUT"
           echo "cluster_org=$org" >> "$GITHUB_OUTPUT"
@@ -128,31 +180,40 @@ jobs:
           echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
           echo "gitops_repo=${name}-gitops" >> "$GITHUB_OUTPUT"
 
-      - name: Configure isolated DFW3 application-credential profile
+      - name: Configure isolated application-credential profile
         env:
-          CI_OS_APP_CRED_ID: ${{ secrets.CI_OS_DFW3_APP_CRED_ID }}
-          CI_OS_APP_CRED_SECRET: ${{ secrets.CI_OS_DFW3_APP_CRED_SECRET }}
+          DFW3_APP_CRED_ID: ${{ secrets.CI_OS_DFW3_APP_CRED_ID }}
+          DFW3_APP_CRED_SECRET: ${{ secrets.CI_OS_DFW3_APP_CRED_SECRET }}
+          SJC3_APP_CRED_ID: ${{ secrets.CI_OS_SJC3_APP_CRED_ID }}
+          SJC3_APP_CRED_SECRET: ${{ secrets.CI_OS_SJC3_APP_CRED_SECRET }}
+          IAD3_APP_CRED_ID: ${{ secrets.CI_OS_IAD3_APP_CRED_ID }}
+          IAD3_APP_CRED_SECRET: ${{ secrets.CI_OS_IAD3_APP_CRED_SECRET }}
         run: |
           set -euo pipefail
           test "$(uname -s)" = Darwin
           for command in gh jq openstack sops tofu kubectl yq; do
             command -v "$command" >/dev/null
           done
-          test -n "$CI_OS_APP_CRED_ID"
-          test -n "$CI_OS_APP_CRED_SECRET"
+          case "$TARGET_REGION" in
+            DFW3) CI_OS_APP_CRED_ID="$DFW3_APP_CRED_ID"; CI_OS_APP_CRED_SECRET="$DFW3_APP_CRED_SECRET" ;;
+            SJC3) CI_OS_APP_CRED_ID="$SJC3_APP_CRED_ID"; CI_OS_APP_CRED_SECRET="$SJC3_APP_CRED_SECRET" ;;
+            IAD3) CI_OS_APP_CRED_ID="$IAD3_APP_CRED_ID"; CI_OS_APP_CRED_SECRET="$IAD3_APP_CRED_SECRET" ;;
+          esac
+          test -n "$CI_OS_APP_CRED_ID" || { echo "::error::Missing $TARGET_REGION application credential ID"; exit 1; }
+          test -n "$CI_OS_APP_CRED_SECRET" || { echo "::error::Missing $TARGET_REGION application credential secret"; exit 1; }
           test -r "$HOME/.config/openstack/clouds.yaml"
-          auth_url=$(yq -r '.clouds.keystone-dfw3.auth.auth_url // ""' "$HOME/.config/openstack/clouds.yaml")
+          auth_url=$(SOURCE_CLOUD="keystone-$REGION_LOWER" yq -r '.clouds[strenv(SOURCE_CLOUD)].auth.auth_url // ""' "$HOME/.config/openstack/clouds.yaml")
           test -n "$auth_url"
           clouds_file="$RUNNER_TEMP/openstack-ci-clouds.yaml"
-          AUTH_URL="$auth_url" APP_CRED_ID="$CI_OS_APP_CRED_ID" APP_CRED_SECRET="$CI_OS_APP_CRED_SECRET" \
+          AUTH_URL="$auth_url" APP_CRED_ID="$CI_OS_APP_CRED_ID" APP_CRED_SECRET="$CI_OS_APP_CRED_SECRET" CLOUD_NAME="$OS_CLOUD" REGION="$TARGET_REGION" \
             yq -n '
-              .clouds."ci-dfw3".auth.auth_url = strenv(AUTH_URL) |
-              .clouds."ci-dfw3".auth.application_credential_id = strenv(APP_CRED_ID) |
-              .clouds."ci-dfw3".auth.application_credential_secret = strenv(APP_CRED_SECRET) |
-              .clouds."ci-dfw3".auth_type = "v3applicationcredential" |
-              .clouds."ci-dfw3".region_name = "DFW3" |
-              .clouds."ci-dfw3".interface = "public" |
-              .clouds."ci-dfw3".identity_api_version = 3
+              .clouds[strenv(CLOUD_NAME)].auth.auth_url = strenv(AUTH_URL) |
+              .clouds[strenv(CLOUD_NAME)].auth.application_credential_id = strenv(APP_CRED_ID) |
+              .clouds[strenv(CLOUD_NAME)].auth.application_credential_secret = strenv(APP_CRED_SECRET) |
+              .clouds[strenv(CLOUD_NAME)].auth_type = "v3applicationcredential" |
+              .clouds[strenv(CLOUD_NAME)].region_name = strenv(REGION) |
+              .clouds[strenv(CLOUD_NAME)].interface = "public" |
+              .clouds[strenv(CLOUD_NAME)].identity_api_version = 3
             ' > "$clouds_file"
           chmod 0600 "$clouds_file"
           echo "OS_CLIENT_CONFIG_FILE=$clouds_file" >> "$GITHUB_ENV"
@@ -172,16 +233,16 @@ jobs:
           name="${{ steps.name.outputs.cluster_name }}"
           fqdn="${{ steps.name.outputs.cluster_fqdn }}"
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
-            opencenter.meta.region=DFW3 \
-            opencenter.infrastructure.cloud.openstack.region=DFW3 \
+            opencenter.meta.region="$TARGET_REGION" \
+            opencenter.infrastructure.cloud.openstack.region="$TARGET_REGION" \
             opencenter.cluster.cluster_fqdn="$fqdn" \
             opencenter.infrastructure.networking.dns_zone_name="$fqdn" \
             opencenter.infrastructure.cloud.openstack.dns_zone_name="$fqdn" \
             opencenter.infrastructure.cloud.openstack.networking.designate.dns_zone_name="$fqdn" \
-            opencenter.infrastructure.compute.flavor_bastion=gp.5.2.4 \
-            opencenter.infrastructure.compute.flavor_master=gp.5.4.8 \
-            opencenter.infrastructure.compute.flavor_worker=gp.5.8.32 \
-            opencenter.infrastructure.compute.flavor_worker_windows=gp.5.8.32 \
+            opencenter.infrastructure.compute.flavor_bastion="$FLAVOR_BASTION" \
+            opencenter.infrastructure.compute.flavor_master="$FLAVOR_MASTER" \
+            opencenter.infrastructure.compute.flavor_worker="$FLAVOR_WORKER" \
+            opencenter.infrastructure.compute.flavor_worker_windows="$FLAVOR_WORKER" \
             opencenter.gitops.base_repo.release= \
             opencenter.gitops.base_repo.branch=main
 
@@ -198,6 +259,10 @@ jobs:
 
           path = os.environ["CONFIG_PATH"]
           name = os.environ["CLUSTER_NAME"]
+          region = os.environ["TARGET_REGION"]
+          region_lower = os.environ["REGION_LOWER"]
+          fqdn = f"{name}.{region_lower}.k8s.opencenter.cloud"
+          swift_endpoint = f"https://swift.api.{region_lower}.rackspacecloud.com"
 
           with open(path) as f:
               content = f.read()
@@ -207,22 +272,22 @@ jobs:
                "    loki:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-loki\n"
-               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
-               "      s3_region: DFW3\n"
+               f"      s3_endpoint: {swift_endpoint}\n"
+               f"      s3_region: {region}\n"
                "      s3_force_path_style: true\n"),
               ("    tempo:\n      enabled: true\n      namespace: observability\n",
                "    tempo:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-tempo\n"
-               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
-               "      s3_region: DFW3\n"
+               f"      s3_endpoint: {swift_endpoint}\n"
+               f"      s3_region: {region}\n"
                "      s3_force_path_style: true\n"),
               ("    velero:\n      enabled: true\n      namespace: velero\n",
                "    velero:\n      enabled: true\n      namespace: velero\n"
                f"      backup_bucket: {name}-velero\n"
-               "      region: DFW3\n"
-               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
-               "      s3_region: DFW3\n"
+               f"      region: {region}\n"
+               f"      s3_endpoint: {swift_endpoint}\n"
+               f"      s3_region: {region}\n"
                "      s3_force_path_style: true\n"
                "      storage_type: s3\n"),
           ]
@@ -236,6 +301,15 @@ jobs:
 
           for old, new in replacements:
               content = content.replace(old, new, 1)
+
+          # Initializer defaults are DFW3; update the remaining generated
+          # region-derived values without changing which services are enabled.
+          content = content.replace(f"dashboard.{name}.dfw3.k8s.opencenter.cloud", f"dashboard.{fqdn}")
+          content = content.replace(f"auth.{name}.dfw3.k8s.opencenter.cloud", f"auth.{fqdn}")
+          content = content.replace(f"longhorn.{name}.dfw3.k8s.opencenter.cloud", f"longhorn.{fqdn}")
+          content = content.replace(f"alerts.{name}.dfw3.k8s.opencenter.cloud", f"alerts.{fqdn}")
+          content = content.replace("time.dfw3.rackspace.com", f"time.{region_lower}.rackspace.com")
+          content = content.replace("time2.dfw3.rackspace.com", f"time2.{region_lower}.rackspace.com")
 
           with open(path, "w") as f:
               f.write(content)
@@ -304,10 +378,10 @@ jobs:
             --os-cloud "$OS_CLOUD" \
             --import-auth \
             --create-internal-network \
-            --external-network-id "$DFW3_EXTERNAL_NETWORK_ID" \
+            --external-network-id "$EXTERNAL_NETWORK_ID" \
             --availability-zone az1 \
-            --image-id "$DFW3_IMAGE_ID" \
-            --windows-image-id "$DFW3_WINDOWS_IMAGE_ID" \
+            --image-id "$IMAGE_ID" \
+            --windows-image-id "$WINDOWS_IMAGE_ID" \
             --replace \
             --yes
 
