@@ -391,6 +391,7 @@ jobs:
               --clouds-yaml "$OS_CLIENT_CONFIG_FILE" \
               --container "${name}-${service}" \
               --s3-endpoint "$s3_endpoint" \
+              --rotate-credentials \
               --yes
           done
 
