@@ -201,9 +201,7 @@ jobs:
           esac
           test -n "$CI_OS_APP_CRED_ID" || { echo "::error::Missing $TARGET_REGION application credential ID"; exit 1; }
           test -n "$CI_OS_APP_CRED_SECRET" || { echo "::error::Missing $TARGET_REGION application credential secret"; exit 1; }
-          test -r "$HOME/.config/openstack/clouds.yaml"
-          auth_url=$(SOURCE_CLOUD="keystone-$REGION_LOWER" yq -r '.clouds[strenv(SOURCE_CLOUD)].auth.auth_url // ""' "$HOME/.config/openstack/clouds.yaml")
-          test -n "$auth_url"
+          auth_url="https://keystone.api.${REGION_LOWER}.rackspacecloud.com/v3/"
           clouds_file="$RUNNER_TEMP/openstack-ci-clouds.yaml"
           AUTH_URL="$auth_url" APP_CRED_ID="$CI_OS_APP_CRED_ID" APP_CRED_SECRET="$CI_OS_APP_CRED_SECRET" CLOUD_NAME="$OS_CLOUD" REGION="$TARGET_REGION" \
             yq -n '
