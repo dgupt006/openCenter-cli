@@ -322,6 +322,13 @@ jobs:
           set -euo pipefail
           opencenter secrets sync "${{ steps.name.outputs.cluster_id }}"
 
+      # Secret manifests are materialized by `secrets sync`. Regenerate once so
+      # service kustomizations include those newly owned `secret.yaml` files.
+      - name: Regenerate with materialized secrets
+        run: |
+          set -euo pipefail
+          opencenter cluster generate "${{ steps.name.outputs.cluster_id }}"
+
       - name: Validate manifests (security only)
         run: |
           set -euo pipefail
