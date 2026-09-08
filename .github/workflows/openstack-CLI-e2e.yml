@@ -415,15 +415,33 @@ jobs:
           set -euo pipefail
           volume_file="$RUNNER_TEMP/ci-cinder-volume-ids"
           [[ -f "$volume_file" ]] || exit 0
+          requested_deletions=()
           while IFS= read -r volume_id; do
             [[ -n "$volume_id" ]] || continue
             status=$(openstack --os-cloud "$OS_CLOUD" volume show "$volume_id" -f value -c status 2>/dev/null || true)
             if [[ "$status" == available ]]; then
               openstack --os-cloud "$OS_CLOUD" volume delete "$volume_id"
+              requested_deletions+=("$volume_id")
             elif [[ -n "$status" ]]; then
               echo "::warning::Not deleting residual volume $volume_id because status is $status"
             fi
           done < "$volume_file"
+
+          for attempt in {1..30}; do
+            remaining=()
+            for volume_id in "${requested_deletions[@]}"; do
+              if openstack --os-cloud "$OS_CLOUD" volume show "$volume_id" >/dev/null 2>&1; then
+                remaining+=("$volume_id")
+              fi
+            done
+            ((${#remaining[@]} == 0)) && exit 0
+            echo "Waiting for ${#remaining[@]} residual Cinder volume(s) to finish deleting"
+            requested_deletions=("${remaining[@]}")
+            sleep 10
+          done
+
+          echo "::error::Residual Cinder volumes still exist after deletion timeout: ${requested_deletions[*]}"
+          exit 1
 
       - name: Delete workflow-owned Swift containers
         if: ${{ inputs.run_deploy && inputs.cleanup_after_run && always() }}
