@@ -103,7 +103,7 @@ jobs:
               region_lower=sjc3
               external_network_id=723f8fa2-dbf7-4cec-8d5f-017e62c12f79
               image_id=7c341c79-6d7d-4172-bb68-457d73c37e78
-              windows_image_id=d3fe4539-5850-4bd0-9f9f-fea7dcfe0772
+              windows_image_id=e2e6c12a-d140-4b98-9cf5-2929f26ec691
               flavor_bastion=gp.0.2.4
               flavor_master=gp.0.4.8
               flavor_worker=gp.0.8.32
