@@ -367,26 +367,17 @@ jobs:
           test -n "$CI_EC2_ACCESS_KEY"
           test -n "$CI_EC2_SECRET_KEY"
           name="${{ steps.name.outputs.cluster_name }}"
-          s3_endpoint="https://swift.api.${REGION_LOWER}.rackspacecloud.com"
           if [[ "${{ inputs.run_deploy }}" == "true" ]]; then
             openstack --os-cloud "$OS_CLOUD" container create \
               "${name}-loki" \
               "${name}-velero"
           fi
+          config_path="$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/${name}/${name}-config.yaml"
+          S3_CREDENTIAL_ID="$CI_EC2_ACCESS_KEY" yq -i '
+            .opencenter.services.loki.s3_credential_id = strenv(S3_CREDENTIAL_ID) |
+            .opencenter.services.velero.s3_credential_id = strenv(S3_CREDENTIAL_ID)
+          ' "$config_path"
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
-            opencenter.services.loki.storage_type=s3 \
-            opencenter.services.loki.bucket_name="${name}-loki" \
-            opencenter.services.loki.s3_endpoint="$s3_endpoint" \
-            opencenter.services.loki.s3_region="$TARGET_REGION" \
-            opencenter.services.loki.s3_force_path_style=true \
-            opencenter.services.loki.s3_credential_id="$CI_EC2_ACCESS_KEY" \
-            opencenter.services.velero.storage_type=s3 \
-            opencenter.services.velero.backup_bucket="${name}-velero" \
-            opencenter.services.velero.region="$TARGET_REGION" \
-            opencenter.services.velero.s3_endpoint="$s3_endpoint" \
-            opencenter.services.velero.s3_region="$TARGET_REGION" \
-            opencenter.services.velero.s3_force_path_style=true \
-            opencenter.services.velero.s3_credential_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_access_key_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_secret_access_key="$CI_EC2_SECRET_KEY" \
             secrets.velero.access_key_id="$CI_EC2_ACCESS_KEY" \
