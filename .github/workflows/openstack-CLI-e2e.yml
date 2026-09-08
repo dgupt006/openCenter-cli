@@ -59,7 +59,6 @@ jobs:
     runs-on: [self-hosted, macOS]
     timeout-minutes: 120
     env:
-      CLUSTER_ORG: opencenter-cli-ci
       GITOPS_OWNER: dgupt006
       OS_CLOUD: keystone-dfw3
       DFW3_EXTERNAL_NETWORK_ID: 82be3711-cd97-4f7c-8bbd-59f5524a949e
@@ -106,9 +105,12 @@ jobs:
               ;;
           esac
           name="${NAME_PREFIX}-${{ github.run_number }}-${{ github.run_attempt }}"
+          org="${name}-gitops"
           fqdn="${name}.dfw3.k8s.opencenter.cloud"
+          echo "CLUSTER_ORG=$org" >> "$GITHUB_ENV"
           echo "cluster_name=$name" >> "$GITHUB_OUTPUT"
-          echo "cluster_id=${CLUSTER_ORG}/${name}" >> "$GITHUB_OUTPUT"
+          echo "cluster_org=$org" >> "$GITHUB_OUTPUT"
+          echo "cluster_id=${org}/${name}" >> "$GITHUB_OUTPUT"
           echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
           echo "gitops_repo=${name}-gitops" >> "$GITHUB_OUTPUT"
 
@@ -183,22 +185,20 @@ jobs:
                f"      backup_bucket: {name}-velero\n"),
           ]
 
-          missing = []
+          missing = [old for old, _ in replacements if old not in content]
+          if missing:
+              print("::error::Expected default-app settings were not found in the generated config:")
+              for m in missing:
+                  print(f"::error::  {m!r}")
+              raise SystemExit(1)
+
           for old, new in replacements:
-              if old not in content:
-                  missing.append(old)
-                  continue
               content = content.replace(old, new, 1)
 
           with open(path, "w") as f:
               f.write(content)
 
-          if missing:
-              print("::warning::Some expected patterns were not found in the generated config:")
-              for m in missing:
-                  print(f"::warning::  {m!r}")
-          else:
-              print("Patched map-typed service fields")
+          print("Patched map-typed service fields")
           PYEOF
 
       - name: Create workflow-owned Swift containers
