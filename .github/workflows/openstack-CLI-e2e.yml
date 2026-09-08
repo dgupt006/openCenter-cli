@@ -237,9 +237,7 @@ jobs:
               exit 1
             fi
           done
-          openstack --os-cloud "$OS_CLOUD" quota show -f yaml
-          openstack --os-cloud "$OS_CLOUD" volume quota show -f yaml
-          openstack --os-cloud "$OS_CLOUD" network quota show -f yaml
+          openstack --os-cloud "$OS_CLOUD" quota show --usage -f yaml
 
       - name: cluster init
         run: |
