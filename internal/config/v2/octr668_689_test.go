@@ -138,6 +138,9 @@ func TestValidateForDeploymentMatchesReadinessForSelectedLokiTempoBackends(t *te
 func readinessTestConfigForDeployment(t *testing.T) *Config {
 	t.Helper()
 	cfg := validReadinessConfig(t, "kind")
+	// Tempo is optional in the v1 default profile, so enable it explicitly in
+	// tests that exercise its deployment-time storage validation.
+	cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).Enabled = true
 	cfg.Secrets.Loki.SwiftApplicationCredentialSecret = "loki-swift-secret"
 	cfg.Secrets.Loki.S3AccessKeyID = "loki-s3-access"
 	cfg.Secrets.Loki.S3SecretAccessKey = "loki-s3-secret"

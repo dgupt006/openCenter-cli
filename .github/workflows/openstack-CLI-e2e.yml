@@ -245,7 +245,7 @@ jobs:
             opencenter.gitops.base_repo.branch=main
 
       # opencenter.services.* is a generic map, so patch only the storage
-      # settings for initializer-enabled Loki, Tempo, and Velero. This does
+      # settings for initializer-enabled Loki and Velero. This does
       # not enable any optional application.
       - name: Fix up map-typed service fields
         env:
@@ -270,13 +270,6 @@ jobs:
                "    loki:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-loki\n"
-               f"      s3_endpoint: {swift_endpoint}\n"
-               f"      s3_region: {region}\n"
-               "      s3_force_path_style: true\n"),
-              ("    tempo:\n      enabled: true\n      namespace: observability\n",
-               "    tempo:\n      enabled: true\n      namespace: observability\n"
-               "      storage_type: s3\n"
-               f"      bucket_name: {name}-tempo\n"
                f"      s3_endpoint: {swift_endpoint}\n"
                f"      s3_region: {region}\n"
                "      s3_force_path_style: true\n"),
@@ -354,12 +347,9 @@ jobs:
           test -n "$CI_EC2_SECRET_KEY"
           opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
             opencenter.services.loki.s3_credential_id="$CI_EC2_ACCESS_KEY" \
-            opencenter.services.tempo.s3_credential_id="$CI_EC2_ACCESS_KEY" \
             opencenter.services.velero.s3_credential_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_access_key_id="$CI_EC2_ACCESS_KEY" \
             secrets.loki.s3_secret_access_key="$CI_EC2_SECRET_KEY" \
-            secrets.tempo.access_key="$CI_EC2_ACCESS_KEY" \
-            secrets.tempo.secret_key="$CI_EC2_SECRET_KEY" \
             secrets.velero.access_key_id="$CI_EC2_ACCESS_KEY" \
             secrets.velero.secret_access_key="$CI_EC2_SECRET_KEY"
 
@@ -383,7 +373,7 @@ jobs:
           set -euo pipefail
           name="${{ steps.name.outputs.cluster_name }}"
           s3_endpoint="https://swift.api.${REGION_LOWER}.rackspacecloud.com"
-          for service in loki tempo velero; do
+          for service in loki velero; do
             opencenter cluster service storage apply "$service" \
               --cluster "${{ steps.name.outputs.cluster_id }}" \
               --backend s3 \
@@ -540,7 +530,7 @@ jobs:
         run: |
           set -euo pipefail
           name="${{ steps.name.outputs.cluster_name }}"
-          for container in "${name}-loki" "${name}-tempo" "${name}-velero"; do
+          for container in "${name}-loki" "${name}-velero"; do
             openstack --os-cloud "$OS_CLOUD" container delete --recursive "$container" || \
               echo "::warning::Failed to delete Swift container $container"
           done

@@ -113,6 +113,50 @@ func TestDefaultServiceMapEntriesEmbedBaseConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultServiceMapEnabledServicesMatchV1Profile(t *testing.T) {
+	want := []string{
+		"calico",
+		"cert-manager",
+		"external-snapshotter",
+		"fluxcd",
+		"gateway",
+		"gateway-api",
+		"headlamp",
+		"keycloak",
+		"kube-prometheus-stack",
+		"kyverno",
+		"loki",
+		"olm",
+		"openstack-ccm",
+		"openstack-csi",
+		"postgres-operator",
+		"rbac-manager",
+		"sources",
+		"velero",
+	}
+
+	cfg, err := NewV2Default("cluster", "openstack")
+	if err != nil {
+		t.Fatalf("NewV2Default() error = %v", err)
+	}
+	serviceMap := cfg.OpenCenter.Services
+	got := make([]string, 0, len(want))
+	for name, serviceCfg := range serviceMap {
+		enabled, ok := serviceCfg.(interface{ IsEnabled() bool })
+		if !ok {
+			t.Fatalf("%q (%T) does not expose IsEnabled", name, serviceCfg)
+		}
+		if enabled.IsEnabled() {
+			got = append(got, name)
+		}
+	}
+	sort.Strings(got)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("enabled default services = %v, want exact v1 profile %v", got, want)
+	}
+}
+
 // concreteType returns the dereferenced struct type behind a service config.
 func concreteType(serviceCfg any) reflect.Type {
 	typ := reflect.TypeOf(serviceCfg)

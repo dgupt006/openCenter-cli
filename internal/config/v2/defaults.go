@@ -776,7 +776,7 @@ func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
 	case "openstack-csi":
 		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "openstack-csi"}}, true
 	case "tempo":
-		return &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"}}, true
+		return &services.TempoConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
 	case "velero":
 		return &services.VeleroConfig{BaseConfig: services.BaseConfig{Enabled: true, Namespace: "velero"}}, true
 	case "harbor":

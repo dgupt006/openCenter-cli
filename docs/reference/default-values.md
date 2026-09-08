@@ -207,7 +207,6 @@ All new configurations use schema version 2.0.
 | `postgres-operator` | `true` | PostgreSQL operator |
 | `rbac-manager` | `true` | RBAC management |
 | `sources` | `true` | FluxCD sources |
-| `tempo` | `true` | Distributed tracing |
 | `velero` | `true` | Backup and DR |
 
 ### Disabled by Default
@@ -216,6 +215,7 @@ All new configurations use schema version 2.0.
 | --- | --- | --- |
 | `alert-proxy` | `false` | Alert forwarding (requires config) |
 | `etcd-backup` | `false` | Etcd backup to S3; requires endpoint, bucket, region, and service-specific credentials when enabled |
+| `tempo` | `false` | Distributed tracing; optional in the v1 CLI profile |
 | `vsphere-csi` | `false` | VMware CSI driver |
 | `weave-gitops` | `false` | Weave GitOps UI |
 
