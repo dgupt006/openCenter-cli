@@ -3,10 +3,9 @@ name: OpenStack CLI E2E
 # Phase 1 (always runs): init -> provider apply -> generate -> secrets sync
 # -> validate-manifests --security-only, entirely local to the runner.
 #
-# Phase 2 (opt-in via the run_deploy input): creates a throwaway GitOps repo,
-# pushes generated manifests to it, runs a real `cluster deploy` against
-# SJC3, then `cluster destroy` and deletes the throwaway repo in cleanup
-# regardless of how deploy went. Real infra, real cost, ~40+ minutes.
+# Phase 2 (opt-in via the run_deploy input): creates workflow-owned Swift
+# containers and a throwaway GitOps repo, runs a real `cluster deploy` against
+# DFW3, verifies the cluster, then cleans up only those workflow-owned resources.
 #
 # Manual trigger only, per Victor's directive to start manual/manual-only.
 #
@@ -23,29 +22,49 @@ on:
       region:
         description: "Target OpenStack region"
         required: true
-        default: "SJC3"
+        default: "DFW3"
         type: choice
         options:
-          - SJC3
+          - DFW3
       cluster_name_prefix:
         description: "Prefix for the generated cluster name (a run number is always appended for uniqueness)"
         required: false
-        default: "cli-ci"
+        default: "cli-ci-dfw3"
       run_deploy:
         description: "Also run cluster deploy + destroy against real infra (~40+ min). Leave off for a fast validate-only pass."
         required: true
         type: boolean
         default: false
+      concurrency_slot:
+        description: "Deployment slot (two slots allow at most two manually coordinated live clusters)"
+        required: true
+        type: choice
+        default: "1"
+        options:
+          - "1"
+          - "2"
+
+concurrency:
+  group: openstack-e2e-${{ inputs.region }}-slot-${{ inputs.concurrency_slot }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   validate:
-    runs-on: self-hosted
-    timeout-minutes: 90
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 120
     env:
       CLUSTER_ORG: opencenter-cli-ci
+      GITOPS_OWNER: dgupt006
+      OS_CLOUD: keystone-dfw3
+      DFW3_EXTERNAL_NETWORK_ID: 82be3711-cd97-4f7c-8bbd-59f5524a949e
+      DFW3_IMAGE_ID: 6e3967a7-904a-49c6-870e-d5014c827944
+      DFW3_WINDOWS_IMAGE_ID: 29d0d240-3f85-4375-bf4d-197389fb25bc
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -76,30 +95,32 @@ jobs:
       # fresh name every time.
       - name: Derive unique cluster name
         id: name
+        env:
+          NAME_PREFIX: ${{ inputs.cluster_name_prefix }}
         run: |
           set -euo pipefail
-          name="${{ inputs.cluster_name_prefix }}-${{ github.run_number }}"
-          fqdn="${name}.sjc3.k8s.opencenter.cloud"
+          case "$NAME_PREFIX" in
+            ''|*[!a-z0-9-]*)
+              echo "::error::cluster_name_prefix must contain only lowercase letters, numbers, and hyphens"
+              exit 1
+              ;;
+          esac
+          name="${NAME_PREFIX}-${{ github.run_number }}-${{ github.run_attempt }}"
+          fqdn="${name}.dfw3.k8s.opencenter.cloud"
           echo "cluster_name=$name" >> "$GITHUB_OUTPUT"
+          echo "cluster_id=${CLUSTER_ORG}/${name}" >> "$GITHUB_OUTPUT"
           echo "cluster_fqdn=$fqdn" >> "$GITHUB_OUTPUT"
           echo "gitops_repo=${name}-gitops" >> "$GITHUB_OUTPUT"
 
-      - name: Write clouds.yaml
+      - name: Verify Mac runner and DFW3 access
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/openstack"
-          cat > "$HOME/.config/openstack/clouds.yaml" <<EOF
-          clouds:
-            sjc3:
-              auth:
-                auth_url: ${{ vars.CI_OS_SJC3_AUTH_URL }}
-                application_credential_id: ${{ secrets.CI_OS_SJC3_APP_CRED_ID }}
-                application_credential_secret: ${{ secrets.CI_OS_SJC3_APP_CRED_SECRET }}
-              auth_type: v3applicationcredential
-              region_name: SJC3
-              interface: public
-              identity_api_version: 3
-          EOF
+          test "$(uname -s)" = Darwin
+          for command in gh jq openstack sops tofu kubectl; do
+            command -v "$command" >/dev/null
+          done
+          test -r "$HOME/.config/openstack/clouds.yaml"
+          openstack --os-cloud "$OS_CLOUD" token issue -f value -c expires >/dev/null
 
       - name: cluster init
         run: |
@@ -114,27 +135,28 @@ jobs:
           set -euo pipefail
           name="${{ steps.name.outputs.cluster_name }}"
           fqdn="${{ steps.name.outputs.cluster_fqdn }}"
-          opencenter cluster set "$name" \
-            opencenter.meta.region=SJC3 \
-            opencenter.infrastructure.cloud.openstack.region=SJC3 \
+          opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
+            opencenter.meta.region=DFW3 \
+            opencenter.infrastructure.cloud.openstack.region=DFW3 \
             opencenter.cluster.cluster_fqdn="$fqdn" \
             opencenter.infrastructure.networking.dns_zone_name="$fqdn" \
             opencenter.infrastructure.cloud.openstack.dns_zone_name="$fqdn" \
             opencenter.infrastructure.cloud.openstack.networking.designate.dns_zone_name="$fqdn" \
-            opencenter.infrastructure.compute.flavor_bastion=gp.0.2.4 \
-            opencenter.infrastructure.compute.flavor_master=gp.0.4.8 \
-            opencenter.infrastructure.compute.flavor_worker=gp.0.4.16 \
-            opencenter.infrastructure.compute.flavor_worker_windows=gp.0.4.16
+            opencenter.infrastructure.compute.flavor_bastion=gp.5.2.4 \
+            opencenter.infrastructure.compute.flavor_master=gp.5.4.8 \
+            opencenter.infrastructure.compute.flavor_worker=gp.5.8.32 \
+            opencenter.infrastructure.compute.flavor_worker_windows=gp.5.8.32 \
+            opencenter.gitops.base_repo.release= \
+            opencenter.gitops.base_repo.branch=main
 
-      # opencenter.services.* is a generic map, and `cluster set` can't reach
-      # into map-typed fields (setField: "setting nested fields in maps is
-      # not supported"). Patch the generated YAML directly instead - same
-      # fields fixed by hand for the sjc3cli1/sjc3cli2 builds.
+      # opencenter.services.* is a generic map, so patch only the storage
+      # settings for initializer-enabled Loki, Tempo, and Velero. This does
+      # not enable any optional application.
       - name: Fix up map-typed service fields
         env:
-          CONFIG_PATH: /Users/dinesh.gupta/.config/opencenter/clusters/blueprints/${{ env.CLUSTER_ORG }}/${{ steps.name.outputs.cluster_name }}/${{ steps.name.outputs.cluster_name }}-config.yaml
           CLUSTER_NAME: ${{ steps.name.outputs.cluster_name }}
         run: |
+          export CONFIG_PATH="$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/$CLUSTER_NAME/$CLUSTER_NAME-config.yaml"
           python3 - <<'PYEOF'
           import os
 
@@ -145,27 +167,20 @@ jobs:
               content = f.read()
 
           replacements = [
-              ("suffix: DFW3", "suffix: SJC3"),
-              (f"hostname: dashboard.{name}.dfw3.k8s.opencenter.cloud",
-               f"hostname: dashboard.{name}.sjc3.k8s.opencenter.cloud"),
-              (f"hostname: auth.{name}.dfw3.k8s.opencenter.cloud",
-               f"hostname: auth.{name}.sjc3.k8s.opencenter.cloud"),
-              (f"hostname: longhorn.{name}.dfw3.k8s.opencenter.cloud",
-               f"hostname: longhorn.{name}.sjc3.k8s.opencenter.cloud"),
-              (f"http_route_fqdn: alerts.{name}.dfw3.k8s.opencenter.cloud",
-               f"http_route_fqdn: alerts.{name}.sjc3.k8s.opencenter.cloud"),
               ("    loki:\n      enabled: true\n      namespace: observability\n",
                "    loki:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-loki\n"
-               "      s3_endpoint: s3.ap-southeast-4.amazonaws.com\n"
-               "      s3_region: ap-southeast-4\n"),
+               "      s3_endpoint: https://swift.api.dfw3.rackspacecloud.com\n"
+               "      s3_region: DFW3\n"),
               ("    tempo:\n      enabled: true\n      namespace: observability\n",
                "    tempo:\n      enabled: true\n      namespace: observability\n"
                "      storage_type: s3\n"
                f"      bucket_name: {name}-tempo\n"
-               "      s3_endpoint: s3.ap-southeast-4.amazonaws.com\n"
-               "      s3_region: ap-southeast-4\n"),
+               "      s3_endpoint: swift.api.dfw3.rackspacecloud.com\n"
+               "      s3_region: DFW3\n"),
+              ("      backup_bucket: velero\n",
+               f"      backup_bucket: {name}-velero\n"),
           ]
 
           missing = []
@@ -186,6 +201,16 @@ jobs:
               print("Patched map-typed service fields")
           PYEOF
 
+      - name: Create workflow-owned Swift containers
+        if: ${{ inputs.run_deploy }}
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          openstack --os-cloud "$OS_CLOUD" container create \
+            "${name}-loki" \
+            "${name}-tempo" \
+            "${name}-velero"
+
       # Phase 2 only: point the cluster at a throwaway GitOps repo before
       # generate/secrets-sync run, since deploy needs Flux to pull from
       # somewhere real. Deleted again in cleanup regardless of outcome.
@@ -195,7 +220,8 @@ jobs:
           GH_TOKEN: ${{ secrets.CI_GITHUB_PAT }}
         run: |
           set -euo pipefail
-          gh repo create "dgupt006/${{ steps.name.outputs.gitops_repo }}" \
+          test -n "$GH_TOKEN"
+          gh repo create "${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}" \
             --private \
             --description "Ephemeral CI GitOps repo for ${{ steps.name.outputs.cluster_name }} - safe to delete, cleaned up automatically"
 
@@ -203,60 +229,57 @@ jobs:
         if: ${{ inputs.run_deploy }}
         env:
           CI_GITHUB_PAT: ${{ secrets.CI_GITHUB_PAT }}
-          CI_S3_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
-          CI_S3_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
+          CI_EC2_ACCESS_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_ACCESS_KEY }}
+          CI_EC2_SECRET_KEY: ${{ secrets.CI_LOKI_TEMPO_S3_SECRET_KEY }}
         run: |
           set -euo pipefail
+          test -n "$CI_GITHUB_PAT"
+          test -n "$CI_EC2_ACCESS_KEY"
+          test -n "$CI_EC2_SECRET_KEY"
           name="${{ steps.name.outputs.cluster_name }}"
           keycloak_password=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-          opencenter cluster set "$name" \
-            opencenter.gitops.repository.url="https://github.com/dgupt006/${{ steps.name.outputs.gitops_repo }}.git" \
+          opencenter cluster set "${{ steps.name.outputs.cluster_id }}" \
+            opencenter.gitops.repository.url="https://github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git" \
+            opencenter.gitops.repository.branch=main \
             opencenter.gitops.repository.path="clusters/${name}" \
             opencenter.gitops.auth.token.token="$CI_GITHUB_PAT" \
-            secrets.loki.s3_access_key_id="$CI_S3_ACCESS_KEY" \
-            secrets.loki.s3_secret_access_key="$CI_S3_SECRET_KEY" \
-            secrets.tempo.access_key="$CI_S3_ACCESS_KEY" \
-            secrets.tempo.secret_key="$CI_S3_SECRET_KEY" \
+            secrets.loki.s3_access_key_id="$CI_EC2_ACCESS_KEY" \
+            secrets.loki.s3_secret_access_key="$CI_EC2_SECRET_KEY" \
+            secrets.tempo.access_key="$CI_EC2_ACCESS_KEY" \
+            secrets.tempo.secret_key="$CI_EC2_SECRET_KEY" \
+            secrets.velero.access_key_id="$CI_EC2_ACCESS_KEY" \
+            secrets.velero.secret_access_key="$CI_EC2_SECRET_KEY" \
             secrets.keycloak.admin_password="$keycloak_password"
 
       - name: cluster provider openstack apply
         run: |
           set -euo pipefail
-          opencenter cluster provider openstack apply "${{ steps.name.outputs.cluster_name }}" \
-            --os-cloud sjc3 \
+          opencenter cluster provider openstack apply "${{ steps.name.outputs.cluster_id }}" \
+            --os-cloud "$OS_CLOUD" \
             --import-auth \
             --create-internal-network \
-            --external-network-id "${{ vars.CI_OS_SJC3_EXTERNAL_NETWORK_ID }}" \
+            --external-network-id "$DFW3_EXTERNAL_NETWORK_ID" \
             --availability-zone az1 \
-            --image-id "${{ vars.CI_OS_SJC3_IMAGE_ID }}" \
-            --windows-image-id "${{ vars.CI_OS_SJC3_WINDOWS_IMAGE_ID }}" \
+            --image-id "$DFW3_IMAGE_ID" \
+            --windows-image-id "$DFW3_WINDOWS_IMAGE_ID" \
             --replace \
             --yes
 
       - name: cluster generate
         run: |
           set -euo pipefail
-          opencenter cluster generate "${{ steps.name.outputs.cluster_name }}"
+          opencenter cluster validate "${{ steps.name.outputs.cluster_id }}"
+          opencenter cluster generate "${{ steps.name.outputs.cluster_id }}"
 
       - name: secrets sync
         run: |
           set -euo pipefail
-          opencenter secrets sync "${{ steps.name.outputs.cluster_name }}"
+          opencenter secrets sync "${{ steps.name.outputs.cluster_id }}"
 
       - name: Validate manifests (security only)
         run: |
           set -euo pipefail
-          opencenter cluster validate-manifests "${{ steps.name.outputs.cluster_name }}" --security-only
-
-      - name: Upload rendered config and manifests
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: opencenter-ci-${{ steps.name.outputs.cluster_name }}
-          path: |
-            ~/.config/opencenter/clusters/blueprints/${{ env.CLUSTER_ORG }}/${{ steps.name.outputs.cluster_name }}/**
-            ~/.config/opencenter/clusters/gitops/${{ env.CLUSTER_ORG }}/**
-          retention-days: 14
+          opencenter cluster validate-manifests "${{ steps.name.outputs.cluster_id }}" --security-only
 
       - name: Commit and push GitOps content
         if: ${{ inputs.run_deploy }}
@@ -268,7 +291,7 @@ jobs:
           cd "$gitops_dir"
           git config user.name "openCenter CI"
           git config user.email "ci-bot@users.noreply.github.com"
-          git remote add origin "https://x-access-token:${CI_GITHUB_PAT}@github.com/dgupt006/${{ steps.name.outputs.gitops_repo }}.git"
+          git remote add origin "https://x-access-token:${CI_GITHUB_PAT}@github.com/${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}.git"
           git add -A
           git commit -m "Initial generate for ${{ steps.name.outputs.cluster_name }} (CI)"
           git push -u origin main
@@ -277,21 +300,91 @@ jobs:
         if: ${{ inputs.run_deploy }}
         run: |
           set -euo pipefail
-          opencenter cluster deploy "${{ steps.name.outputs.cluster_name }}" --yes
+          opencenter cluster deploy "${{ steps.name.outputs.cluster_id }}" --yes
+
+      - name: Verify nodes and default applications
+        if: ${{ inputs.run_deploy }}
+        run: |
+          set -euo pipefail
+          eval "$(opencenter cluster env "${{ steps.name.outputs.cluster_id }}")"
+          kubectl wait --for=condition=Ready nodes --all --timeout=15m
+
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            ks_not_ready=$(kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A -o json | jq '[.items[] | select((any(.status.conditions[]?; .type == "Ready" and .status == "True")) | not)] | length')
+            hr_not_ready=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A -o json | jq '[.items[] | select((any(.status.conditions[]?; .type == "Ready" and .status == "True")) | not)] | length')
+            if [[ "$ks_not_ready" == 0 && "$hr_not_ready" == 0 ]]; then
+              kubectl get nodes
+              kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A
+              kubectl get helmreleases.helm.toolkit.fluxcd.io -A
+              exit 0
+            fi
+            echo "Waiting for GitOps readiness: kustomizations=$ks_not_ready helmreleases=$hr_not_ready"
+            sleep 30
+          done
+          kubectl get kustomizations.kustomize.toolkit.fluxcd.io -A
+          kubectl get helmreleases.helm.toolkit.fluxcd.io -A
+          exit 1
+
+      - name: Record Cinder PVC volume IDs before cleanup
+        if: ${{ inputs.run_deploy && always() }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          eval "$(opencenter cluster env "${{ steps.name.outputs.cluster_id }}")"
+          kubectl get pv -o json | jq -r '.items[] | select(.spec.csi.driver == "cinder.csi.openstack.org") | .spec.csi.volumeHandle' \
+            > "$RUNNER_TEMP/ci-cinder-volume-ids"
+          kubectl delete kustomizations.kustomize.toolkit.fluxcd.io --all -A --wait=false || true
+          kubectl delete helmreleases.helm.toolkit.fluxcd.io --all -A --wait=false || true
+          kubectl delete pvc --all -A --wait=false || true
+          for attempt in {1..30}; do
+            remaining=$(kubectl get pv --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            [[ "$remaining" == 0 ]] && break
+            echo "Waiting for $remaining PVs to be deleted before infrastructure teardown"
+            sleep 10
+          done
 
       - name: cluster destroy
         if: ${{ inputs.run_deploy && always() }}
         run: |
           set -euo pipefail
-          opencenter cluster destroy "${{ steps.name.outputs.cluster_name }}" --force --remove-files
+          opencenter cluster destroy "${{ steps.name.outputs.cluster_id }}" --force --remove-files
+
+      - name: Remove verified residual Cinder volumes
+        if: ${{ inputs.run_deploy && always() }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          volume_file="$RUNNER_TEMP/ci-cinder-volume-ids"
+          [[ -f "$volume_file" ]] || exit 0
+          while IFS= read -r volume_id; do
+            [[ -n "$volume_id" ]] || continue
+            status=$(openstack --os-cloud "$OS_CLOUD" volume show "$volume_id" -f value -c status 2>/dev/null || true)
+            if [[ "$status" == available ]]; then
+              openstack --os-cloud "$OS_CLOUD" volume delete "$volume_id"
+            elif [[ -n "$status" ]]; then
+              echo "::warning::Not deleting residual volume $volume_id because status is $status"
+            fi
+          done < "$volume_file"
+
+      - name: Delete workflow-owned Swift containers
+        if: ${{ inputs.run_deploy && always() }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          name="${{ steps.name.outputs.cluster_name }}"
+          for container in "${name}-loki" "${name}-tempo" "${name}-velero"; do
+            openstack --os-cloud "$OS_CLOUD" container delete --recursive "$container" || \
+              echo "::warning::Failed to delete Swift container $container"
+          done
 
       - name: Delete throwaway GitOps repo
         if: ${{ inputs.run_deploy && always() }}
         env:
           GH_TOKEN: ${{ secrets.CI_GITHUB_PAT }}
         run: |
-          gh repo delete "dgupt006/${{ steps.name.outputs.gitops_repo }}" --yes || \
-            echo "::warning::Failed to delete throwaway repo dgupt006/${{ steps.name.outputs.gitops_repo }} - clean up manually"
+          gh repo delete "${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }}" --yes || \
+            echo "::warning::Failed to delete throwaway repo ${GITOPS_OWNER}/${{ steps.name.outputs.gitops_repo }} - clean up manually"
 
       # Local-disk safety net regardless of path taken above. No-op if
       # `cluster destroy --remove-files` already cleaned everything.
@@ -300,6 +393,10 @@ jobs:
         run: |
           set -euo pipefail
           name="${{ steps.name.outputs.cluster_name }}"
+          case "$name" in
+            cli-ci-*) ;;
+            *) echo "::error::Refusing cleanup for unexpected cluster name: $name"; exit 1 ;;
+          esac
           rm -rf "$HOME/.config/opencenter/clusters/blueprints/$CLUSTER_ORG/$name"
           rm -rf "$HOME/.config/opencenter/clusters/secrets/$CLUSTER_ORG/$name"
           rm -rf "$HOME/.config/opencenter/clusters/gitops/$CLUSTER_ORG"
