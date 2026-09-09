@@ -99,8 +99,8 @@ jobs:
               image_id=6e3967a7-904a-49c6-870e-d5014c827944
               windows_image_id=159c5f56-5712-4acf-a380-9e4f708d2d04
               flavor_bastion=gp.5.2.4
-              flavor_master=gp.5.4.8
-              flavor_worker=gp.5.8.32
+              flavor_master=gp.5.4.16
+              flavor_worker=gp.5.4.16
               ;;
             SJC3)
               region_lower=sjc3
