@@ -65,7 +65,10 @@ env:
 jobs:
   validate:
     runs-on: [self-hosted, macOS]
-    timeout-minutes: 120
+    # IAD3 can spend close to an hour waiting for a delayed VM before OS
+    # hardening and Kubespray begin. Keep enough headroom to finish and retain
+    # diagnostics instead of GitHub cancelling an otherwise healthy deploy.
+    timeout-minutes: 240
     environment: openstack-ci
     env:
       GITOPS_OWNER: dgupt006
