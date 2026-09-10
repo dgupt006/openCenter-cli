@@ -22,6 +22,8 @@ import (
 )
 
 const (
+	fluxSystemNamespace = "flux-system"
+
 	sopsAgeSecretStepID = "reconcile-sops-age-secret"
 	sopsAgeSecretName   = "sops-age"
 	sopsAgeSecretKey    = "age.agekey"

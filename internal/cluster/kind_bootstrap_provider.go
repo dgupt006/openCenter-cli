@@ -165,17 +165,9 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				return nil
 			},
 		},
-		{
-			ID:          baseRepoSecretStepID,
-			Description: "Reconcile base Git repository credentials for Flux",
-			Plan:        newBaseRepoSecretStep(cfg, opts.KubeconfigPath, p.runner).Plan,
-			Run: func(ctx context.Context) error {
-				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
-					return nil
-				}
-				return reconcileBaseRepoSecret(ctx, cfg, opts.KubeconfigPath, p.runner)
-			},
-		},
+		// No opencenter-base credential Secret step: the shared
+		// openCenter-gitops-base repository is public, so its GitRepository
+		// source is rendered anonymously (no secretRef).
 		{
 			ID:          sopsAgeSecretStepID,
 			Description: "Reconcile SOPS Age decryption key for Flux",

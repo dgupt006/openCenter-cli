@@ -518,10 +518,14 @@ func renderInlineAutoTemplate(tmplStr string, ctx autoServiceContext) (string, e
 			refType = "tag"
 			refValue = ctx.RepoTag
 		}
-		params, err := BuildSourceAuthParams(ctx.GitopsAuthMethod, ctx.BaseRepoURL, refType, refValue, "opencenter-base")
+		// The base repository (ctx.BaseRepoURL) is the public
+		// openCenter-gitops-base repo, so its source is anonymous: no
+		// secretRef, avoiding a wrong-credential HTTP 401 against GitHub.
+		params, err := BuildSourceAuthParams(ctx.GitopsAuthMethod, ctx.BaseRepoURL, refType, refValue, "")
 		if err != nil {
 			return "", err
 		}
+		params.Anonymous = true
 		return RenderSourceAuthBlock(params), nil
 	}
 	t, err := template.New("auto").Funcs(funcMap).Parse(tmplStr)

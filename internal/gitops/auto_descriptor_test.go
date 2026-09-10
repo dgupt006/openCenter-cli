@@ -152,8 +152,10 @@ func TestRenderAutoServiceActions_TwoStage(t *testing.T) {
 	assert.Contains(t, actions[0].Content, "# --- token auth (active) ---")
 	assert.Contains(t, actions[0].Content, "url: https://github.com/rackerlabs/openCenter-gitops-base.git")
 	assert.Contains(t, actions[0].Content, `branch: "main"`)
-	assert.Contains(t, actions[0].Content, "secretRef:")
-	assert.Contains(t, actions[0].Content, "name: opencenter-base")
+	// The base repository is the public openCenter-gitops-base repo, so its
+	// source is anonymous: no secretRef / opencenter-base credential.
+	assert.NotContains(t, actions[0].Content, "secretRef:")
+	assert.NotContains(t, actions[0].Content, "name: opencenter-base")
 	// Alternative SSH block should be commented out
 	assert.Contains(t, actions[0].Content, "# --- ssh auth (alternative) ---")
 	assert.Contains(t, actions[0].Content, "# url: ssh://git@github.com/rackerlabs/openCenter-gitops-base.git")
@@ -200,10 +202,10 @@ func TestRenderAutoServiceActions_SingleStage(t *testing.T) {
 	// source + fluxcd + kustomization (no override-values since HasOverrideValues=false)
 	assert.Len(t, actions, 3)
 
-	// Source with SSH secretRef (active)
+	// Source is anonymous (active) - the public base repo needs no secretRef.
 	assert.Contains(t, actions[0].Content, "# --- ssh auth (active) ---")
-	assert.Contains(t, actions[0].Content, "secretRef:")
-	assert.Contains(t, actions[0].Content, "name: opencenter-base")
+	assert.NotContains(t, actions[0].Content, "secretRef:")
+	assert.NotContains(t, actions[0].Content, "name: opencenter-base")
 	// Alternative token block should be commented out
 	assert.Contains(t, actions[0].Content, "# --- token auth (alternative) ---")
 	assert.Contains(t, actions[0].Content, "# url: https://github.com/rackerlabs/openCenter-gitops-base.git")

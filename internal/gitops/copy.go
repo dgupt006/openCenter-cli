@@ -294,6 +294,20 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 		return RenderSourceAuthBlock(params), nil
 	}
 
+	// sourceAuthBlockAnonymous renders a source with no secretRef. The shared
+	// openCenter-gitops-base repository is public, so its GitRepository source
+	// must access it anonymously rather than reuse the token-derived
+	// opencenter-base Secret (which in local mode holds the Gitea token and
+	// makes public-GitHub access fail with HTTP 401).
+	sourceAuthBlockAnonymous := func(repositoryURL, refType, refValue string) (string, error) {
+		params, err := BuildSourceAuthParams(cfg.OpenCenter.GitOps.ResolvedAuthMethod, repositoryURL, refType, refValue, "")
+		if err != nil {
+			return "", err
+		}
+		params.Anonymous = true
+		return RenderSourceAuthBlock(params), nil
+	}
+
 	// sourceAuthBlockForService preserves service Source.Repo, Source.Branch,
 	// and Source.Release overrides while providing both auth variants.
 	funcMap["sourceAuthBlockForService"] = func(serviceName string) (string, error) {
@@ -327,7 +341,7 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 				refValue = "main"
 			}
 		}
-		return sourceAuthBlock(repositoryURL, refType, refValue, "opencenter-base")
+		return sourceAuthBlockAnonymous(repositoryURL, refType, refValue)
 	}
 
 	// sourceAuthBlockDefault renders the base repository source using its
@@ -346,7 +360,7 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 				refValue = "main"
 			}
 		}
-		return sourceAuthBlock(cfg.OpenCenter.GitOps.BaseRepo.URL, refType, refValue, "opencenter-base")
+		return sourceAuthBlockAnonymous(cfg.OpenCenter.GitOps.BaseRepo.URL, refType, refValue)
 	}
 
 	// sourceAuthBlockCustomerRepository retains customer-repository semantics

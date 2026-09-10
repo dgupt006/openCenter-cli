@@ -38,6 +38,35 @@ func TestRenderSourceAuthBlock_TokenActive(t *testing.T) {
 	}
 }
 
+// TestRenderSourceAuthBlock_Anonymous verifies that the public base repository
+// source is rendered without any secretRef. The shared openCenter-gitops-base
+// repository is public; attaching the token-derived opencenter-base Secret
+// (which holds the Gitea token in local mode) made Flux authenticate to public
+// GitHub with the wrong credential and fail with HTTP 401.
+func TestRenderSourceAuthBlock_Anonymous(t *testing.T) {
+	params := SourceAuthParams{
+		AuthMethod: gitopsAuthMethodToken,
+		TokenURL:   "https://github.com/opencenter-cloud/openCenter-gitops-base.git",
+		SSHURL:     "ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git",
+		RefType:    "branch",
+		RefValue:   "main",
+		Anonymous:  true,
+	}
+
+	result := RenderSourceAuthBlock(params)
+
+	// Active URL/ref still render.
+	assert.Contains(t, result, "# --- token auth (active) ---")
+	assert.Contains(t, result, "url: https://github.com/opencenter-cloud/openCenter-gitops-base.git")
+	assert.Contains(t, result, `branch: "main"`)
+	// No credential is referenced anywhere (active or commented alternative).
+	assert.NotContains(t, result, "secretRef:")
+	assert.NotContains(t, result, "opencenter-base")
+	// The commented alternative variant still renders its url/ref.
+	assert.Contains(t, result, "# --- ssh auth (alternative) ---")
+	assert.Contains(t, result, "# url: ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git")
+}
+
 func TestRenderSourceAuthBlock_SSHActiveWithCustomerSecret(t *testing.T) {
 	params := SourceAuthParams{
 		AuthMethod: gitopsAuthMethodSSH,

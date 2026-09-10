@@ -144,7 +144,9 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 			return nil, fmt.Errorf("building flux bootstrap step: %w", err)
 		}
 		steps = append(steps, fluxStep)
-		steps = append(steps, newBaseRepoSecretStep(cfg, opts.KubeconfigPath, p.runner))
+		// No opencenter-base credential Secret is created: the shared
+		// openCenter-gitops-base repository is public, so its GitRepository
+		// source is rendered anonymously (no secretRef).
 		steps = append(steps, newSopsAgeSecretStep(clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner))
 		steps = append(steps, newGrafanaAdminSecretStep(cfg, opts.KubeconfigPath, p.runner))
 	}

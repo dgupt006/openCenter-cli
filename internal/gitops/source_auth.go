@@ -33,12 +33,20 @@ type SourceAuthParams struct {
 	RefType    string
 	RefValue   string
 	SecretName string
+
+	// Anonymous omits the secretRef entirely so Flux accesses the repository
+	// without credentials. The shared openCenter-gitops-base repository is
+	// public, so its GitRepository source must not reference a credential
+	// Secret; attaching one (e.g. the token-derived opencenter-base Secret,
+	// which in local mode holds the Gitea token) makes Flux authenticate to
+	// public GitHub with the wrong credential and fail with HTTP 401.
+	Anonymous bool
 }
 
-// RenderSourceAuthBlock renders the URL, ref, and Secret reference for the
-// selected Git authentication method, followed by a fully commented-out
-// equivalent for the alternative method. The auth method is explicit rather
-// than inferred from a repository URL.
+// RenderSourceAuthBlock renders the URL, ref, and (unless Anonymous) Secret
+// reference for the selected Git authentication method, followed by a fully
+// commented-out equivalent for the alternative method. The auth method is
+// explicit rather than inferred from a repository URL.
 func RenderSourceAuthBlock(params SourceAuthParams) string {
 	authMethod := normalizedSourceAuthMethod(params.AuthMethod)
 	secretName := strings.TrimSpace(params.SecretName)
@@ -58,14 +66,18 @@ func RenderSourceAuthBlock(params SourceAuthParams) string {
 	b.WriteString(fmt.Sprintf("  url: %s\n", activeURL))
 	b.WriteString("  ref:\n")
 	b.WriteString(fmt.Sprintf("    %s: \"%s\"\n", params.RefType, params.RefValue))
-	b.WriteString("  secretRef:\n")
-	b.WriteString(fmt.Sprintf("    name: %s\n", secretName))
+	if !params.Anonymous {
+		b.WriteString("  secretRef:\n")
+		b.WriteString(fmt.Sprintf("    name: %s\n", secretName))
+	}
 	b.WriteString(fmt.Sprintf("  # --- %s (alternative) ---\n", alternativeLabel))
 	b.WriteString(fmt.Sprintf("  # url: %s\n", alternativeURL))
 	b.WriteString("  # ref:\n")
-	b.WriteString(fmt.Sprintf("  #   %s: \"%s\"\n", params.RefType, params.RefValue))
-	b.WriteString("  # secretRef:\n")
-	b.WriteString(fmt.Sprintf("  #   name: %s", secretName))
+	b.WriteString(fmt.Sprintf("  #   %s: \"%s\"", params.RefType, params.RefValue))
+	if !params.Anonymous {
+		b.WriteString("\n  # secretRef:\n")
+		b.WriteString(fmt.Sprintf("  #   name: %s", secretName))
+	}
 
 	return b.String()
 }
