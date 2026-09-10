@@ -419,3 +419,85 @@ func TestGenerateClusterTreeAllowsSecretsSyncedArtifactsOnRegenerate(t *testing.
 		t.Fatalf("secrets-sync-owned secret.yaml must survive regenerate: %v", statErr)
 	}
 }
+
+// TestGenerateClusterTreeListsSyncedSecretInKustomization is a regression guard
+// for the `secrets sync` -> manifest-refresh fix. In the documented
+// generate -> secrets sync flow, service kustomizations are first rendered
+// before any encrypted secret.yaml exists, so the secret is created but left
+// unreferenced by its parent kustomization and Flux never applies it. `secrets
+// sync` fixes this by re-running generate after materializing the secret, so a
+// second generate must list secret.yaml in the owning service's
+// kustomization.yaml.
+//
+// This test drives that ordering through GenerateClusterTree directly (the
+// command-layer refresh is just a second generate) to avoid the flaky
+// full-suite cmd/DI harness.
+func TestGenerateClusterTreeListsSyncedSecretInKustomization(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("evalsymlinks: %v", err)
+	}
+	cfg := newDefault("secret-membership-after-sync")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	options := StagedGenerationOptions{IncludeInfrastructure: true, IncludeFluxBridge: true}
+
+	// headlamp is enabled by default and is a generic secret-bearing service.
+	const service = "headlamp"
+	kustomizationPath := filepath.Join(
+		repo, "applications", "overlays", cfg.ClusterName(),
+		"services", service, "kustomization.yaml",
+	)
+
+	// First generate renders the service kustomization before the encrypted
+	// secret.yaml exists, so it must not yet reference secret.yaml.
+	if _, _, err := GenerateClusterTree(context.Background(), cfg, options); err != nil {
+		t.Fatalf("initial GenerateClusterTree() error = %v", err)
+	}
+	before, err := os.ReadFile(kustomizationPath)
+	if err != nil {
+		t.Fatalf("read %s kustomization after initial generate: %v", service, err)
+	}
+	if strings.Contains(string(before), "secret.yaml") {
+		t.Fatalf("%s kustomization referenced secret.yaml before secrets sync:\n%s", service, before)
+	}
+
+	// Simulate `secrets sync`: plan the secret artifacts from config and
+	// materialize the target service's secret.yaml + ownership ledger, exactly as
+	// SyncSecrets does.
+	artifacts, err := secretartifacts.Plan(&cfg)
+	if err != nil {
+		t.Fatalf("plan secret artifacts: %v", err)
+	}
+	var target []secretartifacts.Artifact
+	for _, a := range artifacts {
+		if a.TargetService == service {
+			target = append(target, a)
+		}
+	}
+	if len(target) != 1 {
+		t.Fatalf("expected 1 planned %s secret artifact, got %d (of %d total)", service, len(target), len(artifacts))
+	}
+	materializeSecretArtifacts(t, cfg, target)
+
+	// The post-sync manifest refresh: a second generate must now list secret.yaml
+	// in the service kustomization so Flux applies the secret.
+	if _, _, err := GenerateClusterTree(context.Background(), cfg, options); err != nil {
+		t.Fatalf("regenerate after secrets sync error = %v", err)
+	}
+
+	secretPath := filepath.Join(
+		repo, "applications", "overlays", cfg.ClusterName(),
+		"services", service, "secret.yaml",
+	)
+	if _, statErr := os.Stat(secretPath); statErr != nil {
+		t.Fatalf("secret.yaml must exist after secrets sync: %v", statErr)
+	}
+
+	after, err := os.ReadFile(kustomizationPath)
+	if err != nil {
+		t.Fatalf("read %s kustomization after refresh: %v", service, err)
+	}
+	if !strings.Contains(string(after), "secret.yaml") {
+		t.Fatalf("%s kustomization must reference secret.yaml after refresh:\n%s", service, after)
+	}
+}
