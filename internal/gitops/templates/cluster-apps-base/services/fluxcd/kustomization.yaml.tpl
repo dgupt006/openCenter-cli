@@ -38,6 +38,9 @@ resources:
 {{- if (index .OpenCenter.Services "etcd-backup").Enabled }}
   - ./etcd-backup.yaml
 {{- end }}
+{{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }}
+  - ./rustfs.yaml
+{{- end }}
 
 
 {{- range autoNamespaceStages }}
