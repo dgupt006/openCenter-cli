@@ -53,12 +53,12 @@ func TestStorageProfilePolicy(t *testing.T) {
 			issuePaths: []string{"opencenter.services.velero.s3_endpoint"},
 		},
 		{
-			name: "Mimir is blocked until typed S3 migration",
+			name: "external S3 Mimir requires an endpoint",
 			configure: func(cfg *Config) {
 				cfg.OpenCenter.Infrastructure.Storage.Profile = StorageProfileConfig{Lifecycle: StorageLifecycleProduction, PVCProvider: StoragePVCProviderExternal, ObjectStorageProvider: StorageObjectProviderExternalS3}
-				cfg.OpenCenter.Services["mimir"].(*services.DefaultServiceConfig).Enabled = true
+				cfg.OpenCenter.Services["mimir"].(*services.MimirConfig).Enabled = true
 			},
-			issuePaths: []string{"opencenter.services.mimir"},
+			issuePaths: []string{"opencenter.services.mimir.s3_endpoint"},
 		},
 		{
 			name: "Swift migration is explicit",
@@ -80,7 +80,7 @@ func TestStorageProfilePolicy(t *testing.T) {
 				cfg.OpenCenter.Infrastructure.Storage.Profile = StorageProfileConfig{Lifecycle: StorageLifecycleNonProduction, PVCProvider: StoragePVCProviderLonghorn, ObjectStorageProvider: StorageObjectProviderRustFS}
 				cfg.OpenCenter.Services["longhorn"].(*services.LonghornConfig).Enabled = true
 				cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = true
-				cfg.OpenCenter.Services["mimir"].(*services.DefaultServiceConfig).Enabled = true
+				cfg.OpenCenter.Services["mimir"].(*services.MimirConfig).Enabled = true
 				cfg.OpenCenter.Services["etcd-backup"].(*services.EtcdBackupConfig).Enabled = true
 				cfg.Secrets.Loki.S3AccessKeyID = ""
 				cfg.Secrets.Loki.S3SecretAccessKey = ""
@@ -122,5 +122,15 @@ func TestStorageProfilePolicyAppliesToDeploymentValidation(t *testing.T) {
 	err := ValidateForDeployment(cfg)
 	if err == nil || !strings.Contains(err.Error(), "RustFS is non-production only") {
 		t.Fatalf("expected production RustFS policy error, got %v", err)
+	}
+}
+
+func TestNewV2DefaultGeneratesRustFSCredentials(t *testing.T) {
+	cfg, err := NewV2Default("rustfs-credentials", "kind")
+	if err != nil {
+		t.Fatalf("NewV2Default: %v", err)
+	}
+	if isMissingSecret(cfg.Secrets.RustFS.AccessKey) || isMissingSecret(cfg.Secrets.RustFS.SecretKey) {
+		t.Fatalf("NewV2Default must generate RustFS credentials: %#v", cfg.Secrets.RustFS)
 	}
 }

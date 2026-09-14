@@ -112,17 +112,20 @@ func storagePolicyIssues(cfg *Config) []storagePolicyIssue {
 		if !isServiceEnabled(cfg, "longhorn") {
 			add("opencenter.services.longhorn", "RustFS requires the openCenter-managed Longhorn service to be enabled.")
 		}
+		if isMissingSecret(cfg.Secrets.RustFS.AccessKey) {
+			add("secrets.rustfs.access_key", "RustFS requires a generated access key.")
+		}
+		if isMissingSecret(cfg.Secrets.RustFS.SecretKey) {
+			add("secrets.rustfs.secret_key", "RustFS requires a generated secret key.")
+		}
 	} else if profile.Lifecycle == StorageLifecycleProduction {
-		for _, serviceName := range []string{"loki", "tempo", "velero", "harbor", "etcd-backup"} {
+		for _, serviceName := range []string{"loki", "tempo", "velero", "harbor", "etcd-backup", "mimir"} {
 			if !isServiceEnabled(cfg, serviceName) {
 				continue
 			}
 			if err := ValidateS3Endpoint(externalS3Endpoint(cfg, serviceName)); err != nil {
 				add("opencenter.services."+serviceName+".s3_endpoint", "external S3-compatible storage requires a configured absolute HTTP(S) endpoint.")
 			}
-		}
-		if isServiceEnabled(cfg, "mimir") {
-			add("opencenter.services.mimir", "Mimir cannot use the external S3 profile until its typed S3 configuration is implemented; keep Mimir disabled or use the managed RustFS profile during the migration.")
 		}
 	}
 
@@ -155,6 +158,8 @@ func externalS3Endpoint(cfg *Config, serviceName string) string {
 	case *services.HarborConfig:
 		return service.S3Endpoint
 	case *services.EtcdBackupConfig:
+		return service.S3Endpoint
+	case *services.MimirConfig:
 		return service.S3Endpoint
 	default:
 		return ""
@@ -713,9 +718,16 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 		}
 	}
 
-	// Mimir currently has a legacy Swift secret; managed RustFS defers generated credentials.
-	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "mimir") && isMissingSecret(cfg.GetMimirSwiftApplicationCredentialSecret()) {
-		placeholders = append(placeholders, "secrets.mimir.swift_application_credential_secret")
+	// Mimir uses the typed portable S3 contract. Managed RustFS credentials are
+	// generated in secrets.rustfs and validated by the storage profile gate.
+	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "mimir") {
+		accessKey, secretKey := cfg.GetMimirS3Credentials()
+		if isMissingSecret(accessKey) {
+			placeholders = append(placeholders, "secrets.mimir.s3_access_key_id")
+		}
+		if isMissingSecret(secretKey) {
+			placeholders = append(placeholders, "secrets.mimir.s3_secret_access_key")
+		}
 	}
 
 	// Harbor secrets

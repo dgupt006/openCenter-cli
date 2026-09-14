@@ -166,29 +166,35 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 
 func etcdBackupPayload(cfg *v2.Config) map[string]interface{} {
 	service, _ := cfg.OpenCenter.Services["etcd-backup"].(*services.EtcdBackupConfig)
-	if service == nil && strings.TrimSpace(cfg.Secrets.EtcdBackup.AccessKeyID) == "" && strings.TrimSpace(cfg.Secrets.EtcdBackup.SecretAccessKey) == "" {
-		return nil
-	}
-	payload := map[string]interface{}{
-		"ETCDCTL_API": "3", "ETCDCTL_ENDPOINTS": "https://127.0.0.1:2379",
-		"ETCDCTL_CACERT": "/etc/kubernetes/ssl/etcd/ca.crt", "ETCDCTL_CERT": "/etc/kubernetes/ssl/etcd/server.crt",
-		"ETCDCTL_KEY": "/etc/kubernetes/ssl/etcd/server.key",
-		"ACCESS_KEY":  cfg.Secrets.EtcdBackup.AccessKeyID, "SECRET_KEY": cfg.Secrets.EtcdBackup.SecretAccessKey,
-	}
-	if service != nil {
-		endpoint := strings.TrimSpace(service.S3Endpoint)
+	access, secret := cfg.Secrets.EtcdBackup.AccessKeyID, cfg.Secrets.EtcdBackup.SecretAccessKey
+	endpoint, bucket, region := "", "", ""
+	if v2.UsesManagedObjectStorage(cfg) {
+		access, secret = cfg.Secrets.RustFS.AccessKey, cfg.Secrets.RustFS.SecretKey
+		endpoint, bucket, region = cfg.ManagedObjectStorageEndpoint(), cfg.ManagedObjectStorageBucket("etcd-backup"), "us-east-1"
+	} else if service != nil {
+		endpoint = strings.TrimSpace(service.S3Endpoint)
 		if endpoint == "" {
 			endpoint = strings.TrimSpace(service.S3Host)
 		}
-		payload["S3_HOST"] = endpoint
-		payload["S3_REGION"] = service.S3Region
-		payload["S3_BUCKET_NAME"] = service.S3BucketName
+		bucket, region = service.S3BucketName, service.S3Region
 	}
-	return payload
+	if service == nil && strings.TrimSpace(access) == "" && strings.TrimSpace(secret) == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"ETCDCTL_API": "3", "ETCDCTL_ENDPOINTS": "https://127.0.0.1:2379",
+		"ETCDCTL_CACERT": "/etc/kubernetes/ssl/etcd/ca.crt", "ETCDCTL_CERT": "/etc/kubernetes/ssl/etcd/server.crt",
+		"ETCDCTL_KEY": "/etc/kubernetes/ssl/etcd/server.key",
+		"ACCESS_KEY":  access, "SECRET_KEY": secret, "S3_HOST": endpoint,
+		"S3_REGION": region, "S3_BUCKET_NAME": bucket,
+	}
 }
 
 func veleroPayload(cfg *v2.Config) map[string]interface{} {
 	access, secret := cfg.Secrets.Velero.AccessKeyID, cfg.Secrets.Velero.SecretAccessKey
+	if v2.UsesManagedObjectStorage(cfg) {
+		access, secret = cfg.Secrets.RustFS.AccessKey, cfg.Secrets.RustFS.SecretKey
+	}
 	if strings.TrimSpace(access) == "" && strings.TrimSpace(secret) == "" {
 		return nil
 	}

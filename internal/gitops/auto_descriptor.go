@@ -207,6 +207,9 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 			extraDeps = append(extraDeps, cd.Name)
 		}
 	}
+	if v2.UsesManagedObjectStorage(&cfg) && isManagedObjectStorageConsumer(serviceName) {
+		extraDeps = append(extraDeps, "rustfs")
+	}
 
 	generatedResourceFiles := append([]string{}, spec.GeneratedResourceFiles...)
 	if secretArtifactTargetMaterialized(cfg, serviceName, artifacts) && !containsString(generatedResourceFiles, "secret.yaml") {
@@ -234,7 +237,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		EnterpriseRegistry:     spec.EnterpriseRegistry,
 		GeneratedResourceFiles: generatedResourceFiles,
 		ExtraDependencies:      extraDeps,
-		OverrideDependsOn:      append([]string{}, spec.OverrideDependsOn...),
+		OverrideDependsOn:      managedObjectStorageDependencies(cfg, serviceName, spec.OverrideDependsOn),
 		OverrideValues:         spec.OverrideValues,
 		OverrideValuesRenderer: spec.OverrideValuesRenderer,
 		KustomizationContent:   spec.KustomizationContent,
@@ -248,6 +251,23 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		Force:                  adoption.Force,
 		Suspend:                adoption.Suspend,
 	}
+}
+
+func isManagedObjectStorageConsumer(serviceName string) bool {
+	switch serviceName {
+	case "loki", "tempo", "mimir", "velero", "harbor", "etcd-backup":
+		return true
+	default:
+		return false
+	}
+}
+
+func managedObjectStorageDependencies(cfg v2.Config, serviceName string, dependencies []string) []string {
+	result := append([]string{}, dependencies...)
+	if v2.UsesManagedObjectStorage(&cfg) && isManagedObjectStorageConsumer(serviceName) && !containsString(result, "rustfs") {
+		result = append(result, "rustfs")
+	}
+	return result
 }
 
 func secretArtifactTargetMaterialized(cfg v2.Config, serviceName string, artifacts []secretartifacts.Artifact) bool {

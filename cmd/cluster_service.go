@@ -593,13 +593,14 @@ func validateService(serviceName string, serviceCfg any, secretsCfg *v2.SecretsC
 }
 
 func validateServiceWithConfig(serviceName string, serviceCfg any, secretsCfg *v2.SecretsConfig, cfg *v2.Config) error {
+	managedObjectStorage := cfg != nil && v2.UsesManagedObjectStorage(cfg)
 	if serviceName == "harbor" {
 		accessMissing := strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3AccessKeyID), v2.PlaceholderSecret)
 		secretMissing := strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey) == "" || strings.EqualFold(strings.TrimSpace(secretsCfg.Harbor.S3SecretAccessKey), v2.PlaceholderSecret)
-		if accessMissing != secretMissing {
+		if !managedObjectStorage && accessMissing != secretMissing {
 			return fmt.Errorf("both Harbor S3 access key and secret key must be provided.\nExample: --secret=\"s3_access_key_id=ACCESS\" --secret=\"s3_secret_access_key=SECRET\"")
 		}
-		if harbor, ok := serviceCfg.(*services.HarborConfig); ok {
+		if harbor, ok := serviceCfg.(*services.HarborConfig); ok && !managedObjectStorage {
 			if err := v2.ValidateHarborConfig(harbor); err != nil {
 				return err
 			}
@@ -633,6 +634,9 @@ func validateServiceWithConfig(serviceName string, serviceCfg any, secretsCfg *v
 	case "swift":
 		return fmt.Errorf("unsupported storage backend swift for service '%s'; migrate to the S3-compatible storage profile", serviceName)
 	case "s3":
+		if managedObjectStorage {
+			return nil
+		}
 		var endpoint, access, secret string
 		switch typed := serviceCfg.(type) {
 		case *services.LokiConfig:

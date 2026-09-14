@@ -52,3 +52,19 @@ func TestValidateServiceUsesPortableS3StorageDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateServiceUsesManagedRustFSWithoutExternalS3Values(t *testing.T) {
+	cfg, err := v2.NewV2Default("task16-rustfs", "kind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Storage.Profile = v2.StorageProfileConfig{
+		Lifecycle: v2.StorageLifecycleNonProduction, PVCProvider: v2.StoragePVCProviderLonghorn, ObjectStorageProvider: v2.StorageObjectProviderRustFS,
+	}
+	for _, serviceName := range []string{"loki", "tempo"} {
+		service := cfg.OpenCenter.Services[serviceName]
+		if err := validateServiceWithConfig(serviceName, service, &cfg.Secrets, cfg); err != nil {
+			t.Fatalf("%s managed RustFS validation: %v", serviceName, err)
+		}
+	}
+}

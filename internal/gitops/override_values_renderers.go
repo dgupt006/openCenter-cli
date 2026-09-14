@@ -29,6 +29,21 @@ func templateRenderer(tmpl string) OverrideValuesRenderer {
 		funcMap["objectStorageBackend"] = func(serviceName string) string {
 			return v2.ResolveObjectStorageBackend(&cfg, serviceName)
 		}
+		funcMap["objectStorageEndpoint"] = func(serviceName string) string {
+			return objectStorageEndpoint(cfg, serviceName)
+		}
+		funcMap["objectStorageBucket"] = func(serviceName string) string {
+			return objectStorageBucket(cfg, serviceName)
+		}
+		funcMap["objectStorageRegion"] = func(serviceName string) string {
+			return objectStorageRegion(cfg, serviceName)
+		}
+		funcMap["objectStorageForcePathStyle"] = func(serviceName string) bool {
+			return objectStorageForcePathStyle(cfg, serviceName)
+		}
+		funcMap["objectStorageInsecure"] = func(serviceName string) bool {
+			return objectStorageInsecure(cfg, serviceName)
+		}
 		t, err := template.New("override-values").Funcs(funcMap).Parse(tmpl)
 		if err != nil {
 			return "", err
@@ -38,6 +53,111 @@ func templateRenderer(tmpl string) OverrideValuesRenderer {
 			return "", err
 		}
 		return buf.String(), nil
+	}
+}
+
+func objectStorageEndpoint(cfg v2.Config, serviceName string) string {
+	if endpoint := cfg.ManagedObjectStorageEndpoint(); endpoint != "" {
+		return endpoint
+	}
+	switch service := cfg.OpenCenter.Services[serviceName].(type) {
+	case *services.LokiConfig:
+		return service.S3Endpoint
+	case *services.TempoConfig:
+		return service.S3Endpoint
+	case *services.VeleroConfig:
+		return service.S3Endpoint
+	case *services.HarborConfig:
+		return service.S3Endpoint
+	case *services.EtcdBackupConfig:
+		return service.S3Endpoint
+	case *services.MimirConfig:
+		return service.S3Endpoint
+	default:
+		return ""
+	}
+}
+
+func objectStorageBucket(cfg v2.Config, serviceName string) string {
+	if v2.UsesManagedObjectStorage(&cfg) {
+		return cfg.ManagedObjectStorageBucket(serviceName)
+	}
+	switch service := cfg.OpenCenter.Services[serviceName].(type) {
+	case *services.LokiConfig:
+		return service.BucketName
+	case *services.TempoConfig:
+		return service.BucketName
+	case *services.VeleroConfig:
+		return service.BackupBucket
+	case *services.HarborConfig:
+		return service.S3Bucket
+	case *services.EtcdBackupConfig:
+		return service.S3BucketName
+	case *services.MimirConfig:
+		return service.S3BucketName
+	default:
+		return ""
+	}
+}
+
+func objectStorageRegion(cfg v2.Config, serviceName string) string {
+	if v2.UsesManagedObjectStorage(&cfg) {
+		return "us-east-1"
+	}
+	switch service := cfg.OpenCenter.Services[serviceName].(type) {
+	case *services.LokiConfig:
+		return service.S3Region
+	case *services.TempoConfig:
+		return service.S3Region
+	case *services.VeleroConfig:
+		if service.S3Region != "" {
+			return service.S3Region
+		}
+		return service.Region
+	case *services.HarborConfig:
+		return service.S3Region
+	case *services.EtcdBackupConfig:
+		return service.S3Region
+	case *services.MimirConfig:
+		return service.S3Region
+	default:
+		return ""
+	}
+}
+
+func objectStorageForcePathStyle(cfg v2.Config, serviceName string) bool {
+	if v2.UsesManagedObjectStorage(&cfg) {
+		return true
+	}
+	switch service := cfg.OpenCenter.Services[serviceName].(type) {
+	case *services.LokiConfig:
+		return service.S3ForcePathStyle
+	case *services.TempoConfig:
+		return service.S3ForcePathStyle
+	case *services.VeleroConfig:
+		return service.S3ForcePathStyle
+	case *services.MimirConfig:
+		return service.S3ForcePathStyle
+	default:
+		return false
+	}
+}
+
+func objectStorageInsecure(cfg v2.Config, serviceName string) bool {
+	if v2.UsesManagedObjectStorage(&cfg) {
+		return true
+	}
+	switch service := cfg.OpenCenter.Services[serviceName].(type) {
+	case *services.LokiConfig:
+		return service.S3Insecure
+	case *services.TempoConfig:
+		return service.S3Insecure
+	case *services.VeleroConfig:
+		return service.S3Insecure
+	case *services.MimirConfig:
+		return service.S3Insecure
+	default:
+		return false
 	}
 }
 
@@ -150,75 +270,22 @@ type veleroTemplateData struct {
 
 func veleroRenderer(cfg v2.Config) (string, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider))
-	storageType := ""
-	bucket := ""
-	region := ""
-	s3Endpoint := ""
-	s3ForcePathStyle := false
-	s3Insecure := false
-	if service, ok := cfg.OpenCenter.Services["velero"].(*services.VeleroConfig); ok && service != nil {
-		storageType = strings.ToLower(strings.TrimSpace(service.StorageType))
-		bucket = strings.TrimSpace(service.BackupBucket)
-		region = strings.TrimSpace(service.Region)
-		s3Endpoint = strings.TrimSpace(service.S3Endpoint)
-		s3ForcePathStyle = service.S3ForcePathStyle
-		s3Insecure = service.S3Insecure
-	}
-
-	if storageType == "" {
-		switch provider {
-		case "openstack":
-			storageType = "swift"
-		case "gcp":
-			storageType = "gcs"
-		case "azure":
-			storageType = "azure"
-		default:
-			storageType = "s3"
-		}
-	}
-
 	data := veleroTemplateData{
 		BackupStorageLocationName: "default",
-		Bucket:                    bucket,
-		Region:                    region,
-		S3Endpoint:                s3Endpoint,
-		S3ForcePathStyle:          s3ForcePathStyle,
-		S3Insecure:                s3Insecure,
+		Provider:                  "velero.io/aws",
+		Bucket:                    objectStorageBucket(cfg, "velero"),
+		Region:                    objectStorageRegion(cfg, "velero"),
+		S3Endpoint:                objectStorageEndpoint(cfg, "velero"),
+		S3ForcePathStyle:          objectStorageForcePathStyle(cfg, "velero"),
+		S3Insecure:                objectStorageInsecure(cfg, "velero"),
 		CredentialsExistingSecret: "velero-cloud-credentials",
+		PluginEnabled:             true,
+		PluginName:                "velero-plugin-aws",
+		PluginImage:               "velero/velero-plugin-for-aws:v1.10.0",
 		VSphereSnapshotClass:      provider == "vmware" || provider == "vsphere",
 	}
-
-	switch storageType {
-	case "swift":
-		data.Provider = "community.openstack.org/openstack"
-		data.PluginEnabled = true
-		data.PluginName = "velero-plugin-openstack"
-		data.PluginImage = "lirt/velero-plugin-for-openstack:v0.6.0"
-	case "gcs":
-		data.Provider = "velero.io/gcp"
-		data.PluginEnabled = true
-		data.PluginName = "velero-plugin-gcp"
-		data.PluginImage = "velero/velero-plugin-for-gcp:v1.8.2"
-	case "azure":
-		data.Provider = "velero.io/azure"
-		data.PluginEnabled = true
-		data.PluginName = "velero-plugin-azure"
-		data.PluginImage = "velero/velero-plugin-for-microsoft-azure:v1.10.1"
-	default:
-		data.Provider = "velero.io/aws"
-		data.PluginEnabled = true
-		data.PluginName = "velero-plugin-aws"
-		data.PluginImage = "velero/velero-plugin-for-aws:v1.10.0"
-	}
-
 	if data.Region == "" {
-		if provider == "openstack" && cfg.OpenCenter.Infrastructure.Cloud.OpenStack != nil {
-			data.Region = strings.TrimSpace(cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
-		}
-		if data.Region == "" {
-			data.Region = strings.TrimSpace(cfg.OpenCenter.Meta.Region)
-		}
+		data.Region = strings.TrimSpace(cfg.OpenCenter.Meta.Region)
 	}
 	if data.Bucket == "" {
 		data.Bucket = cfg.OpenCenter.Meta.Name + "-velero"
@@ -285,7 +352,7 @@ extraObjects:
 
 const lokiTemplate = `{{- $loki := index .OpenCenter.Services "loki" -}}
 {{- $storageType := objectStorageBackend "loki" -}}
-{{- $bucketName := $loki.BucketName | default (printf "%s-loki" .OpenCenter.Meta.Name) -}}
+{{- $bucketName := objectStorageBucket "loki" | default (printf "%s-loki" .OpenCenter.Meta.Name) -}}
 {{- $storageClass := $loki.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 global:
     dnsService: coredns
@@ -296,32 +363,18 @@ loki:
             ruler: {{ $bucketName }}
             admin: {{ $bucketName }}
         type: {{ $storageType }}
-{{- if eq $storageType "swift" }}
-        swift:
-            auth_version: {{ $loki.SwiftAuthVersion | default 3 }}
-            auth_url: {{ $loki.SwiftAuthURL }}
-            region_name: {{ $loki.SwiftRegion | default .OpenCenter.Meta.Region }}
-            username: {{ $loki.SwiftUsername }}
-            password: {{ .GetLokiSwiftPassword }}
-            project_name: {{ $loki.SwiftProjectName }}
-            project_domain_name: {{ $loki.SwiftProjectDomainName | default $loki.SwiftDomainName }}
-            user_domain_name: {{ $loki.SwiftUserDomainName }}
-            domain_name: {{ $loki.SwiftDomainName }}
-            container_name: {{ $loki.SwiftContainerName | default $bucketName }}
-{{- else }}
         s3:
             s3: null
-            endpoint: {{ $loki.S3Endpoint }}
-            region: {{ $loki.S3Region | default .OpenCenter.Meta.Region }}
+            endpoint: {{ objectStorageEndpoint "loki" }}
+            region: {{ objectStorageRegion "loki" | default .OpenCenter.Meta.Region }}
             secretAccessKey: {{ .GetLokiS3SecretKey }}
             accessKeyId: {{ .GetLokiS3AccessKey }}
             signatureVersion: null
-            s3ForcePathStyle: {{ $loki.S3ForcePathStyle }}
-            insecure: {{ $loki.S3Insecure }}
+            s3ForcePathStyle: {{ objectStorageForcePathStyle "loki" }}
+            insecure: {{ objectStorageInsecure "loki" }}
             http_config: {}
             backoff_config: {}
             disable_dualstack: false
-{{- end }}
     schemaConfig:
         configs:
             - from: "2024-04-01"
@@ -382,7 +435,7 @@ backend:
 
 const tempoTemplate = `{{- $tempo := index .OpenCenter.Services "tempo" -}}
 {{- $storageType := objectStorageBackend "tempo" -}}
-{{- $bucketName := $tempo.BucketName | default (printf "%s-tempo" .OpenCenter.Meta.Name) -}}
+{{- $bucketName := objectStorageBucket "tempo" | default (printf "%s-tempo" .OpenCenter.Meta.Name) -}}
 {{- $storageClass := $tempo.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 # Pin the storage class explicitly so PVCs never rely on the ambiguous cluster
 # default. During bootstrap there is a window where Longhorn is (transiently)
@@ -393,26 +446,14 @@ global:
 storage:
     trace:
         backend: {{ $storageType }}
-{{- if eq $storageType "swift" }}
-        swift:
-            auth_version: {{ $tempo.SwiftAuthVersion | default 3 }}
-            auth_url: {{ $tempo.SwiftAuthURL }}
-            region: {{ $tempo.SwiftRegion | default .OpenCenter.Meta.Region }}
-            application_credential_id: {{ $tempo.SwiftApplicationCredentialID }}
-            application_credential_secret: {{ .GetTempoSwiftApplicationCredentialSecret }}
-            user_domain_name: {{ $tempo.SwiftUserDomainName }}
-            domain_name: {{ $tempo.SwiftDomainName }}
-            container_name: {{ $tempo.SwiftContainerName | default $bucketName }}
-{{- else }}
         s3:
             bucket: {{ $bucketName }}
-            endpoint: {{ $tempo.S3Endpoint | trimPrefix "https://" | trimPrefix "http://" }}
+            endpoint: {{ objectStorageEndpoint "tempo" | trimPrefix "https://" | trimPrefix "http://" }}
             access_key: {{ .GetTempoS3AccessKey }}
             secret_key: {{ .GetTempoS3SecretKey }}
-            region: {{ $tempo.S3Region | default .OpenCenter.Meta.Region }}
-            forcepathstyle: {{ $tempo.S3ForcePathStyle }}
-            insecure: {{ $tempo.S3Insecure }}
-{{- end }}
+            region: {{ objectStorageRegion "tempo" | default .OpenCenter.Meta.Region }}
+            forcepathstyle: {{ objectStorageForcePathStyle "tempo" }}
+            insecure: {{ objectStorageInsecure "tempo" }}
 reportingEnabled: false
 `
 
@@ -450,16 +491,15 @@ mimir:
         usage_stats:
             enabled: false
         blocks_storage:
-            backend: swift
-            swift:
-                container_name: {{ .OpenCenter.Cluster.ClusterName }}-mimir
-                auth_version: 3
-                auth_url: {{ $openstack.AuthURL }}
-                region_name: {{ $openstack.Region | default .OpenCenter.Meta.Region }}
-                application_credential_id: {{ $openstack.ApplicationCredentialID }}
-                application_credential_secret: {{ .GetMimirSwiftApplicationCredentialSecret }}
-                user_domain_name: {{ $openstack.UserDomainName | default ($openstack.DomainName | default $openstack.Domain) }}
-                domain_name: {{ $openstack.DomainName | default $openstack.Domain }}
+            backend: s3
+            s3:
+                bucket_name: {{ objectStorageBucket "mimir" | default (printf "%s-mimir" .OpenCenter.Cluster.ClusterName) }}
+                endpoint: {{ objectStorageEndpoint "mimir" }}
+                access_key_id: {{ .GetMimirS3AccessKey }}
+                secret_access_key: {{ .GetMimirS3SecretKey }}
+                region: {{ objectStorageRegion "mimir" | default .OpenCenter.Meta.Region }}
+                insecure: {{ objectStorageInsecure "mimir" }}
+                s3forcepathstyle: {{ objectStorageForcePathStyle "mimir" }}
 {{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
         ingest_storage:
             kafka:
@@ -601,13 +641,13 @@ persistence:
     imageChartStorage:
         type: s3
         s3:
-            region: {{ .OpenCenter.Meta.Region }}
-            bucket: {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}
+            region: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} us-east-1{{ else }} {{ .OpenCenter.Meta.Region }}{{ end }}
+            bucket: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} {{ printf "%s-harbor" .OpenCenter.Cluster.ClusterName }}{{ else }} {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}{{ end }}
             accesskey: {{ .GetHarborS3AccessKey }}
             secretkey: {{ .GetHarborS3SecretKey }}
-            regionendpoint: {{ $harbor.S3Endpoint }}
+            regionendpoint: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} http://rustfs.rustfs-system.svc.cluster.local:9000{{ else }} {{ $harbor.S3Endpoint }}{{ end }}
             v4auth: true
-            secure: true
+            secure: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} false{{ else }} true{{ end }}
             rootdirectory: images
 harborAdminPassword: {{ .Secrets.Harbor.AdminPassword | quote }}
 metrics:

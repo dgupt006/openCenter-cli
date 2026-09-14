@@ -131,6 +131,14 @@ func NewV2Default(name, provider string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating grafana admin password: %w", err)
 	}
+	rustFSAccessKey, err := randomSecret(20)
+	if err != nil {
+		return nil, fmt.Errorf("generating RustFS access key: %w", err)
+	}
+	rustFSSecretKey, err := randomSecret(40)
+	if err != nil {
+		return nil, fmt.Errorf("generating RustFS secret key: %w", err)
+	}
 
 	cfg := &Config{
 		SchemaVersion: defaultSchemaVersion,
@@ -354,7 +362,10 @@ func NewV2Default(name, provider string) (*Config, error) {
 			},
 			Mimir: MimirSecrets{
 				SwiftApplicationCredentialSecret: PlaceholderSecret,
+				S3AccessKeyID:                    PlaceholderSecret,
+				S3SecretAccessKey:                PlaceholderSecret,
 			},
+			RustFS: RustFSSecrets{AccessKey: rustFSAccessKey, SecretKey: rustFSSecretKey},
 			Loki: LokiSecrets{
 				SwiftApplicationCredentialSecret: PlaceholderSecret,
 				S3AccessKeyID:                    PlaceholderSecret,
@@ -814,7 +825,7 @@ func NewDefaultServiceConfig(serviceName, clusterFQDN string) (any, bool) {
 	case "longhorn":
 		return &services.LonghornConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "longhorn-system"}, Hostname: fmt.Sprintf("longhorn.%s", clusterFQDN)}, true
 	case "mimir":
-		return &services.DefaultServiceConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
+		return &services.MimirConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
 	case "opentelemetry-kube-stack":
 		return &services.OpenTelemetryConfig{BaseConfig: services.BaseConfig{Enabled: false, Namespace: "observability"}}, true
 	case "sealed-secrets":

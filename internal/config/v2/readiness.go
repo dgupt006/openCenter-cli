@@ -590,6 +590,7 @@ func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	}
 	r.validateCertManagerSecrets(cfg)
 	r.validateEtcdBackupSecrets(cfg)
+	r.validateRustFSSecrets(cfg)
 	r.validateLokiSecrets(cfg)
 	r.validateTempoSecrets(cfg)
 	r.validateMimirSecrets(cfg)
@@ -647,6 +648,14 @@ func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 	case "cloudflare":
 		r.requireSecret("secrets.cert_manager.cloudflare_api_token", cfg.Secrets.CertManager.CloudflareAPIToken, "cert-manager Cloudflare DNS requires API token.")
 	}
+}
+
+func (r *readinessBuilder) validateRustFSSecrets(cfg *Config) {
+	if !UsesManagedObjectStorage(cfg) {
+		return
+	}
+	r.requireSecret("secrets.rustfs.access_key", cfg.Secrets.RustFS.AccessKey, "Managed RustFS requires a generated access key.")
+	r.requireSecret("secrets.rustfs.secret_key", cfg.Secrets.RustFS.SecretKey, "Managed RustFS requires a generated secret key.")
 }
 
 func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
@@ -710,7 +719,15 @@ func (r *readinessBuilder) validateMimirSecrets(cfg *Config) {
 	if !serviceEnabled(cfg, "mimir") || UsesManagedObjectStorage(cfg) {
 		return
 	}
-	r.requireSecret("secrets.mimir.swift_application_credential_secret", cfg.GetMimirSwiftApplicationCredentialSecret(), "Mimir Swift blocks storage requires an application credential secret.")
+	mimir, _ := configuredService(cfg, "mimir").(*services.MimirConfig)
+	if mimir == nil {
+		r.addError(CategoryServices, "opencenter.services.mimir", "Mimir has unexpected configuration type.", "Use the typed Mimir S3 configuration.")
+		return
+	}
+	r.requireS3Endpoint("opencenter.services.mimir.s3_endpoint", mimir.S3Endpoint, "Mimir S3 storage requires a configured endpoint.")
+	accessKey, secretKey := cfg.GetMimirS3Credentials()
+	r.requireSecret("secrets.mimir.s3_access_key_id", accessKey, "Mimir S3 storage requires an access key ID.")
+	r.requireSecret("secrets.mimir.s3_secret_access_key", secretKey, "Mimir S3 storage requires a secret access key.")
 }
 
 func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {

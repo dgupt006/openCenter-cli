@@ -7,14 +7,17 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 )
 
-func TestValidateForDeploymentRejectsMimirSwiftCredentialPlaceholder(t *testing.T) {
+func TestValidateForDeploymentRejectsMimirS3CredentialPlaceholder(t *testing.T) {
 	cfg := validReadinessConfig(t, "kind")
-	cfg.OpenCenter.Services["mimir"].(*services.DefaultServiceConfig).Enabled = true
-	cfg.Secrets.Mimir.SwiftApplicationCredentialSecret = PlaceholderSecret
+	mimir := cfg.OpenCenter.Services["mimir"].(*services.MimirConfig)
+	mimir.Enabled = true
+	mimir.S3Endpoint = "https://mimir-s3.example"
+	cfg.Secrets.Mimir.S3AccessKeyID = PlaceholderSecret
+	cfg.Secrets.Mimir.S3SecretAccessKey = PlaceholderSecret
 
 	err := ValidateForDeployment(cfg)
-	if err == nil || !strings.Contains(err.Error(), "secrets.mimir.swift_application_credential_secret") {
-		t.Fatalf("ValidateForDeployment() error = %v, want Mimir Swift credential path", err)
+	if err == nil || !strings.Contains(err.Error(), "secrets.mimir.s3_access_key_id") {
+		t.Fatalf("ValidateForDeployment() error = %v, want Mimir S3 credential path", err)
 	}
 }
 

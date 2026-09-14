@@ -18,8 +18,10 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
+  - secret.yaml
   - service.yaml
   - statefulset.yaml
+  - bucket-bootstrap-job.yaml
 `
 
 const rustFSNamespaceTemplate = `---
@@ -30,6 +32,21 @@ metadata:
   labels:
     app.kubernetes.io/part-of: rustfs
     opencenter/managed-by: opencenter
+`
+
+const rustFSSecretTemplate = `---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rustfs-credentials
+  namespace: rustfs-system
+  labels:
+    app.kubernetes.io/name: rustfs
+    app.kubernetes.io/part-of: rustfs
+type: Opaque
+stringData:
+  RUSTFS_ACCESS_KEY: {{ .AccessKey | quote }}
+  RUSTFS_SECRET_KEY: {{ .SecretKey | quote }}
 `
 
 const rustFSServiceTemplate = `---
@@ -75,12 +92,27 @@ spec:
         app.kubernetes.io/part-of: rustfs
     spec:
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: rustfs
           image: rustfs/rustfs:1.0.0-rc.6
           args: ["/data"]
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-credentials
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-credentials
+                  key: RUSTFS_SECRET_KEY
           ports:
             - name: s3
               containerPort: 9000
@@ -116,6 +148,48 @@ spec:
             storage: 50Gi
 `
 
+const rustFSBucketBootstrapJobTemplate = `---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustfs-bucket-bootstrap
+  namespace: rustfs-system
+  labels:
+    app.kubernetes.io/name: rustfs-bucket-bootstrap
+    app.kubernetes.io/part-of: rustfs
+spec:
+  backoffLimit: 12
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rustfs-bucket-bootstrap
+        app.kubernetes.io/part-of: rustfs
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: create-buckets
+          image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until mc alias set rustfs http://rustfs.rustfs-system.svc.cluster.local:9000 "$RUSTFS_ACCESS_KEY" "$RUSTFS_SECRET_KEY"; do sleep 5; done
+              for bucket in {{ .LokiBucket }} {{ .TempoBucket }} {{ .MimirBucket }} {{ .VeleroBucket }} {{ .HarborBucket }} {{ .EtcdBackupBucket }}; do
+                mc mb --ignore-existing "rustfs/$bucket"
+              done
+          envFrom:
+            - secretRef:
+                name: rustfs-credentials
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+`
+
 const rustFSFluxTemplate = `---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -146,6 +220,20 @@ spec:
       opencenter/managed-by: opencenter
 `
 
+type rustFSSecretData struct {
+	AccessKey string
+	SecretKey string
+}
+
+type rustFSBucketData struct {
+	LokiBucket       string
+	TempoBucket      string
+	MimirBucket      string
+	VeleroBucket     string
+	HarborBucket     string
+	EtcdBackupBucket string
+}
+
 type rustFSFluxData struct {
 	ClusterName  string
 	FluxInterval string
@@ -170,6 +258,25 @@ func planRustFSActions(cfg v2.Config, _ []secretartifacts.Artifact) ([]clusterAp
 		return nil, fmt.Errorf("RustFS rendering requires the Longhorn service to be enabled")
 	}
 
+	secret, err := renderInlineTemplateContent(rustFSSecretTemplate, "secret.yaml", rustFSSecretData{
+		AccessKey: cfg.Secrets.RustFS.AccessKey,
+		SecretKey: cfg.Secrets.RustFS.SecretKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	buckets, err := renderInlineTemplateContent(rustFSBucketBootstrapJobTemplate, "bucket-bootstrap-job.yaml", rustFSBucketData{
+		LokiBucket:       cfg.ManagedObjectStorageBucket("loki"),
+		TempoBucket:      cfg.ManagedObjectStorageBucket("tempo"),
+		MimirBucket:      cfg.ManagedObjectStorageBucket("mimir"),
+		VeleroBucket:     cfg.ManagedObjectStorageBucket("velero"),
+		HarborBucket:     cfg.ManagedObjectStorageBucket("harbor"),
+		EtcdBackupBucket: cfg.ManagedObjectStorageBucket("etcd-backup"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	flux, err := renderInlineTemplateContent(rustFSFluxTemplate, "rustfs.yaml", rustFSFluxData{
 		ClusterName:  cfg.ClusterName(),
 		FluxInterval: cfg.OpenCenter.GitOps.Flux.Interval,
@@ -181,8 +288,10 @@ func planRustFSActions(cfg v2.Config, _ []secretartifacts.Artifact) ([]clusterAp
 	return []clusterAppAction{
 		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "kustomization.yaml")), Content: rustFSKustomizationTemplate},
 		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "namespace.yaml")), Content: rustFSNamespaceTemplate},
+		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "secret.yaml")), Content: secret},
 		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "service.yaml")), Content: rustFSServiceTemplate},
 		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "statefulset.yaml")), Content: rustFSStatefulSetTemplate},
+		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "rustfs", "bucket-bootstrap-job.yaml")), Content: buckets},
 		{Owner: "storage-rustfs", Output: filepath.ToSlash(filepath.Join("services", "fluxcd", "rustfs.yaml")), Content: flux},
 	}, nil
 }

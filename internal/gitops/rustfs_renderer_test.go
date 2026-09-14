@@ -7,6 +7,7 @@ import (
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,4 +70,51 @@ func rustFSConfig(t *testing.T) v2.Config {
 	}
 	cfg.OpenCenter.Services["longhorn"].(*services.LonghornConfig).Enabled = true
 	return *cfg
+}
+
+func TestRustFSRendersGeneratedCredentialsBucketsAndConsumerS3Values(t *testing.T) {
+	cfg := rustFSConfig(t)
+	cfg.OpenCenter.Services["velero"].(*services.VeleroConfig).Enabled = true
+	cfg.OpenCenter.Services["mimir"].(*services.MimirConfig).Enabled = true
+	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = true
+	cfg.OpenCenter.Services["etcd-backup"].(*services.EtcdBackupConfig).Enabled = true
+	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+	require.NoError(t, RenderClusterApps(cfg))
+
+	overlay := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services")
+	credentials := mustReadFile(t, filepath.Join(overlay, "rustfs", "secret.yaml"))
+	require.Contains(t, credentials, cfg.Secrets.RustFS.AccessKey)
+	require.Contains(t, credentials, cfg.Secrets.RustFS.SecretKey)
+
+	bootstrap := mustReadFile(t, filepath.Join(overlay, "rustfs", "bucket-bootstrap-job.yaml"))
+	for _, serviceName := range []string{"loki", "tempo", "mimir", "velero", "harbor", "etcd-backup"} {
+		require.Contains(t, bootstrap, cfg.ManagedObjectStorageBucket(serviceName))
+	}
+
+	for _, serviceName := range []string{"loki", "tempo", "mimir", "velero", "harbor"} {
+		values := mustReadFile(t, filepath.Join(overlay, serviceName, "helm-values", "override-values.yaml"))
+		endpoint := cfg.ManagedObjectStorageEndpoint()
+		if serviceName == "tempo" {
+			endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+		}
+		require.Contains(t, values, endpoint, "%s must use the internal RustFS endpoint", serviceName)
+		require.NotContains(t, values, "backend: swift", "%s must not retain Swift storage rendering", serviceName)
+	}
+
+	artifacts, err := secretartifacts.Plan(&cfg)
+	require.NoError(t, err)
+	var etcdArtifact secretartifacts.Artifact
+	for _, artifact := range artifacts {
+		if artifact.TargetService == "etcd-backup" {
+			etcdArtifact = artifact
+			break
+		}
+	}
+	require.Equal(t, cfg.ManagedObjectStorageEndpoint(), etcdArtifact.Payload["S3_HOST"])
+	require.Equal(t, cfg.ManagedObjectStorageBucket("etcd-backup"), etcdArtifact.Payload["S3_BUCKET_NAME"])
+
+	for _, serviceName := range []string{"loki", "tempo", "mimir", "velero", "harbor", "etcd-backup"} {
+		flux := mustReadFile(t, filepath.Join(overlay, "fluxcd", serviceName+".yaml"))
+		require.Contains(t, flux, "name: rustfs", "%s must wait for RustFS buckets and credentials", serviceName)
+	}
 }

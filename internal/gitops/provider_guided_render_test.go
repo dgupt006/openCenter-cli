@@ -151,20 +151,26 @@ func TestRenderMimirOverrideValues(t *testing.T) {
 	openstack.Domain = "rackspace"
 	openstack.DomainName = "rackspace"
 	openstack.UserDomainName = "rackspace"
-	cfg.Secrets.Mimir.SwiftApplicationCredentialSecret = "mimir-swift-secret"
+	mimir := cfg.OpenCenter.Services["mimir"].(*configservices.MimirConfig)
+	mimir.S3Endpoint = "https://mimir-s3.example.com"
+	mimir.S3Region = "SJC3"
+	mimir.S3BucketName = "mimir-guided-bucket"
+	mimir.S3ForcePathStyle = true
+	cfg.Secrets.Mimir.S3AccessKeyID = "mimir-s3-access"
+	cfg.Secrets.Mimir.S3SecretAccessKey = "mimir-s3-secret"
 
 	mimirValues := renderOverrideValues(t, cfg, "mimir")
 	if !strings.Contains(mimirValues, "dnsService: coredns") {
 		t.Fatalf("expected global.dnsService: coredns in Mimir values:\n%s", mimirValues)
 	}
-	if !strings.Contains(mimirValues, "backend: swift") || !strings.Contains(mimirValues, "application_credential_secret: mimir-swift-secret") {
-		t.Fatalf("expected configured Swift storage in Mimir values:\n%s", mimirValues)
+	if !strings.Contains(mimirValues, "backend: s3") || !strings.Contains(mimirValues, "endpoint: https://mimir-s3.example.com") || !strings.Contains(mimirValues, "secret_access_key: mimir-s3-secret") {
+		t.Fatalf("expected configured S3 storage in Mimir values:\n%s", mimirValues)
 	}
 	if !strings.Contains(mimirValues, "minio:\n    enabled: false") {
 		t.Fatalf("expected bundled MinIO to be disabled in Mimir values:\n%s", mimirValues)
 	}
-	if strings.Contains(mimirValues, "backend: s3") || strings.Contains(mimirValues, "PLACEHOLDER") {
-		t.Fatalf("did not expect S3 or placeholder storage credentials in Mimir values:\n%s", mimirValues)
+	if strings.Contains(mimirValues, "backend: swift") || strings.Contains(mimirValues, "PLACEHOLDER") {
+		t.Fatalf("did not expect Swift or placeholder storage credentials in Mimir values:\n%s", mimirValues)
 	}
 	// No external kafka-cluster, so there must be no Kafka ingest_storage wiring.
 	// (The chart's bundled Kafka broker stays enabled in this case and gets a PVC

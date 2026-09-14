@@ -1,7 +1,6 @@
 package gitops
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
@@ -45,7 +44,7 @@ func TestVeleroRendererOpenStackUsesProviderSafeValues(t *testing.T) {
 	require.Contains(t, rendered, "- name: default")
 	require.Contains(t, rendered, "bucket: custom-backups")
 	require.Contains(t, rendered, "region: DFW3")
-	require.NotContains(t, strings.ToLower(rendered), "cloud-credentials")
+	require.Contains(t, rendered, "existingSecret: velero-cloud-credentials")
 	require.NotContains(t, rendered, "csi.vsphere.vmware.com/velero-vsphere-snapshot-class")
 	require.NotContains(t, rendered, "driver: csi.vsphere.vmware.com")
 }

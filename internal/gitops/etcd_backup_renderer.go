@@ -38,6 +38,10 @@ spec:
   dependsOn:
     - name: sources
       namespace: flux-system
+{{- if .DependsOnRustFS }}
+    - name: rustfs
+      namespace: flux-system
+{{- end }}
   interval: 15m
   retryInterval: 1m
   timeout: 10m
@@ -65,8 +69,9 @@ type etcdBackupKustomizationData struct {
 }
 
 type etcdBackupFluxData struct {
-	ClusterName string
-	Namespace   string
+	ClusterName     string
+	Namespace       string
+	DependsOnRustFS bool
 }
 
 // planEtcdBackupDynamicActions emits the service kustomization separately from
@@ -96,7 +101,7 @@ func planEtcdBackupDynamicActions(cfg v2.Config, artifacts []secretartifacts.Art
 	fluxContent, err := renderInlineTemplateContent(
 		etcdBackupFluxTemplate,
 		"etcd-backup.yaml",
-		etcdBackupFluxData{ClusterName: cfg.OpenCenter.Cluster.ClusterName, Namespace: namespace},
+		etcdBackupFluxData{ClusterName: cfg.OpenCenter.Cluster.ClusterName, Namespace: namespace, DependsOnRustFS: v2.UsesManagedObjectStorage(&cfg)},
 	)
 	if err != nil {
 		return nil, err
