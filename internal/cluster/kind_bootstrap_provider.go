@@ -60,7 +60,16 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 	}
 	gitDir, gitDirErr := resolveGitDir(cfg, clusterPaths)
 
-	return []bootstrapStep{
+	// The GitOps provider determines which bootstrap steps apply. The local
+	// Gitea provider requires attaching Gitea to the Kind network and rebasing/
+	// pushing the local checkout against it. External providers (e.g. github)
+	// bootstrap Flux directly against the remote, so those Gitea-only steps are
+	// skipped: `flux bootstrap github` commits straight to the remote, leaving
+	// no local Gitea to attach or push to.
+	gitProvider := resolveKindGitProvider(cfg)
+	useGitea := gitProvider == "gitea"
+
+	steps := []bootstrapStep{
 		{
 			ID:          "kind-create",
 			Description: "Create Kind cluster",
@@ -139,17 +148,17 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 		},
 		{
 			ID:          "flux-bootstrap",
-			Description: "Bootstrap FluxCD from local Gitea",
+			Description: fluxBootstrapDescription(gitProvider),
 			Plan: BootstrapPlanStep{
 				ID:         "flux-bootstrap",
-				Action:     "Bootstrap FluxCD from local Gitea",
+				Action:     fluxBootstrapDescription(gitProvider),
 				WorkingDir: gitDir,
 				Commands: []BootstrapPlanCommand{
 					commandPlan("flux", "bootstrap", "<provider-specific>", "--path=applications/overlays/"+cfg.ClusterName()),
 				},
 				Environment: []BootstrapPlanEnv{{Name: "KUBECONFIG", Value: opts.KubeconfigPath}},
 				Writes:      []string{"Flux bootstrap manifests and commits in the GitOps repository", "Flux resources in the Kind cluster"},
-				Notes:       appendPlanNotes([]string{"Plan only; local Gitea status, token files, current branch, and kubeconfig were not checked."}, gitDirErr),
+				Notes:       appendPlanNotes([]string{fluxBootstrapPlanNote(gitProvider)}, gitDirErr),
 			},
 			Run: func(ctx context.Context) error {
 				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
@@ -294,7 +303,65 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				return nil
 			},
 		},
-	}, nil
+	}
+
+	// For external Git providers, drop the Gitea-only steps. Flux bootstraps
+	// directly against the remote (github/gitlab), so there is no local Gitea to
+	// attach to the Kind network, and no local-checkout rebase/push cycle.
+	if !useGitea {
+		steps = filterOutSteps(steps, "gitea-attach-kind", "gitea-rebase", "gitops-push")
+	}
+
+	return steps, nil
+}
+
+// fluxBootstrapDescription returns a provider-appropriate description for the
+// flux-bootstrap step.
+func fluxBootstrapDescription(gitProvider string) string {
+	if gitProvider == "gitea" || gitProvider == "" {
+		return "Bootstrap FluxCD from local Gitea"
+	}
+	return fmt.Sprintf("Bootstrap FluxCD from %s", gitProvider)
+}
+
+// fluxBootstrapPlanNote returns a provider-appropriate dry-run note for the
+// flux-bootstrap step. Only the local Gitea provider has a Gitea status to
+// check; external providers rely on the configured repository and token file.
+func fluxBootstrapPlanNote(gitProvider string) string {
+	if gitProvider == "gitea" || gitProvider == "" {
+		return "Plan only; local Gitea status, token files, current branch, and kubeconfig were not checked."
+	}
+	return "Plan only; token files, current branch, and kubeconfig were not checked."
+}
+
+// resolveKindGitProvider returns the configured GitOps token provider (lowercased)
+// for a Kind cluster, defaulting to "gitea" when unset. This mirrors the flux
+// service's provider resolution so the plan's step list matches what Bootstrap
+// will actually execute.
+func resolveKindGitProvider(cfg *v2.Config) string {
+	if cfg.OpenCenter.GitOps.Auth.Token != nil {
+		if p := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Provider)); p != "" {
+			return p
+		}
+	}
+	return "gitea"
+}
+
+// filterOutSteps returns a new slice with any step whose ID matches one of the
+// provided IDs removed, preserving the original order.
+func filterOutSteps(steps []bootstrapStep, removeIDs ...string) []bootstrapStep {
+	remove := make(map[string]struct{}, len(removeIDs))
+	for _, id := range removeIDs {
+		remove[id] = struct{}{}
+	}
+	filtered := make([]bootstrapStep, 0, len(steps))
+	for _, step := range steps {
+		if _, drop := remove[step.ID]; drop {
+			continue
+		}
+		filtered = append(filtered, step)
+	}
+	return filtered
 }
 
 // resolveGitDir returns the GitOps directory for the cluster, falling back to

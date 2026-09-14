@@ -613,11 +613,16 @@ func applyProviderBehaviorDefaults(cfg *Config) {
 		cfg.OpenCenter.Infrastructure.Compute.MasterCount = kindDefaultControlPlaneCount
 		cfg.OpenCenter.Infrastructure.Compute.WorkerCount = kindDefaultWorkerCount
 
-		// Kind uses token-based HTTPS auth against local Gitea, not SSH.
-		// Clear release fields so FluxCD GitRepository sources use branch only.
+		// Kind defaults to token-based HTTPS auth against local Gitea, not SSH.
+		// However, external Git providers (e.g. github) are supported on Kind:
+		// if a token provider has already been explicitly configured, preserve
+		// it instead of forcing gitea. Only fall back to gitea when unset.
 		cfg.OpenCenter.GitOps.Auth.SSH = nil
-		cfg.OpenCenter.GitOps.Auth.Token = &GitOpsTokenAuth{
-			Provider: "gitea",
+		if cfg.OpenCenter.GitOps.Auth.Token == nil ||
+			strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Provider) == "" {
+			cfg.OpenCenter.GitOps.Auth.Token = &GitOpsTokenAuth{
+				Provider: "gitea",
+			}
 		}
 		cfg.OpenCenter.GitOps.BaseRepo.Release = ""
 
@@ -717,9 +722,16 @@ func applyGitOpsAuthDefaults(cfg *Config, authMethod, sshKeyPath string) {
 		cfg.OpenCenter.GitOps.BaseRepo.URL = DefaultGitBaseRepoURLHTTPS
 		cfg.OpenCenter.GitOps.Repository.URL = defaultHTTPSGitURLPlaceholder
 		cfg.OpenCenter.GitOps.Auth.SSH = nil
-		cfg.OpenCenter.GitOps.Auth.Token = &GitOpsTokenAuth{
-			Provider: "github",
-			Token:    PlaceholderSecret,
+		// Preserve a provider already chosen by provider-behavior defaults
+		// (e.g. Kind defaults to gitea). Only fall back to github when no token
+		// provider has been set yet, so token auth on other providers keeps its
+		// github default without clobbering an intentional per-provider choice.
+		if cfg.OpenCenter.GitOps.Auth.Token == nil ||
+			strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Provider) == "" {
+			cfg.OpenCenter.GitOps.Auth.Token = &GitOpsTokenAuth{
+				Provider: "github",
+				Token:    PlaceholderSecret,
+			}
 		}
 	}
 }

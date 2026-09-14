@@ -461,6 +461,77 @@ func TestBootstrapService_DryRunKindBuildsProviderPlan(t *testing.T) {
 	}
 }
 
+func TestBootstrapService_DryRunKindGitHubProviderPlanSkipsGitea(t *testing.T) {
+	tmpDir := t.TempDir()
+	clusterName := "kind-github-plan"
+	organization := "test-org"
+
+	pathResolver := paths.NewPathResolver(tmpDir)
+	bootstrapService := createTestBootstrapService(pathResolver)
+
+	ctx := context.Background()
+	if err := pathResolver.CreateClusterDirectories(ctx, clusterName, organization); err != nil {
+		t.Fatalf("create cluster directories: %v", err)
+	}
+
+	cfg := mustNewClusterTestConfig(clusterName, "kind")
+	cfg.OpenCenter.Meta.Organization = organization
+	cfg.OpenCenter.GitOps.Repository.LocalDir = filepath.Join(tmpDir, "gitops-repo")
+	// Select an external GitHub GitOps provider instead of the local Gitea
+	// default. The plan must then drop the Gitea-only steps.
+	cfg.OpenCenter.GitOps.Repository.URL = "https://github.com/example-org/gitops-repo.git"
+	cfg.OpenCenter.GitOps.Auth.Token = &v2.GitOpsTokenAuth{
+		Provider:  "github",
+		TokenFile: "secrets/github-token.txt",
+		Owner:     "example-org",
+	}
+	testhelpers.SaveConfigWithPathResolver(t, cfg, pathResolver)
+
+	result, err := bootstrapService.Bootstrap(ctx, BootstrapOptions{
+		ClusterName:      clusterName,
+		Organization:     organization,
+		DryRun:           true,
+		SkipValidation:   false,
+		ContainerRuntime: "docker",
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap() dry-run error: %v", err)
+	}
+	if result.Plan == nil {
+		t.Fatal("expected dry-run plan")
+	}
+	if result.Plan.Provider != "kind" {
+		t.Fatalf("provider = %q, want kind", result.Plan.Provider)
+	}
+	// Gitea-only steps (gitea-attach-kind, gitea-rebase, gitops-push) must be
+	// absent for an external GitHub provider; Flux bootstraps straight to the
+	// remote.
+	wantIDs := []string{"kind-create", "kind-export-kubeconfig", "flux-bootstrap", "reconcile-sops-age-secret", "flux-verify"}
+	if got := planStepIDs(result.Plan); strings.Join(got, ",") != strings.Join(wantIDs, ",") {
+		t.Fatalf("plan steps = %v, want %v", got, wantIDs)
+	}
+	for _, step := range result.Plan.Steps {
+		switch step.ID {
+		case "gitea-attach-kind", "gitea-rebase", "gitops-push":
+			t.Fatalf("gitea-only step %q must not be present for github provider", step.ID)
+		}
+	}
+	// The flux-bootstrap step should reference github, not local Gitea.
+	var fluxStep *BootstrapPlanStep
+	for i := range result.Plan.Steps {
+		if result.Plan.Steps[i].ID == "flux-bootstrap" {
+			fluxStep = &result.Plan.Steps[i]
+			break
+		}
+	}
+	if fluxStep == nil {
+		t.Fatal("expected flux-bootstrap step in plan")
+	}
+	if strings.Contains(strings.ToLower(fluxStep.Action), "gitea") {
+		t.Fatalf("flux-bootstrap action should not mention gitea for github provider: %q", fluxStep.Action)
+	}
+}
+
 func TestBootstrapService_DryRunOpenStackBuildsPlanWithoutPrerequisites(t *testing.T) {
 	tmpDir := t.TempDir()
 	clusterName := "openstack-plan"

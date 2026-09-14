@@ -155,6 +155,121 @@ func TestBootstrapPrefersConfiguredGitURLAndTokenPath(t *testing.T) {
 	}
 }
 
+// writeGitHubClusterFixture writes a kind cluster config that selects an
+// external GitHub GitOps provider (no local Gitea).
+func writeGitHubClusterFixture(t *testing.T, configDir, clusterName, org, gitDir, gitURL, tokenFile string, personal bool) *localdev.ClusterContext {
+	t.Helper()
+	ctx := writeClusterFixtureWithGitOps(t, configDir, clusterName, org, gitDir, gitURL, tokenFile)
+	// Re-write the config with the github provider selected.
+	ctx.Config.OpenCenter.GitOps.Auth.Token = &v2.GitOpsTokenAuth{
+		Provider:  "github",
+		TokenFile: tokenFile,
+		Personal:  personal,
+	}
+	data, err := yaml.Marshal(ctx.Config)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(ctx.Paths.ConfigPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	resolver, err := localdev.NewClusterResolver()
+	if err != nil {
+		t.Fatalf("NewClusterResolver() error = %v", err)
+	}
+	reloaded, err := resolver.Resolve(context.Background(), org+"/"+clusterName)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	return reloaded
+}
+
+func TestBootstrapGitHubProviderSkipsGiteaAndOmitsPersonal(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	clusterName := "dev-cluster"
+	org := "local"
+	gitDir := filepath.Join(t.TempDir(), org)
+	tokenFile := filepath.Join(t.TempDir(), "github.token")
+	repoURL := "https://github.com/example-org/gitops-repo.git"
+	t.Setenv("OPENCENTER_CONFIG_DIR", configDir)
+
+	if err := os.WriteFile(tokenFile, []byte("gh-token"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	clusterCtx := writeGitHubClusterFixture(t, configDir, clusterName, org, gitDir, repoURL, tokenFile, false)
+
+	// No gitea handlers registered: hitting any would mean the github path
+	// wrongly depends on local Gitea. Any unexpected command fails the test.
+	executor := &fakeExecutor{
+		t: t,
+		handlers: map[string]func(opts localdev.RunOptions) ([]byte, error){
+			"git branch --show-current": func(opts localdev.RunOptions) ([]byte, error) {
+				return []byte("main"), nil
+			},
+			fmt.Sprintf("flux bootstrap github --token-auth --owner=example-org --repository=gitops-repo --branch=main --path=applications/overlays/%s", clusterName): func(opts localdev.RunOptions) ([]byte, error) {
+				if opts.Env["GITHUB_TOKEN"] != "gh-token" {
+					t.Fatalf("GITHUB_TOKEN = %q, want gh-token", opts.Env["GITHUB_TOKEN"])
+				}
+				if opts.Env["KUBECONFIG"] != clusterCtx.Paths.KubeconfigPath {
+					t.Fatalf("bootstrap KUBECONFIG = %q, want %q", opts.Env["KUBECONFIG"], clusterCtx.Paths.KubeconfigPath)
+				}
+				return nil, nil
+			},
+		},
+	}
+
+	service, err := NewService(executor, stateDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	result, err := service.Bootstrap(context.Background(), org+"/"+clusterName)
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if result.RepoURL != repoURL {
+		t.Fatalf("RepoURL = %q, want %q", result.RepoURL, repoURL)
+	}
+}
+
+func TestBootstrapGitHubProviderPersonalAppendsFlag(t *testing.T) {
+	configDir := t.TempDir()
+	stateDir := t.TempDir()
+	clusterName := "dev-cluster"
+	org := "local"
+	gitDir := filepath.Join(t.TempDir(), org)
+	tokenFile := filepath.Join(t.TempDir(), "github.token")
+	repoURL := "https://github.com/someuser/gitops-repo.git"
+	t.Setenv("OPENCENTER_CONFIG_DIR", configDir)
+
+	if err := os.WriteFile(tokenFile, []byte("gh-token"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	_ = writeGitHubClusterFixture(t, configDir, clusterName, org, gitDir, repoURL, tokenFile, true)
+
+	executor := &fakeExecutor{
+		t: t,
+		handlers: map[string]func(opts localdev.RunOptions) ([]byte, error){
+			"git branch --show-current": func(opts localdev.RunOptions) ([]byte, error) {
+				return []byte("main"), nil
+			},
+			fmt.Sprintf("flux bootstrap github --token-auth --owner=someuser --repository=gitops-repo --branch=main --path=applications/overlays/%s --personal", clusterName): func(opts localdev.RunOptions) ([]byte, error) {
+				return nil, nil
+			},
+		},
+	}
+
+	service, err := NewService(executor, stateDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	if _, err := service.Bootstrap(context.Background(), org+"/"+clusterName); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+}
+
 func writeClusterFixture(t *testing.T, configDir, clusterName, org, gitDir string) *localdev.ClusterContext {
 	return writeClusterFixtureWithGitOps(t, configDir, clusterName, org, gitDir, "", "")
 }

@@ -1153,6 +1153,9 @@
                     "owner": {
                       "type": "string"
                     },
+                    "personal": {
+                      "type": "boolean"
+                    },
                     "provider": {
                       "enum": [
                         "github",

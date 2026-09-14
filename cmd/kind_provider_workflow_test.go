@@ -33,6 +33,14 @@ func TestClusterInitKindDefaults(t *testing.T) {
 	if cfg.OpenCenter.Infrastructure.Provider != "kind" {
 		t.Fatalf("expected provider kind, got %s", cfg.OpenCenter.Infrastructure.Provider)
 	}
+	// Kind must default the GitOps provider to gitea (local, offline-friendly).
+	// External providers such as github are opt-in, not the init default.
+	if cfg.OpenCenter.GitOps.Auth.Token == nil {
+		t.Fatal("expected gitops token auth for kind, got nil")
+	}
+	if got := cfg.OpenCenter.GitOps.Auth.Token.Provider; got != "gitea" {
+		t.Fatalf("expected kind gitops provider gitea, got %q", got)
+	}
 	if cfg.OpenTofu.Enabled {
 		t.Fatal("expected opentofu to be disabled for kind")
 	}

@@ -376,6 +376,12 @@ type GitOpsTokenAuth struct {
 	// Organization is the git organization used as the username in
 	// authenticated HTTPS URLs (e.g., https://<organization>:<token>@host/path).
 	Organization string `yaml:"organization,omitempty" json:"organization,omitempty"`
+
+	// Personal indicates the GitHub repository is owned by a personal account
+	// rather than an organization. When true, `flux bootstrap github` is invoked
+	// with `--personal`. Defaults to false (organization-owned), which matches
+	// the common enterprise case. Only applies to the github provider.
+	Personal bool `yaml:"personal,omitempty" json:"personal,omitempty"`
 }
 
 type GitOpsFluxConfig struct {

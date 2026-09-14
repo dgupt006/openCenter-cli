@@ -518,8 +518,16 @@ func (s *InitService) updateConfigPaths(cfg *v2.Config, configMap map[string]any
 			cfg.OpenCenter.GitOps.Auth.Token = &v2.GitOpsTokenAuth{}
 		}
 		if !hasExplicitConfigValue(configMap, opts, "opencenter", "gitops", "auth", "token", "provider") {
-			cfg.OpenCenter.GitOps.Auth.Token.Provider = "github"
-			setNestedConfigValue(configMap, "github", "opencenter", "gitops", "auth", "token", "provider")
+			// Preserve a provider already chosen by per-provider behavior
+			// defaults (e.g. kind defaults to gitea). Only fall back to github
+			// when no provider has been set, so external providers stay opt-in
+			// per infrastructure type rather than being forced to github here.
+			provider := strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Provider)
+			if provider == "" {
+				provider = "github"
+			}
+			cfg.OpenCenter.GitOps.Auth.Token.Provider = provider
+			setNestedConfigValue(configMap, provider, "opencenter", "gitops", "auth", "token", "provider")
 		}
 		tokenExplicit := hasExplicitConfigValue(configMap, opts, "opencenter", "gitops", "auth", "token", "token")
 		tokenFileExplicit := hasExplicitConfigValue(configMap, opts, "opencenter", "gitops", "auth", "token", "token_file")

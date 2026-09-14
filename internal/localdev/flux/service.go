@@ -79,19 +79,30 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 		return nil, fmt.Errorf("cluster %q is not a kind cluster", clusterIdentifier)
 	}
 
-	giteaService, err := gitea.NewService(s.executor, s.stateDir, gitea.DefaultSettings(""))
-	if err != nil {
-		return nil, err
-	}
-	status, err := giteaService.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !status.Running {
-		return nil, fmt.Errorf("local gitea is not running")
-	}
-	if status.KindIP == "" {
-		return nil, fmt.Errorf("local gitea is not attached to the kind network; run `opencenter local gitea attach-kind --cluster %s` first", cluster.ClusterName)
+	// Resolve the GitOps provider first. Only the local Gitea provider requires a
+	// running, kind-attached Gitea container; external providers (github, gitlab)
+	// bootstrap directly against the configured remote and must not depend on it.
+	tokenProvider := resolveGitTokenProviderForURL(cluster.Config, cluster.Config.ConfiguredGitURL())
+
+	// giteaStatus is only populated for the gitea provider; the github/gitlab
+	// paths leave it nil and rely on the configured git_url and token_file.
+	var giteaStatus *gitea.Status
+	if tokenProvider == "gitea" {
+		giteaService, err := gitea.NewService(s.executor, s.stateDir, gitea.DefaultSettings(""))
+		if err != nil {
+			return nil, err
+		}
+		status, err := giteaService.Status(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !status.Running {
+			return nil, fmt.Errorf("local gitea is not running")
+		}
+		if status.KindIP == "" {
+			return nil, fmt.Errorf("local gitea is not attached to the kind network; run `opencenter local gitea attach-kind --cluster %s` first", cluster.ClusterName)
+		}
+		giteaStatus = status
 	}
 
 	gitDir := strings.TrimSpace(cluster.Config.GitDir())
@@ -106,16 +117,25 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 	}
 
 	repoURL := cluster.Config.ConfiguredGitURL()
-	if repoURL == "" {
-		repoURL = status.HostRepoURL
+	if repoURL == "" && giteaStatus != nil {
+		repoURL = giteaStatus.HostRepoURL
 	}
 	if repoURL == "" {
-		return nil, fmt.Errorf("cluster %q does not define git_url and no routable host IP was found for local Gitea", clusterIdentifier)
+		if tokenProvider == "gitea" {
+			return nil, fmt.Errorf("cluster %q does not define git_url and no routable host IP was found for local Gitea", clusterIdentifier)
+		}
+		return nil, fmt.Errorf("cluster %q does not define git_url; the %s provider requires an explicit repository URL", clusterIdentifier, tokenProvider)
 	}
 
-	tokenProvider := resolveGitTokenProviderForURL(cluster.Config, repoURL)
-
-	tokenPath, err := resolveTokenPath(resolveGitTokenFile(cluster.Config), status.UserTokenPath, status.UserTokenExists)
+	// The gitea provider falls back to the local Gitea user token; external
+	// providers require a configured token_file (no local Gitea fallback).
+	var giteaUserTokenPath string
+	var giteaUserTokenExists bool
+	if giteaStatus != nil {
+		giteaUserTokenPath = giteaStatus.UserTokenPath
+		giteaUserTokenExists = giteaStatus.UserTokenExists
+	}
+	tokenPath, err := resolveTokenPath(resolveGitTokenFile(cluster.Config), giteaUserTokenPath, giteaUserTokenExists)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +169,11 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 			"--repository=" + repo,
 			"--branch=" + branch,
 			"--path=" + bootstrapPath,
-			"--personal",
+		}
+		// --personal is only appended for personal (non-organization) accounts.
+		// Defaults to organization-owned (flag omitted), matching enterprise use.
+		if resolveGitPersonal(cluster.Config) {
+			fluxArgs = append(fluxArgs, "--personal")
 		}
 		kubeconfigEnv["GITHUB_TOKEN"] = token
 
@@ -171,15 +195,18 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 	case "gitea":
 		// Use generic git bootstrap for Gitea because the Gitea provider
 		// in go-git-providers panics on non-standard ports.
+		if giteaStatus == nil {
+			return nil, fmt.Errorf("gitea provider requires local Gitea status but none was resolved")
+		}
 		fluxArgs = []string{
 			"bootstrap", "git",
 			"--url=" + repoURL,
 			"--branch=" + branch,
 			"--path=" + bootstrapPath,
 			"--token-auth",
-			"--username=" + status.Metadata.RepoOwner,
+			"--username=" + giteaStatus.Metadata.RepoOwner,
 			"--password=" + token,
-			"--ca-file=" + status.CAPath,
+			"--ca-file=" + giteaStatus.CAPath,
 		}
 
 	default:
@@ -309,6 +336,9 @@ func resolveTokenPath(configuredPath, fallbackPath string, fallbackExists bool) 
 		}
 		return configuredPath, nil
 	}
+	if fallbackPath == "" {
+		return "", fmt.Errorf("no git token available: configure gitops.auth.token.token_file for the external Git provider")
+	}
 	if !fallbackExists {
 		return "", fmt.Errorf("missing Gitea user token at %s", fallbackPath)
 	}
@@ -327,15 +357,14 @@ func resolveGitTokenProvider(cfg *v2.Config) string {
 }
 
 func resolveGitTokenProviderForURL(cfg *v2.Config, repoURL string) string {
-	configured := resolveGitTokenProvider(cfg)
-	inferred := inferGitTokenProvider(repoURL)
-	if inferred == "gitea" && configured == "github" {
-		return inferred
-	}
-	if configured != "" {
+	// An explicitly configured provider always wins. This is required to support
+	// external Git providers (e.g. github) on Kind clusters: the repo URL may be
+	// unset or point at a Gitea-looking host during resolution, but the operator's
+	// configured provider is authoritative.
+	if configured := resolveGitTokenProvider(cfg); configured != "" {
 		return configured
 	}
-	if inferred != "" {
+	if inferred := inferGitTokenProvider(repoURL); inferred != "" {
 		return inferred
 	}
 	return "gitea"
@@ -373,4 +402,14 @@ func resolveGitOwner(cfg *v2.Config) string {
 		return strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Owner)
 	}
 	return ""
+}
+
+// resolveGitPersonal reports whether the GitHub repository is owned by a
+// personal account (vs an organization). Controls the `--personal` flag on
+// `flux bootstrap github`. Defaults to false (organization-owned).
+func resolveGitPersonal(cfg *v2.Config) bool {
+	if cfg.OpenCenter.GitOps.Auth.Token != nil {
+		return cfg.OpenCenter.GitOps.Auth.Token.Personal
+	}
+	return false
 }
