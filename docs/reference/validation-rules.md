@@ -430,6 +430,24 @@ opencenter:
       worker_nodes: 15  # Max 10 - ERROR
 ```
 
+### Storage Profile Rules
+
+Bulk-data services use S3-compatible object storage independently from their PVC storage. Longhorn and any CSI driver satisfy the PVC contract only.
+
+| Profile | Result |
+| --- | --- |
+| `production` + `external-s3` + `external` PVC provider | Valid when every enabled object consumer has a valid absolute S3 endpoint and required credentials. |
+| `production` + `external-s3` + `longhorn` PVC provider | Valid; Longhorn may serve PVCs but external S3 remains mandatory. |
+| Edge Production / private-cloud / disconnected / air-gapped production | Treated as production for this policy; externally managed S3-compatible storage is mandatory. |
+| `non-production` + `longhorn` + `rustfs` | Valid only with the Longhorn service enabled and generated RustFS credentials. |
+| Any production profile + `rustfs` | Rejected. |
+| Any `rustfs` profile without Longhorn | Rejected. |
+| Legacy Swift or local/filesystem bulk-data backend | Rejected with S3 migration guidance. |
+
+`external-s3` is intentionally provider-neutral. It can be a cloud service or self-hosted Ceph RGW, but openCenter does not manage a production object-store dependency. The managed RustFS profile is for low-resource non-production validation and has different recovery and availability guarantees from an externally managed production S3 service.
+
+Validation happens before generation and deployment. Generation is offline: it checks profile consistency, endpoint/credential requirements, generated GitOps content, and Flux ordering without contacting the S3 endpoint. A real deployment must separately verify external S3 reachability, permissions, retention, backup, and recovery procedures.
+
 ## Validation Severity Levels
 
 ### Error

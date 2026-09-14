@@ -233,6 +233,16 @@ opencenter:
 
 ## Storage Services
 
+### Bulk-data object storage policy
+
+Longhorn, OpenStack Cinder, vSphere CSI, and other CSI drivers provide persistent volumes. They do **not** satisfy the S3-compatible object-storage contract used by Loki, Tempo, Mimir, Velero, Harbor, and etcd-backup.
+
+Use `external-s3` for production, Edge Production, private-cloud production, disconnected production, and air-gapped production. The external service owns availability, encryption, lifecycle, replication, disaster recovery, and credentials. Ceph RGW is the reference self-hosted production S3-compatible option, but openCenter does not install or operate it.
+
+For non-production only, `non-production + longhorn + rustfs` deploys the bundled RustFS workload and creates per-cluster buckets. RustFS uses Longhorn for its PVC, but its recovery guarantees and operational limits are those of this single managed non-production component; it is not a replacement for production object-storage operations. The profile supplies generated credentials to enabled consumers and should not be given external S3 credentials.
+
+Swift-backed service configuration is unsupported. Migrate each enabled consumer to S3-compatible endpoint, bucket, region, and credentials before deploying.
+
 ### openstack-csi
 
 **Category:** Storage\

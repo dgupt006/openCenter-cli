@@ -134,3 +134,44 @@ func TestNewV2DefaultGeneratesRustFSCredentials(t *testing.T) {
 		t.Fatalf("NewV2Default must generate RustFS credentials: %#v", cfg.Secrets.RustFS)
 	}
 }
+
+func TestStorageProfilePermittedReleaseMatrix(t *testing.T) {
+	tests := []struct {
+		name     string
+		profile  StorageProfileConfig
+		longhorn bool
+	}{
+		{name: "production external S3 external CSI", profile: StorageProfileConfig{Lifecycle: StorageLifecycleProduction, PVCProvider: StoragePVCProviderExternal, ObjectStorageProvider: StorageObjectProviderExternalS3}},
+		{name: "production external S3 Longhorn PVCs", profile: StorageProfileConfig{Lifecycle: StorageLifecycleProduction, PVCProvider: StoragePVCProviderLonghorn, ObjectStorageProvider: StorageObjectProviderExternalS3}, longhorn: true},
+		// Edge Production is governed by the production lifecycle policy. It must
+		// therefore use external S3 even when its PVCs come from an external CSI.
+		{name: "edge production external S3", profile: StorageProfileConfig{Lifecycle: StorageLifecycleProduction, PVCProvider: StoragePVCProviderExternal, ObjectStorageProvider: StorageObjectProviderExternalS3}},
+		{name: "non-production Longhorn RustFS", profile: StorageProfileConfig{Lifecycle: StorageLifecycleNonProduction, PVCProvider: StoragePVCProviderLonghorn, ObjectStorageProvider: StorageObjectProviderRustFS}, longhorn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validReadinessConfig(t, "kind")
+			cfg.OpenCenter.Infrastructure.Storage.Profile = tt.profile
+			cfg.OpenCenter.Services["longhorn"].(*services.LonghornConfig).Enabled = tt.longhorn
+			if issues := storagePolicyIssues(cfg); len(issues) != 0 {
+				t.Fatalf("permitted profile produced policy issues: %#v", issues)
+			}
+		})
+	}
+}
+
+func TestStorageProfileAllowsNoObjectStorageConsumers(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Storage.Profile = StorageProfileConfig{
+		Lifecycle: StorageLifecycleProduction, PVCProvider: StoragePVCProviderExternal, ObjectStorageProvider: StorageObjectProviderExternalS3,
+	}
+	cfg.OpenCenter.Services["loki"].(*services.LokiConfig).Enabled = false
+	cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).Enabled = false
+	cfg.OpenCenter.Services["mimir"].(*services.MimirConfig).Enabled = false
+	cfg.OpenCenter.Services["velero"].(*services.VeleroConfig).Enabled = false
+	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).Enabled = false
+	cfg.OpenCenter.Services["etcd-backup"].(*services.EtcdBackupConfig).Enabled = false
+	if issues := storagePolicyIssues(cfg); len(issues) != 0 {
+		t.Fatalf("profile with no object-storage consumers produced policy issues: %#v", issues)
+	}
+}

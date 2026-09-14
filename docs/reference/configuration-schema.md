@@ -374,20 +374,39 @@ opencenter:
       prune: true
 ```
 
-### opencenter.storage
+### opencenter.infrastructure.storage.profile
 
-Storage configuration.
+Storage uses two independent contracts: PVCs and bulk object storage. A CSI driver or Longhorn satisfies only the PVC contract; it does **not** provide S3-compatible storage for Loki, Tempo, Mimir, Velero, Harbor, or etcd backups.
 
 ```yaml
 opencenter:
-  storage:
-    default_storage_class: "csi-cinder-sc-delete"
-    worker_volume_size: 40
-    worker_volume_destination_type: "volume"
-    worker_volume_source_type: "image"
-    worker_volume_type: "HA-Standard"
-    additional_block_devices: []
+  infrastructure:
+    storage:
+      profile:
+        lifecycle: production             # production or non-production
+        pvc_provider: external            # external CSI or longhorn
+        object_storage_provider: external-s3  # external-s3 or rustfs
 ```
+
+Production (including Edge Production), private-cloud production, disconnected production, and air-gapped production deployments must use `external-s3`. Supply each enabled bulk-data consumer with its external S3 endpoint, bucket, region, and applicable credentials. Ceph RGW is the reference self-hosted production option; it is not deployed or operated by openCenter.
+
+The only bundled S3 implementation is `rustfs`. It is supported only for `non-production` with `pvc_provider: longhorn` and the Longhorn service enabled. openCenter generates its internal credentials, endpoint, buckets, and consumer configuration. RustFS is not a production durability or recovery substitute for an externally managed S3 service.
+
+```yaml
+# Low-resource non-production profile only
+opencenter:
+  infrastructure:
+    storage:
+      profile:
+        lifecycle: non-production
+        pvc_provider: longhorn
+        object_storage_provider: rustfs
+  services:
+    longhorn:
+      enabled: true
+```
+
+Legacy Swift fields may remain readable only long enough for validation to report a migration error. Replace Swift endpoints, containers, and application credentials with S3-compatible endpoint, bucket, region, and credentials before generation.
 
 ### opencenter.services
 
@@ -428,9 +447,9 @@ opencenter:
       volume_size: 20
       storage_class: "csi-cinder-sc-delete"
       bucket_name: "my-cluster-loki"
-      swift_auth_url: "https://keystone.api.sjc3.rackspacecloud.com/v3/"
-      swift_region: "SJC3"
-      swift_domain_name: "Default"
+      s3_endpoint: "https://s3.example.com"
+      s3_region: "us-east-1"
+      s3_force_path_style: false
     # ... (20+ services total)
 ```
 

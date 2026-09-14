@@ -2355,6 +2355,21 @@
                 "master_volume_type": {
                   "type": "string"
                 },
+                "profile": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "lifecycle": {
+                      "type": "string"
+                    },
+                    "object_storage_provider": {
+                      "type": "string"
+                    },
+                    "pvc_provider": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "worker_volume_delete_on_termination": {
                   "type": "boolean"
                 },
@@ -3307,6 +3322,9 @@
                 "adoption_mode": {
                   "type": "string"
                 },
+                "alertmanager_hostname": {
+                  "type": "string"
+                },
                 "alertmanager_storage_class": {
                   "type": "string"
                 },
@@ -3315,6 +3333,9 @@
                 },
                 "enabled": {
                   "type": "boolean"
+                },
+                "grafana_hostname": {
+                  "type": "string"
                 },
                 "grafana_storage_class": {
                   "type": "string"
@@ -3338,6 +3359,9 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "prometheus_hostname": {
                   "type": "string"
                 },
                 "prometheus_storage_class": {
@@ -3683,6 +3707,21 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -5247,6 +5286,9 @@
                 "adoption_mode": {
                   "type": "string"
                 },
+                "alertmanager_hostname": {
+                  "type": "string"
+                },
                 "alertmanager_storage_class": {
                   "type": "string"
                 },
@@ -5255,6 +5297,9 @@
                 },
                 "enabled": {
                   "type": "boolean"
+                },
+                "grafana_hostname": {
+                  "type": "string"
                 },
                 "grafana_storage_class": {
                   "type": "string"
@@ -5278,6 +5323,9 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "prometheus_hostname": {
                   "type": "string"
                 },
                 "prometheus_storage_class": {
@@ -5623,6 +5671,21 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -7263,6 +7326,9 @@
                 "adoption_mode": {
                   "type": "string"
                 },
+                "alertmanager_hostname": {
+                  "type": "string"
+                },
                 "alertmanager_storage_class": {
                   "type": "string"
                 },
@@ -7271,6 +7337,9 @@
                 },
                 "enabled": {
                   "type": "boolean"
+                },
+                "grafana_hostname": {
+                  "type": "string"
                 },
                 "grafana_storage_class": {
                   "type": "string"
@@ -7294,6 +7363,9 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "prometheus_hostname": {
                   "type": "string"
                 },
                 "prometheus_storage_class": {
@@ -7639,6 +7711,21 @@
                   "type": "object"
                 },
                 "namespace": {
+                  "type": "string"
+                },
+                "s3_bucket_name": {
+                  "type": "string"
+                },
+                "s3_endpoint": {
+                  "type": "string"
+                },
+                "s3_force_path_style": {
+                  "type": "boolean"
+                },
+                "s3_insecure": {
+                  "type": "boolean"
+                },
+                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -8609,6 +8696,12 @@
         "mimir": {
           "additionalProperties": false,
           "properties": {
+            "s3_access_key_id": {
+              "type": "string"
+            },
+            "s3_secret_access_key": {
+              "type": "string"
+            },
             "swift_application_credential_secret": {
               "type": "string"
             }
@@ -8632,6 +8725,18 @@
                 }
               },
               "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "rustfs": {
+          "additionalProperties": false,
+          "properties": {
+            "access_key": {
+              "type": "string"
+            },
+            "secret_key": {
+              "type": "string"
             }
           },
           "type": "object"

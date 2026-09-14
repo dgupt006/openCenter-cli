@@ -818,19 +818,29 @@ func getServiceOptions(serviceName string) []ServiceOption {
 		}
 	case "loki":
 		return []ServiceOption{
-			{Name: "storage_type", Type: "string", Description: "Storage backend type (s3 or swift)", Required: false},
+			{Name: "storage_type", Type: "string", Description: "Storage backend type (s3 only)", Required: false},
 			{Name: "bucket_name", Type: "string", Description: "Storage bucket/container name", Required: true},
 			{Name: "volume_size", Type: "integer", Description: "Persistent volume size in GB", Required: false},
 			{Name: "storage_class", Type: "string", Description: "Storage class", Required: false},
-			{Name: "swift_auth_url", Type: "string", Description: "Swift Keystone V3 authentication URL (for Swift storage)", Required: false},
-			{Name: "swift_region", Type: "string", Description: "Swift region name (for Swift storage)", Required: false},
-			{Name: "swift_auth_version", Type: "integer", Description: "Swift authentication version (default: 3)", Required: false},
-			{Name: "swift_application_credential_id", Type: "string", Description: "Swift application credential ID (recommended)", Required: false},
-			{Name: "swift_container_name", Type: "string", Description: "Swift container name", Required: false},
 			{Name: "s3_endpoint", Type: "string", Description: "S3 endpoint URL (for S3 storage, e.g., MinIO)", Required: false},
 			{Name: "s3_region", Type: "string", Description: "S3 region (for S3 storage)", Required: false},
 			{Name: "s3_force_path_style", Type: "boolean", Description: "Force S3 path style (required for MinIO)", Required: false},
 			{Name: "s3_insecure", Type: "boolean", Description: "Allow insecure S3 connections", Required: false},
+		}
+	case "tempo":
+		return []ServiceOption{
+			{Name: "storage_type", Type: "string", Description: "Storage backend type (s3 only)", Required: false},
+			{Name: "bucket_name", Type: "string", Description: "S3 bucket name", Required: true},
+			{Name: "s3_endpoint", Type: "string", Description: "External S3 endpoint URL; generated for the managed RustFS profile", Required: false},
+			{Name: "s3_region", Type: "string", Description: "S3 region", Required: false},
+		}
+	case "mimir":
+		return []ServiceOption{
+			{Name: "s3_endpoint", Type: "string", Description: "External S3 endpoint URL; generated for the managed RustFS profile", Required: false},
+			{Name: "s3_region", Type: "string", Description: "S3 region", Required: false},
+			{Name: "s3_bucket_name", Type: "string", Description: "S3 bucket name", Required: true},
+			{Name: "s3_force_path_style", Type: "boolean", Description: "Use path-style S3 addressing", Required: false},
+			{Name: "s3_insecure", Type: "boolean", Description: "Allow HTTP only for managed cluster-local RustFS", Required: false},
 		}
 	case "keycloak":
 		return []ServiceOption{
@@ -886,18 +896,26 @@ func getServiceSecrets(serviceName string) []ServiceOption {
 		}
 	case "loki":
 		return []ServiceOption{
-			{Name: "swift_application_credential_secret", Type: "string", Description: "Swift application credential secret (recommended for Swift)", Required: false},
-			{Name: "swift_password", Type: "string", Description: "Swift password (legacy, deprecated)", Required: false},
 			{Name: "s3_access_key_id", Type: "string", Description: "S3 access key ID (for S3 storage)", Required: false},
 			{Name: "s3_secret_access_key", Type: "string", Description: "S3 secret access key (for S3 storage)", Required: false},
+		}
+	case "tempo":
+		return []ServiceOption{
+			{Name: "access_key", Type: "string", Description: "External S3 access key; generated for managed RustFS", Required: false},
+			{Name: "secret_key", Type: "string", Description: "External S3 secret key; generated for managed RustFS", Required: false},
+		}
+	case "mimir":
+		return []ServiceOption{
+			{Name: "s3_access_key_id", Type: "string", Description: "External S3 access key ID; generated for managed RustFS", Required: false},
+			{Name: "s3_secret_access_key", Type: "string", Description: "External S3 secret access key; generated for managed RustFS", Required: false},
 		}
 	case "harbor":
 		return []ServiceOption{
 			{Name: "admin_password", Type: "string", Description: "Harbor administrator password", Required: true},
 			{Name: "registry_password", Type: "string", Description: "Harbor registry password", Required: true},
 			{Name: "database_password", Type: "string", Description: "Harbor database password", Required: true},
-			{Name: "s3_access_key_id", Type: "string", Description: "Externally issued S3 access key ID for Harbor image storage", Required: true},
-			{Name: "s3_secret_access_key", Type: "string", Description: "Externally issued S3 secret access key for Harbor image storage", Required: true},
+			{Name: "s3_access_key_id", Type: "string", Description: "External S3 access key ID; generated for managed RustFS", Required: false},
+			{Name: "s3_secret_access_key", Type: "string", Description: "External S3 secret access key; generated for managed RustFS", Required: false},
 		}
 	case "keycloak":
 		return []ServiceOption{
