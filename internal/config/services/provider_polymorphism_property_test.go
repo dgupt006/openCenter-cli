@@ -54,12 +54,6 @@ func TestProperty_ServiceProviderPolymorphism(t *testing.T) {
 				return false
 			}
 
-			// Test storage providers only for providers that have storage compatibility defined
-			// BareMetal and VSphere don't have storage compatibility entries in the registry
-			if infraProvider == ProviderBareMetal || infraProvider == ProviderVSphere {
-				return true
-			}
-
 			// Test loki storage provider auto-selection
 			lokiProvider, err := registry.GetDefaultProvider("loki", "storage", infraProvider)
 			if err != nil {
@@ -230,53 +224,17 @@ func TestProperty_ServiceProviderPolymorphism(t *testing.T) {
 		genInfrastructureProvider(),
 	))
 
-	// Property 7: Storage provider defaults match infrastructure
-	properties.Property("storage provider defaults match infrastructure", prop.ForAll(
+	// Property 7: Storage provider defaults are the portable S3 contract.
+	properties.Property("storage provider defaults are S3-compatible", prop.ForAll(
 		func(infraProvider InfrastructureProvider) bool {
 			registry := GetProviderRegistry()
-
-			// Skip BareMetal and VSphere as they don't have storage compatibility defined yet
-			if infraProvider == ProviderBareMetal || infraProvider == ProviderVSphere {
-				return true
+			for _, serviceName := range []string{"loki", "tempo", "velero"} {
+				provider, err := registry.GetDefaultProvider(serviceName, "storage", infraProvider)
+				if err != nil || provider != StorageProviderS3 {
+					return false
+				}
 			}
-
-			// Get default storage providers
-			lokiProvider, err := registry.GetDefaultProvider("loki", "storage", infraProvider)
-			if err != nil {
-				return false
-			}
-
-			tempoProvider, err := registry.GetDefaultProvider("tempo", "storage", infraProvider)
-			if err != nil {
-				return false
-			}
-
-			veleroProvider, err := registry.GetDefaultProvider("velero", "storage", infraProvider)
-			if err != nil {
-				return false
-			}
-
-			// Verify expected defaults based on infrastructure
-			switch infraProvider {
-			case ProviderAWS:
-				return lokiProvider == StorageProviderS3 &&
-					tempoProvider == StorageProviderS3 &&
-					veleroProvider == StorageProviderS3
-			case ProviderOpenStack:
-				return lokiProvider == StorageProviderSwift &&
-					tempoProvider == StorageProviderSwift &&
-					veleroProvider == StorageProviderSwift
-			case ProviderGCP:
-				return lokiProvider == StorageProviderGCS &&
-					tempoProvider == StorageProviderGCS &&
-					veleroProvider == StorageProviderGCS
-			case ProviderAzure:
-				return lokiProvider == StorageProviderAzure &&
-					tempoProvider == StorageProviderAzure &&
-					veleroProvider == StorageProviderAzure
-			default:
-				return false
-			}
+			return true
 		},
 		genInfrastructureProvider(),
 	))

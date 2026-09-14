@@ -105,53 +105,39 @@ func TestRenderClusterAppsCertManagerDesignate(t *testing.T) {
 	}
 }
 
-func TestRenderClusterAppsLokiSwift(t *testing.T) {
+func TestRenderClusterAppsLokiUsesS3StorageContract(t *testing.T) {
 	dst := t.TempDir()
-	cfg := newDefault("loki-swift-guided")
+	cfg := newDefault("loki-s3-guided")
 	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
 	cfg.OpenCenter.Services["loki"] = &configservices.LokiConfig{
-		BaseConfig:             configservices.BaseConfig{Enabled: true, Namespace: "observability"},
-		StorageType:            "swift",
-		BucketName:             "loki-container",
-		SwiftAuthURL:           "https://identity.api.example.com/v3",
-		SwiftRegion:            "SJC3",
-		SwiftAuthVersion:       3,
-		SwiftUsername:          "loki-svc",
-		SwiftProjectName:       "loki-project",
-		SwiftProjectDomainName: "rackspace",
-		SwiftContainerName:     "loki-container",
-		SwiftUserDomainName:    "rackspace",
-		SwiftDomainName:        "rackspace",
+		BaseConfig:  configservices.BaseConfig{Enabled: true, Namespace: "observability"},
+		StorageType: "s3",
+		BucketName:  "loki-bucket",
+		S3Endpoint:  "https://s3.example.com",
+		S3Region:    "SJC3",
 	}
-	cfg.Secrets.Loki.SwiftPassword = "swift-secret"
+	cfg.Secrets.Loki.S3AccessKeyID = "loki-access"
+	cfg.Secrets.Loki.S3SecretAccessKey = "loki-secret"
 
 	if err := RenderClusterApps(cfg); err != nil {
 		t.Fatalf("RenderClusterApps() error = %v", err)
 	}
 
 	overrideValues := mustReadFile(t, filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "loki", "helm-values", "override-values.yaml"))
-	if !strings.Contains(overrideValues, "type: swift") {
-		t.Fatalf("expected swift storage type in Loki values:\n%s", overrideValues)
+	for _, want := range []string{
+		"type: s3",
+		"endpoint: https://s3.example.com",
+		"accessKeyId: loki-access",
+		"secretAccessKey: loki-secret",
+		"object_store: s3",
+		"dnsService: coredns",
+	} {
+		if !strings.Contains(overrideValues, want) {
+			t.Fatalf("expected %q in Loki values:\n%s", want, overrideValues)
+		}
 	}
-	if !strings.Contains(overrideValues, "username: loki-svc") {
-		t.Fatalf("expected swift username in Loki values:\n%s", overrideValues)
-	}
-	if !strings.Contains(overrideValues, "password: swift-secret") {
-		t.Fatalf("expected swift password in Loki values:\n%s", overrideValues)
-	}
-	if !strings.Contains(overrideValues, "project_name: loki-project") {
-		t.Fatalf("expected swift project_name in Loki values:\n%s", overrideValues)
-	}
-	if !strings.Contains(overrideValues, "container_name: loki-container") {
-		t.Fatalf("expected swift container name in Loki values:\n%s", overrideValues)
-	}
-	// OCTR-674: schemaConfig.object_store must match storage type.
-	if !strings.Contains(overrideValues, "object_store: swift") {
-		t.Fatalf("expected schemaConfig object_store: swift in Loki values:\n%s", overrideValues)
-	}
-	// OCTR-674: global.dnsService must be set to coredns.
-	if !strings.Contains(overrideValues, "dnsService: coredns") {
-		t.Fatalf("expected global.dnsService: coredns in Loki values:\n%s", overrideValues)
+	if strings.Contains(overrideValues, "swift:") {
+		t.Fatalf("did not expect Swift rendering in Loki values:\n%s", overrideValues)
 	}
 }
 
@@ -1032,17 +1018,17 @@ func TestRenderHarborOverrideValuesUsesEC2S3Credentials(t *testing.T) {
 	}
 }
 
-func TestLokiTempoRenderedBackendMatchesSharedProviderAwareResolver(t *testing.T) {
+func TestLokiTempoRenderedBackendUsesPortableS3Resolver(t *testing.T) {
 	tests := []struct {
 		name     string
 		provider string
 		explicit string
 		want     string
 	}{
-		{name: "openstack omitted", provider: "openstack", want: "swift"},
+		{name: "openstack omitted", provider: "openstack", want: "s3"},
 		{name: "generic omitted", provider: "kind", want: "s3"},
 		{name: "openstack explicit s3", provider: "openstack", explicit: "s3", want: "s3"},
-		{name: "generic explicit swift", provider: "kind", explicit: "swift", want: "swift"},
+		{name: "legacy Swift is never selected", provider: "kind", explicit: "swift", want: "s3"},
 	}
 
 	for _, tt := range tests {

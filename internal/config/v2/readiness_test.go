@@ -246,6 +246,7 @@ func validReadinessConfig(t *testing.T, provider string) *Config {
 	cfg.Secrets.Tempo.SecretKey = "tempo-s3-secret"
 	cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).S3Endpoint = "https://tempo-s3.example"
 	cfg.OpenCenter.Services["harbor"].(*services.HarborConfig).S3Endpoint = "https://harbor-s3.example"
+	cfg.OpenCenter.Services["velero"].(*services.VeleroConfig).S3Endpoint = "https://velero-s3.example"
 
 	cfg.OpenCenter.GitOps.Repository.URL = "ssh://git@github.com/example/cluster.git"
 	cfg.OpenCenter.GitOps.Auth.Token = nil

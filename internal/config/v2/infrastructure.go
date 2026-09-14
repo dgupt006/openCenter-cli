@@ -220,18 +220,29 @@ type TaintConfig struct {
 // StorageConfig represents storage configuration.
 // Requirements: 9.2
 type StorageConfig struct {
-	DefaultStorageClass             string              `yaml:"default_storage_class" json:"default_storage_class" validate:"required,dns1123"`
-	WorkerVolumeSize                int                 `yaml:"worker_volume_size" json:"worker_volume_size" validate:"required,min=1"`
-	WorkerVolumeDestinationType     string              `yaml:"worker_volume_destination_type" json:"worker_volume_destination_type" validate:"required,oneof=volume local"`
-	WorkerVolumeSourceType          string              `yaml:"worker_volume_source_type" json:"worker_volume_source_type" validate:"required,oneof=image volume snapshot"`
-	WorkerVolumeType                string              `yaml:"worker_volume_type" json:"worker_volume_type" validate:"required"`
-	WorkerVolumeDeleteOnTermination bool                `yaml:"worker_volume_delete_on_termination" json:"worker_volume_delete_on_termination"`
-	MasterVolumeSize                int                 `yaml:"master_volume_size" json:"master_volume_size" validate:"min=0"`
-	MasterVolumeDestinationType     string              `yaml:"master_volume_destination_type,omitempty" json:"master_volume_destination_type,omitempty"`
-	MasterVolumeSourceType          string              `yaml:"master_volume_source_type,omitempty" json:"master_volume_source_type,omitempty"`
-	MasterVolumeType                string              `yaml:"master_volume_type,omitempty" json:"master_volume_type,omitempty"`
-	MasterVolumeDeleteOnTermination bool                `yaml:"master_volume_delete_on_termination" json:"master_volume_delete_on_termination"`
-	AdditionalBlockDevices          []BlockDeviceConfig `yaml:"additional_block_devices,omitempty" json:"additional_block_devices,omitempty"`
+	DefaultStorageClass             string               `yaml:"default_storage_class" json:"default_storage_class" validate:"required,dns1123"`
+	WorkerVolumeSize                int                  `yaml:"worker_volume_size" json:"worker_volume_size" validate:"required,min=1"`
+	WorkerVolumeDestinationType     string               `yaml:"worker_volume_destination_type" json:"worker_volume_destination_type" validate:"required,oneof=volume local"`
+	WorkerVolumeSourceType          string               `yaml:"worker_volume_source_type" json:"worker_volume_source_type" validate:"required,oneof=image volume snapshot"`
+	WorkerVolumeType                string               `yaml:"worker_volume_type" json:"worker_volume_type" validate:"required"`
+	WorkerVolumeDeleteOnTermination bool                 `yaml:"worker_volume_delete_on_termination" json:"worker_volume_delete_on_termination"`
+	MasterVolumeSize                int                  `yaml:"master_volume_size" json:"master_volume_size" validate:"min=0"`
+	MasterVolumeDestinationType     string               `yaml:"master_volume_destination_type,omitempty" json:"master_volume_destination_type,omitempty"`
+	MasterVolumeSourceType          string               `yaml:"master_volume_source_type,omitempty" json:"master_volume_source_type,omitempty"`
+	MasterVolumeType                string               `yaml:"master_volume_type,omitempty" json:"master_volume_type,omitempty"`
+	MasterVolumeDeleteOnTermination bool                 `yaml:"master_volume_delete_on_termination" json:"master_volume_delete_on_termination"`
+	AdditionalBlockDevices          []BlockDeviceConfig  `yaml:"additional_block_devices,omitempty" json:"additional_block_devices,omitempty"`
+	Profile                         StorageProfileConfig `yaml:"profile,omitempty" json:"profile,omitempty" jsonschema:"description=Platform storage profile controlling PVC and object-storage providers"`
+}
+
+// StorageProfileConfig selects the supported openCenter storage contracts.
+// PVCs provide stateful working storage; bulk service data always uses an
+// S3-compatible API. RustFS is intentionally a non-production validation
+// profile until its managed service implementation is available.
+type StorageProfileConfig struct {
+	Lifecycle             string `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty" jsonschema:"description=Deployment support class,enum=production,enum=non-production,default=non-production"`
+	PVCProvider           string `yaml:"pvc_provider,omitempty" json:"pvc_provider,omitempty" jsonschema:"description=Persistent volume provider,enum=external,enum=longhorn,default=external"`
+	ObjectStorageProvider string `yaml:"object_storage_provider,omitempty" json:"object_storage_provider,omitempty" jsonschema:"description=Bulk object storage provider,enum=external-s3,enum=rustfs,default=external-s3"`
 }
 
 // BlockDeviceConfig represents additional block device configuration.

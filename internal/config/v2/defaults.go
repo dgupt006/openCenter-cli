@@ -248,6 +248,11 @@ func NewV2Default(name, provider string) (*Config, error) {
 					MasterVolumeSourceType:          "image",
 					MasterVolumeType:                defaultStorageType(selectedProvider),
 					MasterVolumeDeleteOnTermination: false,
+					Profile: StorageProfileConfig{
+						Lifecycle:             StorageLifecycleNonProduction,
+						PVCProvider:           StoragePVCProviderExternal,
+						ObjectStorageProvider: StorageObjectProviderExternalS3,
+					},
 				},
 			},
 			GitOps: GitOpsConfig{

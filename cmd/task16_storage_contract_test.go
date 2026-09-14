@@ -8,14 +8,14 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
-func TestValidateServiceUsesProviderAwareLokiTempoStorageDefaults(t *testing.T) {
+func TestValidateServiceUsesPortableS3StorageDefaults(t *testing.T) {
 	tests := []struct {
 		name     string
 		provider string
 		service  string
 		wantErr  string
 	}{
-		{name: "OpenStack omitted Loki uses Swift", provider: "openstack", service: "loki"},
+		{name: "OpenStack omitted Loki uses S3", provider: "openstack", service: "loki", wantErr: "s3_endpoint"},
 		{name: "generic omitted Loki uses S3", provider: "kind", service: "loki", wantErr: "s3_endpoint"},
 		{name: "generic omitted Tempo uses S3", provider: "kind", service: "tempo", wantErr: "s3_endpoint"},
 	}

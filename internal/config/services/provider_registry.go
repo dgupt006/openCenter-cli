@@ -120,46 +120,18 @@ func (r *ServiceProviderRegistry) initializeCompatibilityMatrix() {
 	r.registerCompatibility("cert-manager", "dns", ProviderVSphere, DNSProviderRoute53, false, "Route53 requires AWS infrastructure")
 	r.registerCompatibility("cert-manager", "dns", ProviderVSphere, DNSProviderDesignate, false, "Designate requires OpenStack infrastructure")
 
-	// Storage provider compatibility for backup services (loki, velero, tempo)
-	r.registerCompatibility("loki", "storage", ProviderAWS, StorageProviderS3, true, "")
-	r.registerCompatibility("loki", "storage", ProviderAWS, StorageProviderSwift, false, "Swift is OpenStack-specific")
+	// Platform bulk data is S3-compatible regardless of infrastructure provider.
+	// Legacy Swift, GCS, and Azure selections remain recognized only to return an
+	// actionable migration error rather than silently selecting another backend.
+	for _, serviceName := range []string{"loki", "velero", "tempo"} {
+		for _, infrastructureProvider := range []InfrastructureProvider{ProviderAWS, ProviderOpenStack, ProviderGCP, ProviderAzure, ProviderBareMetal, ProviderVSphere} {
+			r.registerCompatibility(serviceName, "storage", infrastructureProvider, StorageProviderS3, true, "")
+			r.registerCompatibility(serviceName, "storage", infrastructureProvider, StorageProviderSwift, false, "Swift is no longer supported; migrate to S3-compatible storage")
+			r.registerCompatibility(serviceName, "storage", infrastructureProvider, StorageProviderGCS, false, "GCS is not a platform bulk-data contract; use an S3-compatible endpoint")
+			r.registerCompatibility(serviceName, "storage", infrastructureProvider, StorageProviderAzure, false, "Azure Blob is not a platform bulk-data contract; use an S3-compatible endpoint")
+		}
+	}
 
-	r.registerCompatibility("loki", "storage", ProviderOpenStack, StorageProviderSwift, true, "")
-	r.registerCompatibility("loki", "storage", ProviderOpenStack, StorageProviderS3, true, "")
-
-	r.registerCompatibility("loki", "storage", ProviderGCP, StorageProviderGCS, true, "")
-	r.registerCompatibility("loki", "storage", ProviderGCP, StorageProviderS3, true, "")
-	r.registerCompatibility("loki", "storage", ProviderGCP, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	r.registerCompatibility("loki", "storage", ProviderAzure, StorageProviderAzure, true, "")
-	r.registerCompatibility("loki", "storage", ProviderAzure, StorageProviderS3, true, "")
-	r.registerCompatibility("loki", "storage", ProviderAzure, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	// Velero storage compatibility
-	r.registerCompatibility("velero", "storage", ProviderAWS, StorageProviderS3, true, "")
-	r.registerCompatibility("velero", "storage", ProviderAWS, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	r.registerCompatibility("velero", "storage", ProviderOpenStack, StorageProviderSwift, true, "")
-	r.registerCompatibility("velero", "storage", ProviderOpenStack, StorageProviderS3, true, "")
-
-	r.registerCompatibility("velero", "storage", ProviderGCP, StorageProviderGCS, true, "")
-	r.registerCompatibility("velero", "storage", ProviderGCP, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	r.registerCompatibility("velero", "storage", ProviderAzure, StorageProviderAzure, true, "")
-	r.registerCompatibility("velero", "storage", ProviderAzure, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	// Tempo storage compatibility
-	r.registerCompatibility("tempo", "storage", ProviderAWS, StorageProviderS3, true, "")
-	r.registerCompatibility("tempo", "storage", ProviderAWS, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	r.registerCompatibility("tempo", "storage", ProviderOpenStack, StorageProviderSwift, true, "")
-	r.registerCompatibility("tempo", "storage", ProviderOpenStack, StorageProviderS3, true, "")
-
-	r.registerCompatibility("tempo", "storage", ProviderGCP, StorageProviderGCS, true, "")
-	r.registerCompatibility("tempo", "storage", ProviderGCP, StorageProviderSwift, false, "Swift is OpenStack-specific")
-
-	r.registerCompatibility("tempo", "storage", ProviderAzure, StorageProviderAzure, true, "")
-	r.registerCompatibility("tempo", "storage", ProviderAzure, StorageProviderSwift, false, "Swift is OpenStack-specific")
 }
 
 // initializeDefaultProviders sets up default provider selections based on infrastructure
@@ -175,35 +147,17 @@ func (r *ServiceProviderRegistry) initializeDefaultProviders() {
 	dnsDefaults[ProviderOpenStack] = DNSProviderCloudflare // fallback default
 	r.defaultProviders["cert-manager:dns"] = dnsDefaults
 
-	// Storage provider defaults for loki
-	lokiStorageDefaults := make(map[InfrastructureProvider]ServiceProviderType)
-	lokiStorageDefaults[ProviderAWS] = StorageProviderS3
-	lokiStorageDefaults[ProviderOpenStack] = StorageProviderSwift
-	lokiStorageDefaults[ProviderGCP] = StorageProviderGCS
-	lokiStorageDefaults[ProviderAzure] = StorageProviderAzure
-	lokiStorageDefaults[ProviderBareMetal] = StorageProviderS3
-	lokiStorageDefaults[ProviderVSphere] = StorageProviderS3
-	r.defaultProviders["loki:storage"] = lokiStorageDefaults
+	// Object storage is not inferred from infrastructure. All service defaults
+	// use the portable S3 contract; the cluster storage profile decides whether
+	// that endpoint is external or managed RustFS.
+	for _, serviceName := range []string{"loki", "velero", "tempo"} {
+		defaults := make(map[InfrastructureProvider]ServiceProviderType)
+		for _, infrastructureProvider := range []InfrastructureProvider{ProviderAWS, ProviderOpenStack, ProviderGCP, ProviderAzure, ProviderBareMetal, ProviderVSphere} {
+			defaults[infrastructureProvider] = StorageProviderS3
+		}
+		r.defaultProviders[serviceName+":storage"] = defaults
+	}
 
-	// Storage provider defaults for velero
-	veleroStorageDefaults := make(map[InfrastructureProvider]ServiceProviderType)
-	veleroStorageDefaults[ProviderAWS] = StorageProviderS3
-	veleroStorageDefaults[ProviderOpenStack] = StorageProviderSwift
-	veleroStorageDefaults[ProviderGCP] = StorageProviderGCS
-	veleroStorageDefaults[ProviderAzure] = StorageProviderAzure
-	veleroStorageDefaults[ProviderBareMetal] = StorageProviderS3
-	veleroStorageDefaults[ProviderVSphere] = StorageProviderS3
-	r.defaultProviders["velero:storage"] = veleroStorageDefaults
-
-	// Storage provider defaults for tempo
-	tempoStorageDefaults := make(map[InfrastructureProvider]ServiceProviderType)
-	tempoStorageDefaults[ProviderAWS] = StorageProviderS3
-	tempoStorageDefaults[ProviderOpenStack] = StorageProviderSwift
-	tempoStorageDefaults[ProviderGCP] = StorageProviderGCS
-	tempoStorageDefaults[ProviderAzure] = StorageProviderAzure
-	tempoStorageDefaults[ProviderBareMetal] = StorageProviderS3
-	tempoStorageDefaults[ProviderVSphere] = StorageProviderS3
-	r.defaultProviders["tempo:storage"] = tempoStorageDefaults
 }
 
 // registerCompatibility registers a compatibility entry

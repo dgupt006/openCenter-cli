@@ -55,6 +55,7 @@ func ValidateReadiness(cfg *Config) ReadinessReport {
 	r.validateNetworkPlugin(cfg)
 	r.validateGitOps(cfg)
 	r.validateServiceSchedulingCapacity(cfg)
+	r.validateStorageProfile(cfg)
 	r.validateServiceSecrets(cfg)
 
 	return r.report
@@ -567,6 +568,12 @@ func configuredSchedulableLinuxWorkers(cfg *Config) int {
 	return capacity
 }
 
+func (r *readinessBuilder) validateStorageProfile(cfg *Config) {
+	for _, issue := range storagePolicyIssues(cfg) {
+		r.addError(CategoryServices, issue.path, issue.message, "Use the supported external S3 or non-production Longhorn/RustFS storage profile.")
+	}
+}
+
 func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	if serviceEnabled(cfg, "keycloak") {
 		if !oidcClientSecretsProvidedInternally(cfg) {
@@ -643,7 +650,7 @@ func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "etcd-backup") {
+	if !serviceEnabled(cfg, "etcd-backup") || UsesManagedObjectStorage(cfg) {
 		return
 	}
 	service := configuredService(cfg, "etcd-backup")
@@ -664,7 +671,7 @@ func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "loki") {
+	if !serviceEnabled(cfg, "loki") || UsesManagedObjectStorage(cfg) {
 		return
 	}
 	switch ResolveObjectStorageBackend(cfg, "loki") {
@@ -682,7 +689,7 @@ func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "tempo") {
+	if !serviceEnabled(cfg, "tempo") || UsesManagedObjectStorage(cfg) {
 		return
 	}
 	switch ResolveObjectStorageBackend(cfg, "tempo") {
@@ -700,7 +707,7 @@ func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateMimirSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "mimir") {
+	if !serviceEnabled(cfg, "mimir") || UsesManagedObjectStorage(cfg) {
 		return
 	}
 	r.requireSecret("secrets.mimir.swift_application_credential_secret", cfg.GetMimirSwiftApplicationCredentialSecret(), "Mimir Swift blocks storage requires an application credential secret.")
@@ -711,14 +718,16 @@ func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
 		return
 	}
 	harbor, _ := configuredService(cfg, "harbor").(*services.HarborConfig)
-	if harbor != nil {
-		r.requireS3Endpoint("opencenter.services.harbor.s3_endpoint", harbor.S3Endpoint, "Harbor S3 storage requires a configured endpoint.")
+	if !UsesManagedObjectStorage(cfg) {
+		if harbor != nil {
+			r.requireS3Endpoint("opencenter.services.harbor.s3_endpoint", harbor.S3Endpoint, "Harbor S3 storage requires a configured endpoint.")
+		}
+		r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
+		r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
 	}
 	r.requireSecret("secrets.harbor.admin_password", cfg.Secrets.Harbor.AdminPassword, "Harbor admin password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.registry_password", cfg.Secrets.Harbor.RegistryPassword, "Harbor registry password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.database_password", cfg.Secrets.Harbor.DatabasePassword, "Harbor database password is required when Harbor is enabled.")
-	r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
-	r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
 }
 
 func (r *readinessBuilder) requireS3Endpoint(path, value, message string) {

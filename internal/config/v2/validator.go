@@ -25,31 +25,155 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 )
 
-// ResolveObjectStorageBackend returns the explicitly configured Loki/Tempo
-// backend. When omitted, OpenStack uses Swift and all other providers use S3,
-// matching the Loki and Tempo renderer contract.
-func ResolveObjectStorageBackend(cfg *Config, serviceName string) string {
-	var storageType string
-	if service := configuredService(cfg, serviceName); service != nil {
-		switch serviceName {
-		case "loki":
-			if loki, ok := service.(*services.LokiConfig); ok {
-				storageType = loki.StorageType
+const (
+	StorageLifecycleProduction    = "production"
+	StorageLifecycleNonProduction = "non-production"
+
+	StoragePVCProviderExternal = "external"
+	StoragePVCProviderLonghorn = "longhorn"
+
+	StorageObjectProviderExternalS3 = "external-s3"
+	StorageObjectProviderRustFS     = "rustfs"
+)
+
+type storagePolicyIssue struct {
+	path    string
+	message string
+}
+
+// EffectiveStorageProfile returns normalized profile values. Empty fields retain
+// safe compatibility defaults, while new configurations materialize them in NewV2Default.
+func EffectiveStorageProfile(cfg *Config) StorageProfileConfig {
+	profile := StorageProfileConfig{
+		Lifecycle:             StorageLifecycleNonProduction,
+		PVCProvider:           StoragePVCProviderExternal,
+		ObjectStorageProvider: StorageObjectProviderExternalS3,
+	}
+	if cfg == nil {
+		return profile
+	}
+	configured := cfg.OpenCenter.Infrastructure.Storage.Profile
+	if value := strings.ToLower(strings.TrimSpace(configured.Lifecycle)); value != "" {
+		profile.Lifecycle = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(configured.PVCProvider)); value != "" {
+		profile.PVCProvider = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(configured.ObjectStorageProvider)); value != "" {
+		profile.ObjectStorageProvider = value
+	}
+	return profile
+}
+
+// UsesManagedObjectStorage reports whether the non-production RustFS profile is selected.
+func UsesManagedObjectStorage(cfg *Config) bool {
+	return EffectiveStorageProfile(cfg).ObjectStorageProvider == StorageObjectProviderRustFS
+}
+
+// ResolveObjectStorageBackend deliberately ignores infrastructure provider.
+// Platform bulk data always uses an S3-compatible API, supplied externally or by RustFS.
+func ResolveObjectStorageBackend(cfg *Config, _ string) string {
+	return "s3"
+}
+
+func storagePolicyIssues(cfg *Config) []storagePolicyIssue {
+	if cfg == nil {
+		return nil
+	}
+	profile := EffectiveStorageProfile(cfg)
+	var issues []storagePolicyIssue
+	add := func(path, message string) {
+		issues = append(issues, storagePolicyIssue{path: path, message: message})
+	}
+
+	switch profile.Lifecycle {
+	case StorageLifecycleProduction, StorageLifecycleNonProduction:
+	default:
+		add("opencenter.infrastructure.storage.profile.lifecycle", "storage profile lifecycle must be production or non-production.")
+	}
+	switch profile.PVCProvider {
+	case StoragePVCProviderExternal, StoragePVCProviderLonghorn:
+	default:
+		add("opencenter.infrastructure.storage.profile.pvc_provider", "storage profile pvc_provider must be external or longhorn.")
+	}
+	switch profile.ObjectStorageProvider {
+	case StorageObjectProviderExternalS3, StorageObjectProviderRustFS:
+	default:
+		add("opencenter.infrastructure.storage.profile.object_storage_provider", "storage profile object_storage_provider must be external-s3 or rustfs.")
+	}
+
+	if profile.ObjectStorageProvider == StorageObjectProviderRustFS {
+		if profile.Lifecycle == StorageLifecycleProduction {
+			add("opencenter.infrastructure.storage.profile.object_storage_provider", "RustFS is non-production only; production and Edge Production require externally managed S3-compatible storage.")
+		}
+		if profile.PVCProvider != StoragePVCProviderLonghorn {
+			add("opencenter.infrastructure.storage.profile.pvc_provider", "RustFS requires pvc_provider: longhorn.")
+		}
+		if !isServiceEnabled(cfg, "longhorn") {
+			add("opencenter.services.longhorn", "RustFS requires the openCenter-managed Longhorn service to be enabled.")
+		}
+	} else if profile.Lifecycle == StorageLifecycleProduction {
+		for _, serviceName := range []string{"loki", "tempo", "velero", "harbor", "etcd-backup"} {
+			if !isServiceEnabled(cfg, serviceName) {
+				continue
 			}
-		case "tempo":
-			if tempo, ok := service.(*services.TempoConfig); ok {
-				storageType = tempo.StorageType
+			if err := ValidateS3Endpoint(externalS3Endpoint(cfg, serviceName)); err != nil {
+				add("opencenter.services."+serviceName+".s3_endpoint", "external S3-compatible storage requires a configured absolute HTTP(S) endpoint.")
 			}
 		}
+		if isServiceEnabled(cfg, "mimir") {
+			add("opencenter.services.mimir", "Mimir cannot use the external S3 profile until its typed S3 configuration is implemented; keep Mimir disabled or use the managed RustFS profile during the migration.")
+		}
 	}
-	storageType = strings.ToLower(strings.TrimSpace(storageType))
-	if storageType != "" {
-		return storageType
+
+	for _, serviceName := range []string{"loki", "tempo", "velero", "harbor"} {
+		if !isServiceEnabled(cfg, serviceName) {
+			continue
+		}
+		storageType := configuredBulkStorageType(cfg, serviceName)
+		if storageType == "" || storageType == "s3" {
+			continue
+		}
+		path := "opencenter.services." + serviceName + ".storage_type"
+		if storageType == "swift" {
+			add(path, "Swift is no longer supported for platform bulk data; migrate to the S3-compatible storage profile.")
+			continue
+		}
+		add(path, fmt.Sprintf("storage_type %q is unsupported; platform bulk data must use S3-compatible storage.", storageType))
 	}
-	if cfg != nil && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") {
-		return "swift"
+	return issues
+}
+
+func externalS3Endpoint(cfg *Config, serviceName string) string {
+	switch service := configuredService(cfg, serviceName).(type) {
+	case *services.LokiConfig:
+		return service.S3Endpoint
+	case *services.TempoConfig:
+		return service.S3Endpoint
+	case *services.VeleroConfig:
+		return service.S3Endpoint
+	case *services.HarborConfig:
+		return service.S3Endpoint
+	case *services.EtcdBackupConfig:
+		return service.S3Endpoint
+	default:
+		return ""
 	}
-	return "s3"
+}
+
+func configuredBulkStorageType(cfg *Config, serviceName string) string {
+	switch service := configuredService(cfg, serviceName).(type) {
+	case *services.LokiConfig:
+		return strings.ToLower(strings.TrimSpace(service.StorageType))
+	case *services.TempoConfig:
+		return strings.ToLower(strings.TrimSpace(service.StorageType))
+	case *services.VeleroConfig:
+		return strings.ToLower(strings.TrimSpace(service.StorageType))
+	case *services.HarborConfig:
+		return strings.ToLower(strings.TrimSpace(service.StorageType))
+	default:
+		return ""
+	}
 }
 
 func configuredService(cfg *Config, serviceName string) any {
@@ -86,6 +210,10 @@ func ValidateS3Endpoint(raw string) error {
 // decoder supplies defaults for omitted PVC fields; explicit non-positive values
 // are rejected by runtime validation and the generated schema.
 func ValidateHarborConfig(config *services.HarborConfig) error {
+	return validateHarborConfig(config, true)
+}
+
+func validateHarborConfig(config *services.HarborConfig, requireS3Endpoint bool) error {
 	if config == nil {
 		return fmt.Errorf("Harbor configuration must not be nil")
 	}
@@ -95,7 +223,7 @@ func ValidateHarborConfig(config *services.HarborConfig) error {
 	}
 	endpoint := strings.TrimSpace(config.S3Endpoint)
 	if endpoint == "" {
-		if config.Enabled {
+		if config.Enabled && requireS3Endpoint {
 			return fmt.Errorf("Harbor s3_endpoint is required when Harbor is enabled")
 		}
 	} else {
@@ -229,6 +357,10 @@ func (v *defaultValidator) ValidateSchema(cfg *Config) error {
 // ValidateBusinessRules validates cross-field dependencies and value ranges.
 // Requirements: 11.2
 func (v *defaultValidator) ValidateBusinessRules(cfg *Config) error {
+	if issues := storagePolicyIssues(cfg); len(issues) > 0 {
+		issue := issues[0]
+		return fmt.Errorf("%s: %s", issue.path, issue.message)
+	}
 	if len(cfg.OpenCenter.LegacyTalos) > 0 {
 		return fmt.Errorf("opencenter.talos is not supported in v2; remove the opencenter.talos section")
 	}
@@ -391,7 +523,7 @@ func (v *defaultValidator) ValidateServices(cfg *Config) error {
 		if !ok {
 			return fmt.Errorf("harbor service has unexpected configuration type %T", service)
 		}
-		if err := ValidateHarborConfig(harbor); err != nil {
+		if err := validateHarborConfig(harbor, !UsesManagedObjectStorage(cfg)); err != nil {
 			return err
 		}
 	}
@@ -546,7 +678,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 	}
 
 	// Loki secrets
-	if isServiceEnabled(cfg, "loki") {
+	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "loki") {
 		switch ResolveObjectStorageBackend(cfg, "loki") {
 		case "swift":
 			if isMissingSecret(cfg.GetLokiSwiftApplicationCredentialSecret()) {
@@ -564,7 +696,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 	}
 
 	// Tempo secrets
-	if isServiceEnabled(cfg, "tempo") {
+	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "tempo") {
 		switch ResolveObjectStorageBackend(cfg, "tempo") {
 		case "swift":
 			if isMissingSecret(cfg.GetTempoSwiftApplicationCredentialSecret()) {
@@ -581,8 +713,8 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 		}
 	}
 
-	// Mimir Swift blocks storage
-	if isServiceEnabled(cfg, "mimir") && isMissingSecret(cfg.GetMimirSwiftApplicationCredentialSecret()) {
+	// Mimir currently has a legacy Swift secret; managed RustFS defers generated credentials.
+	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "mimir") && isMissingSecret(cfg.GetMimirSwiftApplicationCredentialSecret()) {
 		placeholders = append(placeholders, "secrets.mimir.swift_application_credential_secret")
 	}
 
@@ -671,7 +803,7 @@ func isServiceEnabled(cfg *Config, serviceName string) bool {
 }
 
 func missingHarborDeploymentSecretPaths(cfg *Config) []string {
-	if !isServiceEnabled(cfg, "harbor") {
+	if !isServiceEnabled(cfg, "harbor") || UsesManagedObjectStorage(cfg) {
 		return nil
 	}
 	var missing []string

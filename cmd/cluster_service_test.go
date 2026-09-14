@@ -234,7 +234,7 @@ func TestClusterServiceEnable(t *testing.T) {
 			serviceName: "loki",
 			args:        []string{"loki"},
 			expectError: true,
-			errorMsg:    "missing required Swift credentials",
+			errorMsg:    "requires a configured S3 endpoint",
 			validate:    nil,
 		},
 		{

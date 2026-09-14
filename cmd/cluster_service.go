@@ -561,17 +561,12 @@ func validateServiceLegacy(serviceName string, serviceCfg any, secretsCfg *v2.Se
 		if cfg, ok := serviceCfg.(*services.LokiConfig); ok {
 			storageType := cfg.StorageType
 			if storageType == "" {
-				storageType = "swift" // default
+				storageType = "s3"
 			}
-
-			if storageType == "swift" {
-				// Check for application credentials
-				hasAppCreds := cfg.SwiftApplicationCredentialID != "" && secretsCfg.Loki.SwiftApplicationCredentialSecret != ""
-
-				if !hasAppCreds {
-					return fmt.Errorf("missing required Swift credentials for service 'loki'.\nRequired: --param=\"swift_application_credential_id=your-app-cred-id\" --secret=\"swift_application_credential_secret=your-secret\"")
-				}
-			} else if storageType == "s3" {
+			if storageType != "s3" {
+				return fmt.Errorf("unsupported storage_type %q for service 'loki'; platform bulk data must use S3-compatible storage", storageType)
+			}
+			if storageType == "s3" {
 				// S3 credentials are optional (can use IAM roles), but if provided, both must be set
 				hasS3Creds := secretsCfg.Loki.S3AccessKeyID != "" || secretsCfg.Loki.S3SecretAccessKey != ""
 				if hasS3Creds && (secretsCfg.Loki.S3AccessKeyID == "" || secretsCfg.Loki.S3SecretAccessKey == "") {
@@ -624,7 +619,7 @@ func validateServiceWithConfig(serviceName string, serviceCfg any, secretsCfg *v
 		case *services.LokiConfig:
 			backend = strings.ToLower(strings.TrimSpace(typed.StorageType))
 			if backend == "" {
-				backend = "swift"
+				backend = "s3"
 			}
 		case *services.TempoConfig:
 			backend = strings.ToLower(strings.TrimSpace(typed.StorageType))
@@ -636,16 +631,7 @@ func validateServiceWithConfig(serviceName string, serviceCfg any, secretsCfg *v
 
 	switch backend {
 	case "swift":
-		var id, secret string
-		switch typed := serviceCfg.(type) {
-		case *services.LokiConfig:
-			id, secret = typed.SwiftApplicationCredentialID, secretsCfg.Loki.SwiftApplicationCredentialSecret
-		case *services.TempoConfig:
-			id, secret = typed.SwiftApplicationCredentialID, secretsCfg.Tempo.SwiftApplicationCredentialSecret
-		}
-		if id == "" || secret == "" {
-			return fmt.Errorf("missing required Swift credentials for service '%s'", serviceName)
-		}
+		return fmt.Errorf("unsupported storage backend swift for service '%s'; migrate to the S3-compatible storage profile", serviceName)
 	case "s3":
 		var endpoint, access, secret string
 		switch typed := serviceCfg.(type) {
