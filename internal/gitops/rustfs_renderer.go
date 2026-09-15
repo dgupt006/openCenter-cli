@@ -172,7 +172,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: create-buckets
-          image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+          # quay.io is used because Docker Hub's minio/mc now requires
+          # authentication (anonymous pulls are denied for all tags).
+          image: quay.io/minio/mc:RELEASE.2025-04-08T15-39-49Z
           command: ["/bin/sh", "-ec"]
           args:
             - |
