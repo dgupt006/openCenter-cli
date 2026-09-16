@@ -12,6 +12,8 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -548,12 +550,44 @@ func (s *Service) runContainer(ctx context.Context) error {
 		"-p", fmt.Sprintf("%d:3000", s.settings.HTTPPort),
 		"-p", fmt.Sprintf("%d:3001", s.settings.HTTPSPort),
 		"-p", fmt.Sprintf("%d:22", s.settings.SSHPort),
-		s.settings.Image,
 	}
+	// Align the container's git user (which Gitea runs as) with the host user
+	// that owns the bind-mounted /data tree. On Docker Desktop (macOS) the mount
+	// is ownership-remapped so this is a no-op, but on native Linux (e.g. CI
+	// runners) the mounted files keep the host UID/GID; without this the git
+	// user (default uid 1000) cannot read the TLS key (0600) or app.ini, so
+	// Gitea silently falls back to the HTTP install page on :3000 instead of
+	// serving HTTPS on :3001.
+	if uid, gid, ok := currentUserIDs(); ok {
+		args = append(args,
+			"-e", fmt.Sprintf("USER_UID=%d", uid),
+			"-e", fmt.Sprintf("USER_GID=%d", gid),
+		)
+	}
+	args = append(args, s.settings.Image)
 	if _, err := s.executor.Run(ctx, localdev.RunOptions{Name: runtime, Args: args}); err != nil {
 		return fmt.Errorf("start gitea container: %w", err)
 	}
 	return nil
+}
+
+// currentUserIDs returns the numeric uid/gid of the current process user so the
+// Gitea container can run as the same identity that owns the bind-mounted data.
+// Returns ok=false on platforms where the ids are not numeric (e.g. Windows).
+func currentUserIDs() (int, int, bool) {
+	u, err := user.Current()
+	if err != nil {
+		return 0, 0, false
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, 0, false
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return 0, 0, false
+	}
+	return uid, gid, true
 }
 
 func (s *Service) ensureAdminUser(ctx context.Context) error {
