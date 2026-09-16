@@ -221,7 +221,9 @@ jobs:
           tar -xzf "${flux_archive}" -C "${RUNNER_TEMP}/flux-extract"
           install -m 0755 "${RUNNER_TEMP}/flux-extract/flux" "${tool_bin}/flux"
 
-          sops --version; kind version; kubectl version --client; helm version --short; flux --version
+          # tool_bin was appended to GITHUB_PATH for subsequent steps, but it is
+          # not yet on PATH within this step; reference it explicitly to verify.
+          PATH="${tool_bin}:${PATH}" sh -c 'sops --version; kind version; kubectl version --client; helm version --short; flux --version'
 
       - name: Build CLI and local plugin
         shell: bash
