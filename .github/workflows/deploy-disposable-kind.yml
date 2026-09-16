@@ -261,6 +261,26 @@ jobs:
         run: |
           set -euo pipefail
           status_file="${RUNNER_TEMP}/gitea-before-kind.status"; rm -f "${status_file}"
+
+          # Diagnostics: if `gitea up` fails (e.g. the API readiness wait times
+          # out), capture container state, logs, and port bindings so the cause
+          # is visible in the run log instead of an opaque timeout.
+          dump_gitea_diagnostics() {
+            echo "===== gitea diagnostics ====="
+            echo "--- ${CONTAINER_RUNTIME} ps -a (gitea) ---"
+            "${CONTAINER_RUNTIME}" ps -a --filter "name=gitea" 2>&1 || true
+            echo "--- ${CONTAINER_RUNTIME} logs gitea (tail) ---"
+            "${CONTAINER_RUNTIME}" logs --tail 100 gitea 2>&1 || true
+            echo "--- ${CONTAINER_RUNTIME} port gitea ---"
+            "${CONTAINER_RUNTIME}" port gitea 2>&1 || true
+            echo "--- listeners on :3001 ---"
+            (ss -ltnp 2>/dev/null | grep -E ':3001' || echo 'nothing listening on :3001') || true
+            echo "--- curl https://localhost:3001 ---"
+            curl -sk --max-time 5 -o /dev/null -w 'http=%{http_code}\n' https://localhost:3001/api/v1/version 2>&1 || true
+            echo "============================="
+          }
+          trap 'rc=$?; [[ $rc -ne 0 ]] && dump_gitea_diagnostics; exit $rc' EXIT
+
           opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" up | tee "${status_file}"
           opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" status | tee -a "${status_file}"
           gitea_repo_url="$(sed -n 's/^Bootstrap repo URL: //p' "${status_file}" | head -n1)"
