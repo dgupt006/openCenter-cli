@@ -179,7 +179,9 @@ jobs:
 
           # Retry transient network failures (e.g. curl 52 "empty reply") so a
           # blip downloading a release asset does not fail the whole run.
-          curl_retry() { curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "$@"; }
+          # --retry-connrefused (not --retry-all-errors, which needs curl >= 7.71
+          # and is missing on some runners) covers transient connection blips.
+          curl_retry() { curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-connrefused "$@"; }
 
           download_checked() {
             local url="$1" checksum_url="$2" output="$3" temporary="${3}.download" expected
