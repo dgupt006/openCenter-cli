@@ -177,10 +177,14 @@ jobs:
 
           GOBIN="${tool_bin}" go install "github.com/getsops/sops/v3/cmd/sops@v${SOPS_VERSION}"
 
+          # Retry transient network failures (e.g. curl 52 "empty reply") so a
+          # blip downloading a release asset does not fail the whole run.
+          curl_retry() { curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "$@"; }
+
           download_checked() {
             local url="$1" checksum_url="$2" output="$3" temporary="${3}.download" expected
-            curl --fail --silent --show-error --location "${url}" -o "${temporary}"
-            expected="$(curl --fail --silent --show-error --location "${checksum_url}" | awk '{print $1; exit}')"
+            curl_retry "${url}" -o "${temporary}"
+            expected="$(curl_retry "${checksum_url}" | awk '{print $1; exit}')"
             [[ "${expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Invalid checksum for ${output}." >&2; rm -f "${temporary}"; exit 1; }
             printf '%s  %s\n' "${expected}" "${temporary}" | sha256sum -c -
             mv "${temporary}" "${output}"
@@ -210,9 +214,9 @@ jobs:
           flux_filename="flux_${FLUX_VERSION#v}_linux_amd64.tar.gz"
           flux_archive="${RUNNER_TEMP}/${flux_filename}"
           flux_checksums="${RUNNER_TEMP}/flux-checksums.txt"
-          curl --fail --silent --show-error --location \
+          curl_retry \
             "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/${flux_filename}" -o "${flux_archive}"
-          curl --fail --silent --show-error --location \
+          curl_retry \
             "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/flux_${FLUX_VERSION#v}_checksums.txt" -o "${flux_checksums}"
           flux_expected="$(awk -v file="${flux_filename}" '$2 == file || $2 == "*" file {print $1; exit}' "${flux_checksums}")"
           [[ "${flux_expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Flux checksum entry not found." >&2; exit 1; }
