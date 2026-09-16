@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -541,6 +542,13 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 	return nil
 }
 
+// giteaContainerUID / giteaContainerGID are the fixed uid/gid of the git user
+// inside the upstream Gitea image, which the server process runs as.
+const (
+	giteaContainerUID = 1000
+	giteaContainerGID = 1000
+)
+
 func (s *Service) runContainer(ctx context.Context) error {
 	runtime := s.commandRuntime()
 	args := []string{
@@ -551,24 +559,48 @@ func (s *Service) runContainer(ctx context.Context) error {
 		"-p", fmt.Sprintf("%d:3001", s.settings.HTTPSPort),
 		"-p", fmt.Sprintf("%d:22", s.settings.SSHPort),
 	}
-	// Align the container's git user (which Gitea runs as) with the host user
-	// that owns the bind-mounted /data tree. On Docker Desktop (macOS) the mount
-	// is ownership-remapped so this is a no-op, but on native Linux (e.g. CI
-	// runners) the mounted files keep the host UID/GID; without this the git
-	// user (default uid 1000) cannot read the TLS key (0600) or app.ini, so
-	// Gitea silently falls back to the HTTP install page on :3000 instead of
-	// serving HTTPS on :3001.
-	if uid, gid, ok := currentUserIDs(); ok {
+
+	// The bind-mounted /data tree must be readable by the git user Gitea runs
+	// as; otherwise Gitea cannot read the TLS key (0600) or app.ini and silently
+	// falls back to the HTTP install page on :3000 instead of serving HTTPS on
+	// :3001. How we achieve that depends on the host user:
+	//
+	//   - Non-root host (e.g. developer laptop, uid != 0): run Gitea's git user
+	//     as the host uid/gid so it owns the mounted files.
+	//   - Root host (e.g. CI runner, uid 0): Gitea refuses to run as root, so we
+	//     keep its default git user (uid 1000) and chown the mounted tree to
+	//     that uid instead. Ownership is aligned, not loosened — the TLS key
+	//     stays 0600.
+	uid, gid, haveIDs := currentUserIDs()
+	switch {
+	case haveIDs && uid != 0:
 		args = append(args,
 			"-e", fmt.Sprintf("USER_UID=%d", uid),
 			"-e", fmt.Sprintf("USER_GID=%d", gid),
 		)
+	case haveIDs && uid == 0:
+		if err := chownTree(s.layout.GiteaDataDir, giteaContainerUID, giteaContainerGID); err != nil {
+			return fmt.Errorf("prepare gitea data ownership: %w", err)
+		}
 	}
+
 	args = append(args, s.settings.Image)
 	if _, err := s.executor.Run(ctx, localdev.RunOptions{Name: runtime, Args: args}); err != nil {
 		return fmt.Errorf("start gitea container: %w", err)
 	}
 	return nil
+}
+
+// chownTree recursively changes ownership of root to uid:gid. Used to align the
+// bind-mounted Gitea data with the container's git user when the host runs as
+// root; file permission bits are left unchanged.
+func chownTree(root string, uid, gid int) error {
+	return filepath.Walk(root, func(path string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, uid, gid)
+	})
 }
 
 // currentUserIDs returns the numeric uid/gid of the current process user so the
