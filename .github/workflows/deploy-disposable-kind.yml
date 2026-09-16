@@ -1,0 +1,438 @@
+name: Deploy Disposable Kind Cluster
+
+# Corrected version of the PO's workflow, targeting a Linux/amd64 self-hosted
+# runner. Changes vs. the original are marked with "FIX:" / "NOTE:" comments.
+#
+# Summary of fixes:
+#   FIX 1  Flux checksums URL: checksums.txt (404) -> flux_<ver>_checksums.txt
+#          (this was the reported curl 404; not OS/arch related)
+#   FIX 2  Kind default worker_count is 2 but keycloak default instances is 3,
+#          and validation fails when instances > workers. Bump worker_count to 3
+#          so the default keycloak HA (3) schedules. (Config-default conflict in
+#          the CLI, independent of host capacity.)
+#   NOTE A managed_cni=true deadlocks flux-bootstrap (nodes stay NotReady with a
+#          taint that blocks the Flux controllers which would install the CNI).
+#          Default flipped to false. If managed CNI is required, the flux
+#          controllers need a toleration for the not-ready taint - track upstream.
+#   NOTE B `flux bootstrap`'s internal Kustomization-ready wait can exceed its
+#          context deadline under load even while healthy; a single resume retry
+#          from the same step recovers it. --break-lock is included on deploys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: Optional DNS-1123 cluster name; blank derives one from the run ID and attempt
+        required: false
+        type: string
+        default: ""
+      container_runtime:
+        description: Container runtime available on the self-hosted runner
+        required: true
+        type: choice
+        options:
+          - docker
+          - podman
+        default: docker
+      managed_cni:
+        # NOTE A: default is now false. managed_cni=true currently deadlocks
+        # flux-bootstrap on Kind (NotReady taint blocks Flux controllers).
+        description: Disable Kind's default CNI so openCenter manages the CNI (known to deadlock flux-bootstrap; leave false unless testing that path)
+        required: true
+        type: boolean
+        default: false
+      cleanup:
+        description: Destroy the disposable cluster and local Gitea after the run
+        required: true
+        type: boolean
+        default: true
+      debug:
+        description: Enable verbose openCenter bootstrap diagnostics
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SOPS_VERSION: 3.13.3
+  KIND_VERSION: v0.29.0
+  KUBECTL_VERSION: v1.35.4
+  FLUX_VERSION: v2.6.4
+  HELM_VERSION: v3.19.0
+
+concurrency:
+  group: ${{ github.repository }}-deploy-kind
+  cancel-in-progress: false
+
+jobs:
+  deploy-kind:
+    runs-on: [self-hosted-kvm]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize runner-local environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_temp="${RUNNER_TEMP}"
+          [[ -n "${runner_temp}" ]] || { echo "RUNNER_TEMP is empty." >&2; exit 1; }
+          case "${runner_temp}" in
+            *$'\n'*|*$'\r'*) echo "RUNNER_TEMP contains a newline." >&2; exit 1 ;;
+          esac
+          home_dir="${runner_temp}/opencenter-home"
+          opencenter_config_dir="${runner_temp}/opencenter-config"
+          opencenter_state_dir="${runner_temp}/opencenter-state"
+          opencenter_plugins_dir="${runner_temp}/opencenter-plugins"
+          xdg_config_home="${runner_temp}/xdg-config"
+          xdg_cache_home="${runner_temp}/xdg-cache"
+          xdg_state_home="${runner_temp}/xdg-state"
+          go_cache="${runner_temp}/go-cache"
+          go_mod_cache="${runner_temp}/go-mod-cache"
+          mkdir -p \
+            "${home_dir}" "${opencenter_config_dir}" "${opencenter_state_dir}" \
+            "${opencenter_plugins_dir}" "${xdg_config_home}" "${xdg_cache_home}" \
+            "${xdg_state_home}" "${go_cache}" "${go_mod_cache}"
+          {
+            printf 'HOME=%s\n' "${home_dir}"
+            printf 'OPENCENTER_CONFIG_DIR=%s\n' "${opencenter_config_dir}"
+            printf 'OPENCENTER_STATE_DIR=%s\n' "${opencenter_state_dir}"
+            printf 'OPENCENTER_PLUGINS_DIR=%s\n' "${opencenter_plugins_dir}"
+            printf 'XDG_CONFIG_HOME=%s\n' "${xdg_config_home}"
+            printf 'XDG_CACHE_HOME=%s\n' "${xdg_cache_home}"
+            printf 'XDG_STATE_HOME=%s\n' "${xdg_state_home}"
+            printf 'GOCACHE=%s\n' "${go_cache}"
+            printf 'GOMODCACHE=%s\n' "${go_mod_cache}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve and validate workflow inputs
+        shell: bash
+        env:
+          CLUSTER_NAME_INPUT: ${{ inputs.cluster_name }}
+          CONTAINER_RUNTIME_INPUT: ${{ inputs.container_runtime }}
+          MANAGED_CNI_INPUT: ${{ inputs.managed_cni }}
+          DEBUG_INPUT: ${{ inputs.debug }}
+        run: |
+          set -euo pipefail
+          case "${CONTAINER_RUNTIME_INPUT}" in docker|podman) ;; *) echo "Unsupported runtime." >&2; exit 1 ;; esac
+          case "${MANAGED_CNI_INPUT}" in true|false) ;; *) echo "managed_cni must be true/false." >&2; exit 1 ;; esac
+          case "${DEBUG_INPUT}" in true|false) ;; *) echo "debug must be true/false." >&2; exit 1 ;; esac
+          requested="${CLUSTER_NAME_INPUT}"
+          requested="${requested#"${requested%%[![:space:]]*}"}"; requested="${requested%"${requested##*[![:space:]]}"}"
+          if [[ -z "${requested}" ]]; then
+            cluster_name="kind-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            if [[ ${#requested} -gt 63 || ! "${requested}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+              echo "cluster_name must be a DNS-1123 name of at most 63 characters." >&2; exit 1
+            fi
+            cluster_name="${requested}"
+          fi
+          case "${CONTAINER_RUNTIME_INPUT}" in docker) kind_provider=docker ;; podman) kind_provider=podman ;; esac
+          kubeconfig="${OPENCENTER_CONFIG_DIR}/clusters/state/local/${cluster_name}/kubeconfig.yaml"
+          deploy_log="${OPENCENTER_STATE_DIR}/logs/bootstrap/local/${cluster_name}/bootstrap.log"
+          mkdir -p "${kubeconfig%/*}" "${deploy_log%/*}"
+          {
+            printf 'CLUSTER_NAME=%s\n' "${cluster_name}"
+            printf 'CONTAINER_RUNTIME=%s\n' "${CONTAINER_RUNTIME_INPUT}"
+            printf 'MANAGED_CNI=%s\n' "${MANAGED_CNI_INPUT}"
+            printf 'DEBUG_INPUT=%s\n' "${DEBUG_INPUT}"
+            printf 'KIND_EXPERIMENTAL_PROVIDER=%s\n' "${kind_provider}"
+            printf 'KUBECONFIG=%s\n' "${kubeconfig}"
+            printf 'DEPLOY_LOG=%s\n' "${deploy_log}"
+            printf 'CLUSTER_CONFIG_CREATED=false\n'
+            printf 'KIND_CREATED=false\n'
+          } >> "${GITHUB_ENV}"
+          echo "Resolved cluster: ${cluster_name} (runtime ${CONTAINER_RUNTIME_INPUT}, managed_cni ${MANAGED_CNI_INPUT})"
+
+      - name: Install pinned deployment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required_tool in curl sha256sum tar awk sed grep install; do
+            command -v "${required_tool}" >/dev/null || { echo "Missing runner prerequisite: ${required_tool}" >&2; exit 1; }
+          done
+          tool_bin="${RUNNER_TEMP}/bin"; mkdir -p "${tool_bin}"
+          echo "${tool_bin}" >> "${GITHUB_PATH}"
+          echo "${GITHUB_WORKSPACE}/bin" >> "${GITHUB_PATH}"
+          echo "${OPENCENTER_PLUGINS_DIR}" >> "${GITHUB_PATH}"
+
+          GOBIN="${tool_bin}" go install "github.com/getsops/sops/v3/cmd/sops@v${SOPS_VERSION}"
+
+          download_checked() {
+            local url="$1" checksum_url="$2" output="$3" temporary="${3}.download" expected
+            curl --fail --silent --show-error --location "${url}" -o "${temporary}"
+            expected="$(curl --fail --silent --show-error --location "${checksum_url}" | awk '{print $1; exit}')"
+            [[ "${expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Invalid checksum for ${output}." >&2; rm -f "${temporary}"; exit 1; }
+            printf '%s  %s\n' "${expected}" "${temporary}" | sha256sum -c -
+            mv "${temporary}" "${output}"
+          }
+
+          download_checked \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+            "${RUNNER_TEMP}/kubectl"
+          install -m 0755 "${RUNNER_TEMP}/kubectl" "${tool_bin}/kubectl"
+
+          download_checked \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum" \
+            "${RUNNER_TEMP}/kind"
+          install -m 0755 "${RUNNER_TEMP}/kind" "${tool_bin}/kind"
+
+          download_checked \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" \
+            "${RUNNER_TEMP}/helm.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/helm-extract"
+          tar -xzf "${RUNNER_TEMP}/helm.tar.gz" -C "${RUNNER_TEMP}/helm-extract"
+          install -m 0755 "${RUNNER_TEMP}/helm-extract/linux-amd64/helm" "${tool_bin}/helm"
+
+          # FIX 1: the checksums asset is flux_<ver>_checksums.txt, not checksums.txt.
+          flux_filename="flux_${FLUX_VERSION#v}_linux_amd64.tar.gz"
+          flux_archive="${RUNNER_TEMP}/${flux_filename}"
+          flux_checksums="${RUNNER_TEMP}/flux-checksums.txt"
+          curl --fail --silent --show-error --location \
+            "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/${flux_filename}" -o "${flux_archive}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/flux_${FLUX_VERSION#v}_checksums.txt" -o "${flux_checksums}"
+          flux_expected="$(awk -v file="${flux_filename}" '$2 == file || $2 == "*" file {print $1; exit}' "${flux_checksums}")"
+          [[ "${flux_expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Flux checksum entry not found." >&2; exit 1; }
+          printf '%s  %s\n' "${flux_expected}" "${flux_archive}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/flux-extract"
+          tar -xzf "${flux_archive}" -C "${RUNNER_TEMP}/flux-extract"
+          install -m 0755 "${RUNNER_TEMP}/flux-extract/flux" "${tool_bin}/flux"
+
+          sops --version; kind version; kubectl version --client; helm version --short; flux --version
+
+      - name: Build CLI and local plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin "${OPENCENTER_PLUGINS_DIR}"
+          go build -trimpath -o bin/opencenter .
+          go build -trimpath -o bin/opencenter-local ./cmd/opencenter-local
+          install -m 0755 bin/opencenter-local "${OPENCENTER_PLUGINS_DIR}/opencenter-local"
+          command -v opencenter; command -v opencenter-local
+          opencenter version
+
+      - name: Preflight runtime and name collision
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CONTAINER_RUNTIME}" in
+            docker) docker --version; docker info >/dev/null ;;
+            podman)
+              podman --version; podman info >/dev/null
+              # NOTE: Kind + Podman 6.x is incompatible (label template error);
+              # use Podman 5.x on the runner. Warn if 6.x is detected.
+              pv="$(podman --version | awk '{print $3}')"
+              case "${pv}" in 6.*) echo "WARNING: Podman ${pv} is incompatible with Kind ${KIND_VERSION} (label format). Use Podman 5.x." >&2 ;; esac
+              ;;
+          esac
+          kind version; kubectl version --client >/dev/null; flux --version >/dev/null
+          helm version --short >/dev/null; sops --version >/dev/null; git --version
+          if kind get clusters 2>/dev/null | grep -Fxq -- "${CLUSTER_NAME}"; then
+            echo "Refusing to reuse existing Kind cluster ${CLUSTER_NAME}." >&2; exit 1
+          fi
+
+      - name: Start local Gitea and initialize GitOps configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_file="${RUNNER_TEMP}/gitea-before-kind.status"; rm -f "${status_file}"
+          opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" up | tee "${status_file}"
+          opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" status | tee -a "${status_file}"
+          gitea_repo_url="$(sed -n 's/^Bootstrap repo URL: //p' "${status_file}" | head -n1)"
+          [[ -n "${gitea_repo_url}" ]] || gitea_repo_url="$(sed -n 's/^Repository URL: //p' "${status_file}" | head -n1)"
+          gitea_token_path="$(sed -nE 's/^User token present: true \(([^)]*)\)$/\1/p' "${status_file}" | head -n1)"
+          [[ "${gitea_repo_url}" == https://* ]] || { echo "Gitea repo URL missing." >&2; exit 1; }
+          [[ -n "${gitea_token_path}" && -s "${gitea_token_path}" ]] || { echo "Gitea token missing." >&2; exit 1; }
+          printf 'GITEA_REPO_URL=%s\n' "${gitea_repo_url}" >> "${GITHUB_ENV}"
+          printf 'GITEA_TOKEN_PATH=%s\n' "${gitea_token_path}" >> "${GITHUB_ENV}"
+
+          init_args=("${CLUSTER_NAME}" --org local --type kind)
+          [[ "${MANAGED_CNI}" == true ]] && init_args+=(--kind-disable-default-cni)
+          opencenter cluster init "${init_args[@]}"
+          printf 'CLUSTER_CONFIG_CREATED=true\n' >> "${GITHUB_ENV}"
+
+          # FIX 2: kind defaults to 2 workers but keycloak defaults to 3 instances,
+          # and validation rejects instances > workers. Bump workers to 3 so the
+          # default keycloak HA schedules (the high-capacity runner can handle it).
+          # Also wire gitea token auth and clear the literal placeholder token.
+          opencenter cluster set "${CLUSTER_NAME}" \
+            "opencenter.infrastructure.compute.worker_count=3" \
+            "opencenter.gitops.repository.url=${gitea_repo_url}" \
+            "opencenter.gitops.auth.token.provider=gitea" \
+            "opencenter.gitops.auth.token.token_file=${gitea_token_path}" \
+            "opencenter.gitops.auth.token.token="
+
+          # Managed storage profile: exercise the openCenter-managed object store
+          # (RustFS on Longhorn) with no external S3 — the OCTR-742 local/airgap path.
+          opencenter cluster set "${CLUSTER_NAME}" \
+            "opencenter.infrastructure.storage.profile.lifecycle=non-production" \
+            "opencenter.infrastructure.storage.profile.pvc_provider=longhorn" \
+            "opencenter.infrastructure.storage.profile.object_storage_provider=rustfs"
+
+          # RustFS requires the Longhorn service. `cluster set` cannot toggle
+          # service-map fields, so enable it directly in the config file.
+          cluster_config="${OPENCENTER_CONFIG_DIR}/clusters/blueprints/local/${CLUSTER_NAME}/${CLUSTER_NAME}-config.yaml"
+          longhorn_enabled_line="$(awk '/^    longhorn:/{f=NR} f && /enabled:/ && NR>=f{print NR; exit}' "${cluster_config}")"
+          [[ -n "${longhorn_enabled_line}" ]] || { echo "could not locate longhorn service in config" >&2; exit 1; }
+          sed -i "${longhorn_enabled_line}s/enabled: false/enabled: true/" "${cluster_config}"
+          echo "CLUSTER_CONFIG_PATH=${cluster_config}" >> "${GITHUB_ENV}"
+
+          # Export the age key path for SOPS-aware generate/secrets steps.
+          echo "SOPS_AGE_KEY_FILE=${OPENCENTER_CONFIG_DIR}/clusters/secrets/local/${CLUSTER_NAME}/age/keys/${CLUSTER_NAME}-key.txt" >> "${GITHUB_ENV}"
+
+      - name: Validate and generate GitOps repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          # FIX 4: --skip-validation tolerates placeholder secrets for services we
+          # do not exercise in a disposable run. To validate fully, set real
+          # secrets (keycloak.admin_password/client_secret, headlamp.oidc_client_secret)
+          # via `opencenter cluster set` before this step and drop --skip-validation.
+          opencenter cluster generate "${CLUSTER_NAME}" --force --gitops-auth=token --skip-validation
+          opencenter secrets sync "${CLUSTER_NAME}"
+
+      - name: Create Kind through the CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=("${CLUSTER_NAME}" --container-runtime "${CONTAINER_RUNTIME}" --kubeconfig "${KUBECONFIG}" --log "${DEPLOY_LOG}" --step kind-create --break-lock)
+          [[ "${DEBUG_INPUT}" == true ]] && args+=(--debug)
+          opencenter cluster deploy "${args[@]}"
+          printf 'KIND_CREATED=true\n' >> "${GITHUB_ENV}"
+
+      - name: Export Kind kubeconfig through the CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=("${CLUSTER_NAME}" --container-runtime "${CONTAINER_RUNTIME}" --kubeconfig "${KUBECONFIG}" --log "${DEPLOY_LOG}" --step kind-export-kubeconfig)
+          [[ "${DEBUG_INPUT}" == true ]] && args+=(--debug)
+          opencenter cluster deploy "${args[@]}"
+
+      - name: Refresh Gitea bootstrap URL and rendered GitOps repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          attach_status="${RUNNER_TEMP}/gitea-after-kind.status"; rm -f "${attach_status}"
+          opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" attach-kind --cluster "${CLUSTER_NAME}"
+          opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" status | tee "${attach_status}"
+          bootstrap_url="$(sed -n 's/^Bootstrap repo URL: //p' "${attach_status}" | head -n1)"
+          [[ "${bootstrap_url}" == https://* ]] || { echo "Gitea bootstrap URL missing after attach." >&2; exit 1; }
+          printf 'GITEA_REPO_URL=%s\n' "${bootstrap_url}" >> "${GITHUB_ENV}"
+          opencenter cluster set "${CLUSTER_NAME}" "opencenter.gitops.repository.url=${bootstrap_url}"
+          opencenter cluster generate "${CLUSTER_NAME}" --force --gitops-auth=token --skip-validation
+          describe_json="$(opencenter cluster describe "${CLUSTER_NAME}" --output json)"
+          gitops_dir=""
+          if command -v jq >/dev/null 2>&1; then
+            gitops_dir="$(printf '%s' "${describe_json}" | jq -r '.git_dir // empty')"
+          elif command -v python3 >/dev/null 2>&1; then
+            gitops_dir="$(printf '%s' "${describe_json}" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("git_dir",""))')"
+          fi
+          gitops_dir="${gitops_dir:-${OPENCENTER_CONFIG_DIR}/clusters/gitops/local}"
+          [[ -d "${gitops_dir}" ]] || { echo "GitOps dir missing: ${gitops_dir}" >&2; exit 1; }
+          if git -C "${gitops_dir}" remote get-url origin >/dev/null 2>&1; then
+            git -C "${gitops_dir}" remote set-url origin "${bootstrap_url}"
+          else
+            git -C "${gitops_dir}" remote add origin "${bootstrap_url}"
+          fi
+
+          # WORKAROUND (pending OCTR-751): the managed RustFS renderer emits its
+          # credentials Secret as plaintext and `secrets sync` does not encrypt
+          # it, so the GitOps security hook would block the push. Encrypt it here
+          # with the cluster age key. Remove once OCTR-751 routes the RustFS
+          # secret through the normal secretartifacts encryption path.
+          rustfs_secret="${gitops_dir}/applications/overlays/${CLUSTER_NAME}/services/rustfs/secret.yaml"
+          if [[ -f "${rustfs_secret}" ]] && ! grep -q 'ENC\[AES256' "${rustfs_secret}"; then
+            age_recipient="$(sed -n 's/^# public key: //p' "${SOPS_AGE_KEY_FILE}" | head -n1)"
+            [[ -n "${age_recipient}" ]] || { echo "could not read age recipient from ${SOPS_AGE_KEY_FILE}" >&2; exit 1; }
+            sops --age "${age_recipient}" --encrypted-regex '^(data|stringData)$' --encrypt --in-place "${rustfs_secret}"
+          fi
+
+      - name: Deploy remaining cluster stages
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Resume the remaining steps (flux-bootstrap onward). NOTE B: on a loaded
+          # runner flux-bootstrap can time out on the Kustomization-ready wait even
+          # while healthy; a single resume retry from the same step recovers it.
+          args=("${CLUSTER_NAME}" --container-runtime "${CONTAINER_RUNTIME}" --kubeconfig "${KUBECONFIG}" --log "${DEPLOY_LOG}" --from-step gitea-attach-kind --break-lock)
+          [[ "${DEBUG_INPUT}" == true ]] && args+=(--debug)
+          if ! opencenter cluster deploy "${args[@]}"; then
+            echo "First deploy attempt failed (likely flux-bootstrap wait timeout under load); retrying resume once..." >&2
+            opencenter cluster deploy "${args[@]}"
+          fi
+
+      - name: Verify live cluster and Flux status
+        shell: bash
+        run: |
+          set -euo pipefail
+          opencenter cluster status "${CLUSTER_NAME}" --refresh
+          kubectl --kubeconfig "${KUBECONFIG}" wait --for=condition=Ready nodes --all --timeout=10m
+          kubectl --kubeconfig "${KUBECONFIG}" get nodes -o wide
+          kubectl --kubeconfig "${KUBECONFIG}" get pods -A
+          flux check
+          flux get sources git -n flux-system
+          flux get kustomizations -n flux-system
+          # Managed storage (OCTR-742): confirm Longhorn + RustFS come up and the
+          # bucket-bootstrap job creates the per-service buckets, all without
+          # external S3. Longhorn attach is fast on a native Linux runner.
+          echo '--- Longhorn ---'
+          kubectl --kubeconfig "${KUBECONFIG}" -n longhorn-system wait --for=condition=Ready pods --all --timeout=10m
+          echo '--- RustFS ---'
+          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system rollout status statefulset/rustfs --timeout=10m
+          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system get pvc,pods
+          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system wait --for=condition=complete job/rustfs-bucket-bootstrap --timeout=10m
+          echo '--- RustFS bucket bootstrap log ---'
+          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system logs job/rustfs-bucket-bootstrap | tail -20
+
+      - name: Print non-secret diagnostics on failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set +e
+          echo '--- CLI status ---'
+          [[ -x "${GITHUB_WORKSPACE}/bin/opencenter" && -n "${CLUSTER_NAME:-}" ]] && opencenter cluster status "${CLUSTER_NAME}" --refresh --output json
+          echo '--- Kind clusters ---'; kind get clusters
+          echo '--- Runtime containers ---'
+          case "${CONTAINER_RUNTIME:-}" in
+            docker) docker ps -a --format '{{.Names}} {{.Status}}' ;;
+            podman) podman ps -a --format '{{.Names}} {{.Status}}' ;;
+          esac
+          if [[ -s "${KUBECONFIG:-}" ]]; then
+            echo '--- Nodes ---'; kubectl --kubeconfig "${KUBECONFIG}" get nodes -o wide
+            echo '--- Pods ---'; kubectl --kubeconfig "${KUBECONFIG}" get pods -A
+            echo '--- Events ---'; kubectl --kubeconfig "${KUBECONFIG}" get events -A --sort-by=.lastTimestamp | tail -100
+            echo '--- Flux ---'; flux check; flux get sources git -n flux-system; flux get kustomizations -n flux-system
+          fi
+          echo "Bootstrap log on runner: ${DEPLOY_LOG:-unavailable}"
+
+      - name: Cleanup disposable Kind and Gitea resources
+        if: ${{ always() && inputs.cleanup }}
+        shell: bash
+        run: |
+          set +e
+          safe_cluster="${CLUSTER_NAME:-kind-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          if [[ "${safe_cluster}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#safe_cluster} -le 63 ]]; then
+            [[ "${CLUSTER_CONFIG_CREATED:-false}" == true && -x "${GITHUB_WORKSPACE}/bin/opencenter" ]] && \
+              opencenter cluster destroy "${safe_cluster}" --force --remove-files
+            if [[ "${KIND_CREATED:-false}" == true || "${CLUSTER_CONFIG_CREATED:-false}" == true ]] && command -v kind >/dev/null 2>&1; then
+              KIND_EXPERIMENTAL_PROVIDER="${CONTAINER_RUNTIME:-docker}" kind delete cluster --name "${safe_cluster}"
+            fi
+          else
+            echo 'Skipping cluster cleanup: no valid cluster name.' >&2
+          fi
+          [[ -x "${GITHUB_WORKSPACE}/bin/opencenter-local" ]] && \
+            opencenter-local gitea --runtime "${CONTAINER_RUNTIME:-docker}" destroy
