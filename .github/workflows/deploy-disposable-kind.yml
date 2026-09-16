@@ -267,10 +267,15 @@ jobs:
           # is visible in the run log instead of an opaque timeout.
           dump_gitea_diagnostics() {
             echo "===== gitea diagnostics ====="
+            echo "--- host: id + gitea data ownership ---"
+            id 2>&1 || true
+            ls -lan "${OPENCENTER_CONFIG_DIR}/clusters/gitea/gitea/conf" 2>&1 || ls -lan "${OPENCENTER_CONFIG_DIR}"/*/gitea/gitea/conf 2>&1 || true
             echo "--- ${CONTAINER_RUNTIME} ps -a (gitea) ---"
             "${CONTAINER_RUNTIME}" ps -a --filter "name=gitea" 2>&1 || true
             echo "--- ${CONTAINER_RUNTIME} logs gitea (tail) ---"
             "${CONTAINER_RUNTIME}" logs --tail 100 gitea 2>&1 || true
+            echo "--- inside container: app.ini ownership + readability as git ---"
+            "${CONTAINER_RUNTIME}" exec gitea sh -c 'echo "ls:"; ls -lan /data/gitea/conf/app.ini; echo "wc:"; wc -l /data/gitea/conf/app.ini; echo "git-can-read:"; su git -s /bin/sh -c "head -3 /data/gitea/conf/app.ini" 2>&1; echo "INSTALL_LOCK line:"; grep -n INSTALL_LOCK /data/gitea/conf/app.ini' 2>&1 || true
             echo "--- ${CONTAINER_RUNTIME} port gitea ---"
             "${CONTAINER_RUNTIME}" port gitea 2>&1 || true
             echo "--- listeners on :3001 ---"
