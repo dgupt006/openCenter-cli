@@ -19,6 +19,13 @@ name: Deploy Disposable Kind Cluster
 #          from the same step recovers it. --break-lock is included on deploys.
 
 on:
+  # TEMPORARY (scratch branch only): run automatically on push to this branch
+  # so the not-yet-on-main workflow can execute on the self-hosted-kvm runners.
+  # workflow_dispatch requires the workflow to exist on the default branch;
+  # push does not. Remove before any merge.
+  push:
+    branches:
+      - ci/disposable-kind-e2e
   workflow_dispatch:
     inputs:
       cluster_name:
@@ -118,10 +125,12 @@ jobs:
       - name: Resolve and validate workflow inputs
         shell: bash
         env:
+          # Fallbacks let the push trigger run with sensible defaults when the
+          # workflow_dispatch inputs are absent.
           CLUSTER_NAME_INPUT: ${{ inputs.cluster_name }}
-          CONTAINER_RUNTIME_INPUT: ${{ inputs.container_runtime }}
-          MANAGED_CNI_INPUT: ${{ inputs.managed_cni }}
-          DEBUG_INPUT: ${{ inputs.debug }}
+          CONTAINER_RUNTIME_INPUT: ${{ inputs.container_runtime || 'docker' }}
+          MANAGED_CNI_INPUT: ${{ inputs.managed_cni || 'false' }}
+          DEBUG_INPUT: ${{ inputs.debug || 'false' }}
         run: |
           set -euo pipefail
           case "${CONTAINER_RUNTIME_INPUT}" in docker|podman) ;; *) echo "Unsupported runtime." >&2; exit 1 ;; esac
@@ -420,7 +429,7 @@ jobs:
           echo "Bootstrap log on runner: ${DEPLOY_LOG:-unavailable}"
 
       - name: Cleanup disposable Kind and Gitea resources
-        if: ${{ always() && inputs.cleanup }}
+        if: ${{ always() && (inputs.cleanup || github.event_name == 'push') }}
         shell: bash
         run: |
           set +e
