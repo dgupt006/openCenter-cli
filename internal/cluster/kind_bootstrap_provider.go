@@ -218,6 +218,21 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				return reconcileSopsAgeSecret(ctx, clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner)
 			},
 		},
+		func() bootstrapStep {
+			// kube-prometheus-stack's Grafana references an existingSecret named
+			// grafana-admin-password in the observability namespace. Apply it
+			// imperatively, mirroring the OpenStack and magnum providers; without
+			// this the Grafana pod fails with CreateContainerConfigError on kind.
+			step := newGrafanaAdminSecretStep(cfg, opts.KubeconfigPath, p.runner)
+			run := step.Run
+			step.Run = func(ctx context.Context) error {
+				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
+					return nil
+				}
+				return run(ctx)
+			}
+			return step
+		}(),
 		{
 			ID:          "gitea-rebase",
 			Description: "Rebase local checkout with Flux bootstrap commits from Gitea",
