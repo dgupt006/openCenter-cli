@@ -188,6 +188,15 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 // resolveOpenStackCalicoValuesPath builds the path to the Calico Helm override
 // values file within the GitOps repository.
 func resolveOpenStackCalicoValuesPath(cfg *v2.Config) (string, error) {
+	return resolveCalicoValuesPath(cfg)
+}
+
+// resolveCalicoValuesPath returns the Calico Helm override values file rendered
+// into the GitOps overlay at
+// <git_dir>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml.
+// It is provider-agnostic and shared by the OpenStack and kind imperative
+// Calico installs.
+func resolveCalicoValuesPath(cfg *v2.Config) (string, error) {
 	gitDir := cfg.GitDir()
 	if gitDir == "" {
 		return "", fmt.Errorf("gitops.git_dir must be configured for Calico Helm install")

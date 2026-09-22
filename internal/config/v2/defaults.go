@@ -606,6 +606,13 @@ func applyProviderBehaviorDefaults(cfg *Config) {
 		}
 		cfg.OpenCenter.Infrastructure.Bastion.Enabled = false
 		cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = false
+		// Kind uses its built-in default CNI (kindnet) out of the box
+		// (DisableDefaultCNI is false above), so Calico is disabled by default to
+		// avoid running two CNIs. Managed CNI is opt-in: passing
+		// --kind-disable-default-cni at init re-enables Calico (see init_service).
+		if cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico != nil {
+			cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled = false
+		}
 		cfg.OpenCenter.Infrastructure.Networking.VRRPEnabled = false
 		cfg.OpenCenter.Infrastructure.Networking.VRRPIP = ""
 		cfg.OpenCenter.Infrastructure.Networking.DNSZoneName = "cluster.local"

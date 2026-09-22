@@ -145,6 +145,25 @@ func (r *readinessBuilder) validateNetworkPlugin(cfg *Config) {
 		})
 	}
 
+	// Kind's built-in default CNI (kindnet) provides networking when the default
+	// CNI is not disabled. In that mode kindnet is the CNI, so none of the
+	// managed plugins (calico/cilium/kube-ovn) should be enabled. Only when the
+	// operator opts into managed CNI (disable_default_cni=true) must exactly one
+	// managed plugin be enabled.
+	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "kind") {
+		kindnetActive := cfg.OpenCenter.Infrastructure.Kind == nil || !cfg.OpenCenter.Infrastructure.Kind.DisableDefaultCNI
+		if kindnetActive {
+			if len(enabled) > 0 {
+				names := make([]string, 0, len(enabled))
+				for _, plugin := range enabled {
+					names = append(names, plugin.name)
+				}
+				r.addError(CategorySchema, "opencenter.cluster.kubernetes.network_plugin", fmt.Sprintf("kind uses its default CNI (kindnet) when disable_default_cni is false, so no managed network_plugin may be enabled; enabled: %s.", strings.Join(names, ", ")), "Disable calico/cilium/kube-ovn, or set opencenter.infrastructure.kind.disable_default_cni: true to manage the CNI.")
+			}
+			return
+		}
+	}
+
 	switch len(enabled) {
 	case 0:
 		r.addError(CategorySchema, "opencenter.cluster.kubernetes.network_plugin", "exactly one network_plugin must be enabled.", "Enable exactly one of calico, cilium, or kube-ovn.")
