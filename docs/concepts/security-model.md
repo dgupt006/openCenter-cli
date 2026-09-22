@@ -70,7 +70,7 @@ Keys move from `active` to `archived` when replaced by ordinary rotation, or to 
 **Rotation** (`internal/secrets/rotation.go`):
 
 ```bash
-opencenter secrets keys generate --cluster my-cluster
+opencenter secrets keys generate
 opencenter secrets keys rotate --cluster my-cluster --type age
 opencenter secrets keys revoke --cluster my-cluster --key <fingerprint>
 ```

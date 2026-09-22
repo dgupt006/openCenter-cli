@@ -18,7 +18,7 @@ openCenter-cli uses four kinds of Go tests, all driven through `mise` tasks defi
 1. **Unit tests** -- `*_test.go` files next to the source they test.
 2. **Property-based tests** -- `*_property_test.go` files using [`gopter`](https://github.com/leanovate/gopter) (`go.mod`: `github.com/leanovate/gopter v0.2.11`).
 3. **BDD tests** -- Gherkin scenarios in `tests/features/*.feature`, run through [Godog](https://github.com/cucumber/godog) (`go.mod`: `github.com/cucumber/godog v0.16.0`).
-4. **Integration tests** -- `*_integration_test.go` files that exercise multi-package flows (cluster setup, resilience, operations).
+4. **Integration tests** -- `*_integration_test.go` files that exercise multi-package flows (cluster provisioning, resilience, operations).
 
 ## Running tests
 
@@ -52,7 +52,7 @@ mise run govulncheck
 # Secret scan across full git history
 mise run gitleaks
 
-# Integration tests: cluster setup, resilience, operations
+# Integration tests: cluster provisioning, resilience, operations
 mise run integration
 
 # Documentation generator test (requires the `tools` build tag)

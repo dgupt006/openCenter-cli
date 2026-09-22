@@ -50,7 +50,19 @@ Step sequence:
 15. **Print non-secret diagnostics on failure** (`if: failure()`): `opencenter cluster status <name> --refresh --output json`, kind/docker/podman `ps`, `kubectl get nodes/pods/events`, `flux check`/`get`.
 16. **Cleanup** (`if: always() && inputs.cleanup`): `opencenter cluster destroy <name> --force --remove-files`; `kind delete cluster --name <name>`; `opencenter-local gitea destroy`.
 
-This workflow is the authoritative confirmation of several real CLI subcommand shapes: `cluster init`, `cluster set <dotted.key>=<value>...`, `cluster validate`, `cluster generate --force --gitops-auth=token`, `cluster deploy --container-runtime --kubeconfig --log --step|--from-step [--debug]`, `cluster status --refresh [--output json]`, `cluster describe --output json`, `cluster destroy --force --remove-files`; plugin subcommands `opencenter-local gitea {up,status,attach-kind,destroy}`. Step names confirmed real: `kind-create`, `kind-export-kubeconfig`, `gitea-attach-kind` (and steps continue after it via `--from-step`).
+This workflow is the authoritative confirmation of several real CLI subcommand shapes:
+
+- `cluster init`
+- `cluster set <dotted.key>=<value>...`
+- `cluster validate`
+- `cluster generate --gitops-auth=token` (with `--force`)
+- `cluster deploy --container-runtime --kubeconfig --log --step|--from-step [--debug]`
+- `cluster status --refresh [--output json]`
+- `cluster describe --output json`
+- `cluster destroy --remove-files` (with `--force`)
+- plugin subcommands `opencenter-local gitea {up,status,attach-kind,destroy}`
+
+Step names confirmed real: `kind-create`, `kind-export-kubeconfig`, `gitea-attach-kind` (and steps continue after it via `--from-step`).
 
 ## `docs-p0.yml` -- "Docs P0 Checks"
 
@@ -85,7 +97,7 @@ This workflow is the authoritative confirmation of several real CLI subcommand s
 * Trigger: bare `pull_request`.
 * Job `pre_commit` (self-hosted), matrix `python-version: ["3.10"]`.
 * Steps: checkout -> `actions/setup-python@v6` -> `git fetch --prune --unshallow` -> compute `CHANGED_FILES` via `git diff --name-only HEAD^` -> `pre-commit/action@v3.0.1` with `--files ${CHANGED_FILES} --hook-stage manual`.
-* The repository's `.pre-commit-config.yaml` defines exactly one hook: `gitleaks/gitleaks` rev `v8.24.2`, id `gitleaks`. So this workflow runs gitleaks secret-scanning on changed files per pull request -- distinct in scope from the `mise run gitleaks` task, which runs a full-history scan (`gitleaks detect --source . --config .gitleaks.toml --redact --no-banner`) and is not wired into any CI workflow (local/manual only).
+* The repository's `.pre-commit-config.yaml` defines exactly one hook: `gitleaks/gitleaks` rev `v8.24.2`, id `gitleaks`. So this workflow runs gitleaks secret-scanning on changed files per pull request -- distinct in scope from the `mise run gitleaks` task, which runs a full-history scan (`gitleaks detect --source . -c .gitleaks.toml --redact --no-banner`) and is not wired into any CI workflow (local/manual only).
 
 ## What CI does not run
 

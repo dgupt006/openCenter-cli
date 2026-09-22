@@ -14,7 +14,7 @@ tags: [configuration, schema, v2, reference]
 The exhaustive, always-current, machine-readable schema is generated straight from these Go types:
 
 ```bash
-opencenter cluster schema --pretty              # write the current schema to stdout/a file
+mise run schema-v2                               # regenerate schema/opencenter-v2.schema.json from the Go types
 opencenter settings ide                          # generate the schema plus editor (YAML Language Server) setup
 ```
 

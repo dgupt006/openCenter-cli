@@ -87,7 +87,7 @@ CONTAINER_RUNTIME = "podman"
 | `godog-tag <tag>` | BDD scenarios filtered to `@<tag>`. |
 | `property` (alias `test-properties`) | `-run "TestProperty"` across `./internal/... ./cmd/...`. |
 | `govulncheck` | `govulncheck ./...`. |
-| `gitleaks` | `gitleaks detect --source . --config .gitleaks.toml --redact --no-banner` (full-history scan; not run in any CI workflow -- local/manual only). |
+| `gitleaks` | `gitleaks detect --source . -c .gitleaks.toml --redact --no-banner` (full-history scan; not run in any CI workflow -- local/manual only). |
 | `integration` | Runs three named suites in sequence: cluster-setup, resilience, operations. |
 | `perf` | `go test -tags perf ./internal/config -run "TestMemoryUsageRegression"`. |
 | `test:all` | `test`, `test-race`, `vet`, `godog`, `property`, `govulncheck`, in order. |
@@ -98,11 +98,11 @@ CONTAINER_RUNTIME = "podman"
 
 | Task | What it does |
 | --- | --- |
-| `schema` | `./bin/opencenter cluster schema --pretty --out schema/cluster.schema.json`. |
+| `schema` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json`. |
 | `schema-gen` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json`. |
 | `schema-v2` | Regenerates `schema/opencenter-v2.schema.json` by writing and running a throwaway Go test against `internal/config/v2schema`, then deleting the test file. |
 | `validate` | `./bin/opencenter cluster validate`. |
-| `schema-verify` | End-to-end schema-change smoke test: build, generate schema, `cluster init`, `cluster update`, `cluster validate`, unit tests, BDD tests -- all against `OPENCENTER_CONFIG_DIR=./testdata/config`. |
+| `schema-verify` | End-to-end schema-change smoke test: build, generate schema, `cluster init`, `cluster set`, `cluster validate`, unit tests, BDD tests -- all against `OPENCENTER_CONFIG_DIR=./testdata/config`. |
 
 ### Documentation
 
@@ -122,7 +122,7 @@ CONTAINER_RUNTIME = "podman"
 | `gitea-cleanup` | `go run ./cmd/opencenter-local gitea destroy`. |
 | `active` | `./bin/opencenter cluster status`. |
 | `terraform-generate <cluster> [output-dir]` | Builds, then `./bin/opencenter cluster terraform-generate <cluster> --output-dir=<dir>`. |
-| `preflight` | `./bin/opencenter cluster preflight`. |
+| `preflight` | `./bin/opencenter cluster validate`. |
 | `install-shell-integration` | `./hack/install-shell-integration.sh`. |
 | `install-hooks` | Verifies `.git/hooks/pre-commit` exists and `chmod +x`s it. |
 

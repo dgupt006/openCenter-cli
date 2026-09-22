@@ -64,13 +64,13 @@ tags: [mise, build, tasks, reference]
 | `godog-tag <tag>` | Same, with `--godog.tags=@<tag>` |
 | `property` (alias `test-properties`) | `go test ./internal/... ./cmd/... -v -run "TestProperty" -count=1` |
 | `govulncheck` | `govulncheck ./...` |
-| `gitleaks` | `gitleaks detect --source . --config .gitleaks.toml --redact --no-banner` |
+| `gitleaks` | `gitleaks detect --source . -c .gitleaks.toml --redact --no-banner` |
 | `integration` | Runs `TestClusterSetup` (`./cmd`), then `TestRetry\|TestCircuitBreaker\|TestLockManager\|TestProperty` (`./internal/resilience/...`), then `TestDriftDetector\|TestBackupManager\|TestProperty` (`./internal/operations/...`) |
 | `perf` | `go test -tags perf ./internal/config -run "TestMemoryUsageRegression" -count=1` |
 | `test:all` | `test`, `test-race`, `vet`, `godog`, `property`, `govulncheck` |
 | `verify` | `test`, `test-race`, `test-properties`, `govulncheck` |
 | `test-remediation-all` | `test-build`, `vet`, `test`, `test-remediation`, `test-race`, `test-remediation-race`, `godog`, `test-docs`, `test-kustomize`, `test-docs-idempotency`, `test-docs-frontmatter-remediation`, `test-diff` |
-| `schema` | `./bin/opencenter cluster schema --pretty --out schema/cluster.schema.json` |
+| `schema` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json` |
 | `schema-gen` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json` |
 | `schema-v2` | Writes and runs a throwaway `TestRegenSchema` against `internal/config/v2schema`, writes `schema/opencenter-v2.schema.json`, deletes the test file |
 | `validate` | `./bin/opencenter cluster validate` |
@@ -84,7 +84,7 @@ tags: [mise, build, tasks, reference]
 | `gitea-cleanup` | `go run ./cmd/opencenter-local gitea destroy` |
 | `active` | `./bin/opencenter cluster status` |
 | `terraform-generate <cluster> [dir]` | `mise run build`; `./bin/opencenter cluster terraform-generate <cluster> --output-dir=<dir>` |
-| `preflight` | `./bin/opencenter cluster preflight` |
+| `preflight` | `./bin/opencenter cluster validate` |
 | `install-shell-integration` | `./hack/install-shell-integration.sh` |
 | `install-hooks` | Verifies and `chmod +x`s `.git/hooks/pre-commit` |
 | `clean` | Removes `bin/`, `testdata/`, `new-schema.json`, `terraform-output/` |
