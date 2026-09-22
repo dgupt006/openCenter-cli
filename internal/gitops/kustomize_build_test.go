@@ -94,6 +94,11 @@ func TestGeneratedDefaultOverlayKustomizeFailureMatrix(t *testing.T) {
 	// validates the composed overlay instead of failing on an absent include.
 	seedOCTR631OLMBaseFixture(t, repo, cfg.ClusterName())
 
+	// The root overlay kustomization references ./flux-system, which is written
+	// by `flux bootstrap` at deploy time (not by generate). Seed a stub so the
+	// root overlay builds locally, mirroring the post-bootstrap layout.
+	seedFluxSystemFixture(t, repo, cfg.ClusterName())
+
 	overlayRoot := filepath.Join(repo, "applications", "overlays", cfg.ClusterName())
 	var roots []string
 	err := filepath.WalkDir(overlayRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -125,6 +130,30 @@ func TestGeneratedDefaultOverlayKustomizeFailureMatrix(t *testing.T) {
 		t.Errorf("generated-overlay kustomize failure in %s:\n%s", relative, failures[relative])
 	}
 }
+// seedFluxSystemFixture writes a minimal flux-system/ overlay directory as
+// `flux bootstrap` would, so the root overlay (which references ./flux-system)
+// can be built locally without a live bootstrap.
+func seedFluxSystemFixture(t *testing.T, repo, clusterName string) {
+	t.Helper()
+	fluxRoot := filepath.Join(repo, "applications", "overlays", clusterName, "flux-system")
+	if err := os.MkdirAll(fluxRoot, 0o755); err != nil {
+		t.Fatalf("seed flux-system dir: %v", err)
+	}
+	kustomization := "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - gotk-components.yaml\n  - gotk-sync.yaml\n"
+	if err := os.WriteFile(filepath.Join(fluxRoot, "kustomization.yaml"), []byte(kustomization), 0o644); err != nil {
+		t.Fatalf("seed flux-system kustomization: %v", err)
+	}
+	// A tiny valid manifest each; content is irrelevant to buildability.
+	components := "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: flux-system\n"
+	if err := os.WriteFile(filepath.Join(fluxRoot, "gotk-components.yaml"), []byte(components), 0o644); err != nil {
+		t.Fatalf("seed gotk-components: %v", err)
+	}
+	sync := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: flux-system-sync\n  namespace: flux-system\n"
+	if err := os.WriteFile(filepath.Join(fluxRoot, "gotk-sync.yaml"), []byte(sync), 0o644); err != nil {
+		t.Fatalf("seed gotk-sync: %v", err)
+	}
+}
+
 func runKustomizeBuild(t *testing.T, root string) string {
 	t.Helper()
 	output, err := runKustomizeBuildResult(root)
