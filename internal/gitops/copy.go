@@ -373,11 +373,18 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 
 	// sourceAuthBlockCustomerRepository retains customer-repository semantics
 	// for sources such as keycloak-config while using the same renderer.
+	//
+	// The branch MUST match the branch that `flux bootstrap` reconciles the
+	// customer repository on. Bootstrap uses cfg.GitBranchOrDefault() (and, for
+	// the local Gitea provider, the current checkout branch which is seeded from
+	// the same value). Reuse GitBranchOrDefault() here so these self-referencing
+	// GitRepository sources cannot drift from the bootstrap branch. Previously
+	// this duplicated the "" -> "main" fallback locally, which produced sources
+	// pinned to "main" even when the repository was bootstrapped on another
+	// branch (e.g. "master" for local Gitea), leaving them permanently
+	// unreconciled ("couldn't find remote ref refs/heads/main").
 	funcMap["sourceAuthBlockCustomerRepository"] = func() (string, error) {
-		branch := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.Branch)
-		if branch == "" {
-			branch = "main"
-		}
+		branch := cfg.GitBranchOrDefault()
 		return sourceAuthBlock(cfg.OpenCenter.GitOps.Repository.URL, "branch", branch, "flux-system")
 	}
 
