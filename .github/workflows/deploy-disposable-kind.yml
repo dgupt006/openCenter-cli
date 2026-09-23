@@ -302,8 +302,20 @@ jobs:
             "${CONTAINER_RUNTIME}" port gitea 2>&1 || true
             echo "--- listeners on :3001 ---"
             (ss -ltnp 2>/dev/null | grep -E ':3001' || echo 'nothing listening on :3001') || true
-            echo "--- curl https://localhost:3001 ---"
-            curl -sk --max-time 5 -o /dev/null -w 'http=%{http_code}\n' https://localhost:3001/api/v1/version 2>&1 || true
+            echo "--- docker topology (is the daemon local?) ---"
+            echo "DOCKER_HOST=${DOCKER_HOST:-<unset>}"
+            "${CONTAINER_RUNTIME}" context ls 2>&1 || true
+            "${CONTAINER_RUNTIME}" info --format 'Server={{.ServerVersion}} Rootless={{.SecurityOptions}} Root={{.DockerRootDir}}' 2>&1 || true
+            echo "--- docker port gitea (actual published mapping) ---"
+            "${CONTAINER_RUNTIME}" port gitea 2>&1 || true
+            echo "--- container gateway/IP + probe via container IP ---"
+            gitea_ip="$("${CONTAINER_RUNTIME}" inspect gitea --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>&1)"
+            echo "gitea container IP(s): ${gitea_ip}"
+            for host in localhost 127.0.0.1 ::1 ${gitea_ip}; do
+              [[ -n "${host}" ]] || continue
+              code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "https://${host}:3001/api/v1/version" 2>/dev/null || echo ERR)"
+              echo "probe https://${host}:3001 -> ${code}"
+            done
             echo "============================="
           }
           trap 'rc=$?; [[ $rc -ne 0 ]] && dump_gitea_diagnostics; exit $rc' EXIT
