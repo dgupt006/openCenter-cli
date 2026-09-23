@@ -26,6 +26,7 @@ on:
   push:
     branches:
       - ci/disposable-kind-e2e
+      - ci/disposable-kind-e2e-mac
   workflow_dispatch:
     inputs:
       cluster_name:
@@ -76,7 +77,7 @@ concurrency:
 
 jobs:
   deploy-kind:
-    runs-on: [self-hosted-kvm]
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -167,9 +168,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for required_tool in curl sha256sum tar awk sed grep install; do
+          for required_tool in curl tar awk sed grep install; do
             command -v "${required_tool}" >/dev/null || { echo "Missing runner prerequisite: ${required_tool}" >&2; exit 1; }
           done
+
+          # Detect OS/arch so the workflow runs on both Linux (self-hosted-kvm)
+          # and macOS (self-hosted Mac) runners. Tool release assets use these
+          # tokens; darwin/arm64 vs linux/amd64 etc.
+          case "$(uname -s)" in
+            Linux)  OS=linux;  KOS=linux;  HELM_OS=linux ;;
+            Darwin) OS=darwin; KOS=darwin; HELM_OS=darwin ;;
+            *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64) ARCH=amd64 ;;
+            arm64|aarch64) ARCH=arm64 ;;
+            *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          echo "Installing pinned tools for ${OS}/${ARCH}"
+
+          # sha256sum is absent on macOS (which has 'shasum -a 256'); provide a
+          # portable checker.
+          sha256_check() { if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi; }
+
           tool_bin="${RUNNER_TEMP}/bin"; mkdir -p "${tool_bin}"
           echo "${tool_bin}" >> "${GITHUB_PATH}"
           echo "${GITHUB_WORKSPACE}/bin" >> "${GITHUB_PATH}"
@@ -188,32 +209,32 @@ jobs:
             curl_retry "${url}" -o "${temporary}"
             expected="$(curl_retry "${checksum_url}" | awk '{print $1; exit}')"
             [[ "${expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Invalid checksum for ${output}." >&2; rm -f "${temporary}"; exit 1; }
-            printf '%s  %s\n' "${expected}" "${temporary}" | sha256sum -c -
+            printf '%s  %s\n' "${expected}" "${temporary}" | sha256_check
             mv "${temporary}" "${output}"
           }
 
           download_checked \
-            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
-            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${OS}/${ARCH}/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${OS}/${ARCH}/kubectl.sha256" \
             "${RUNNER_TEMP}/kubectl"
           install -m 0755 "${RUNNER_TEMP}/kubectl" "${tool_bin}/kubectl"
 
           download_checked \
-            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
-            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${KOS}-${ARCH}" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${KOS}-${ARCH}.sha256sum" \
             "${RUNNER_TEMP}/kind"
           install -m 0755 "${RUNNER_TEMP}/kind" "${tool_bin}/kind"
 
           download_checked \
-            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
-            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-${HELM_OS}-${ARCH}.tar.gz" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-${HELM_OS}-${ARCH}.tar.gz.sha256sum" \
             "${RUNNER_TEMP}/helm.tar.gz"
           mkdir -p "${RUNNER_TEMP}/helm-extract"
           tar -xzf "${RUNNER_TEMP}/helm.tar.gz" -C "${RUNNER_TEMP}/helm-extract"
-          install -m 0755 "${RUNNER_TEMP}/helm-extract/linux-amd64/helm" "${tool_bin}/helm"
+          install -m 0755 "${RUNNER_TEMP}/helm-extract/${HELM_OS}-${ARCH}/helm" "${tool_bin}/helm"
 
           # FIX 1: the checksums asset is flux_<ver>_checksums.txt, not checksums.txt.
-          flux_filename="flux_${FLUX_VERSION#v}_linux_amd64.tar.gz"
+          flux_filename="flux_${FLUX_VERSION#v}_${OS}_${ARCH}.tar.gz"
           flux_archive="${RUNNER_TEMP}/${flux_filename}"
           flux_checksums="${RUNNER_TEMP}/flux-checksums.txt"
           curl_retry \
@@ -222,7 +243,7 @@ jobs:
             "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/flux_${FLUX_VERSION#v}_checksums.txt" -o "${flux_checksums}"
           flux_expected="$(awk -v file="${flux_filename}" '$2 == file || $2 == "*" file {print $1; exit}' "${flux_checksums}")"
           [[ "${flux_expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Flux checksum entry not found." >&2; exit 1; }
-          printf '%s  %s\n' "${flux_expected}" "${flux_archive}" | sha256sum -c -
+          printf '%s  %s\n' "${flux_expected}" "${flux_archive}" | sha256_check
           mkdir -p "${RUNNER_TEMP}/flux-extract"
           tar -xzf "${flux_archive}" -C "${RUNNER_TEMP}/flux-extract"
           install -m 0755 "${RUNNER_TEMP}/flux-extract/flux" "${tool_bin}/flux"
