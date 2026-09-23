@@ -536,13 +536,15 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		return err
 	}
 	serverKeyBytes := x509.MarshalPKCS1PrivateKey(serverKey)
-	// 0640 (not 0600): the key is bind-mounted into the container and must be
-	// readable by Gitea's git user (uid/gid 1000), to which runContainer aligns
-	// the whole data tree. A 0600 key owned by the host user is unreadable by the
-	// git user, which makes Gitea silently fall back to the HTTP install page on
-	// :3000 instead of serving HTTPS on :3001. This is a disposable local-dev CA,
-	// so group-readability of the key is an acceptable trade for a reliable start.
-	if err := writePEMFile(s.layout.ServerKeyPath, "RSA PRIVATE KEY", serverKeyBytes, 0o640); err != nil {
+	// 0644 (not 0600): the key is bind-mounted into the container and must be
+	// readable by Gitea's git user (uid/gid 1000), which is neither the owner nor
+	// in the owning group when a non-root host wrote the file. A 0600/0640 key is
+	// then unreadable by the git user, so Gitea fails to load the cert and
+	// silently falls back to the HTTP install page on :3000 instead of serving
+	// HTTPS on :3001. This is a disposable, per-instance, local-dev CA that never
+	// leaves the machine, so world-readability of the key is an acceptable trade
+	// for a deterministic start on both root and non-root hosts.
+	if err := writePEMFile(s.layout.ServerKeyPath, "RSA PRIVATE KEY", serverKeyBytes, 0o644); err != nil {
 		return err
 	}
 	return nil
@@ -577,24 +579,21 @@ func (s *Service) runContainer(ctx context.Context) error {
 		"-e", "GITEA__security__INSTALL_LOCK=true",
 	}
 
-	// The bind-mounted /data tree must be owned by the git user Gitea runs as
-	// (uid/gid 1000 in the upstream image); otherwise Gitea cannot read the TLS
-	// key or app.ini and silently falls back to the HTTP install page on :3000
+	// Gitea's web process runs as the image's git user (uid/gid 1000) and must be
+	// able to read the bind-mounted TLS cert/key and app.ini; otherwise it fails
+	// to load the cert and silently falls back to the HTTP install page on :3000
 	// instead of serving HTTPS on :3001.
 	//
-	// We align the mounted tree to the container's fixed git uid (1000)
-	// UNCONDITIONALLY rather than remapping the git user to the host uid via
-	// USER_UID/USER_GID. The remap path proved unreliable on CI runners: the
-	// entrypoint's usermod races the web server startup, so Gitea can begin
-	// listening before the git user's uid is remapped and then fail to read the
-	// host-owned key. Chowning to 1000 up front removes that race on every host
-	// (root or non-root); best-effort so a host that cannot chown (e.g. no
-	// privilege, or a uid the tree already matches) does not block startup.
-	if _, _, haveIDs := currentUserIDs(); haveIDs {
-		if err := chownTree(s.layout.GiteaDataDir, giteaContainerUID, giteaContainerGID); err != nil {
-			return fmt.Errorf("prepare gitea data ownership: %w", err)
-		}
-	}
+	// The files are made world-readable by writeCertificates/writeAppINI (the
+	// cert/app.ini at 0644 and the disposable local-dev key at 0640), so the git
+	// user can read them regardless of which host uid owns them. We additionally
+	// try to align ownership to uid 1000 as a best effort, but a non-root host
+	// cannot chown to another uid — that is fine and must NOT abort startup
+	// (world-readable perms already make the files readable). Only the earlier
+	// "USER_UID remap" approach needed ownership alignment, and it raced the
+	// server startup on CI runners; env-driven config + readable perms are
+	// deterministic on both root and non-root hosts.
+	_ = chownTree(s.layout.GiteaDataDir, giteaContainerUID, giteaContainerGID)
 
 	args = append(args, s.settings.Image)
 	if _, err := s.executor.Run(ctx, localdev.RunOptions{Name: runtime, Args: args}); err != nil {
