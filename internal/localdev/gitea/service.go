@@ -599,6 +599,68 @@ func (s *Service) runContainer(ctx context.Context) error {
 	if _, err := s.executor.Run(ctx, localdev.RunOptions{Name: runtime, Args: args}); err != nil {
 		return fmt.Errorf("start gitea container: %w", err)
 	}
+
+	// Copy the generated config and TLS material directly into the container and
+	// restart so Gitea reads them. This does not rely on the -v bind mount
+	// reflecting the client's filesystem: on some runners the Docker daemon is
+	// remote or in a separate mount namespace, so a host path passed to -v is
+	// resolved on the daemon host and can mount a stale/empty /data (observed as
+	// the container reading an old app.ini while the freshly written host files
+	// were correct, so Gitea failed to load the cert and fell back to HTTP :3000).
+	// docker cp goes through the daemon and is therefore correct regardless of
+	// where the daemon runs.
+	if err := s.syncConfigIntoContainer(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// syncConfigIntoContainer copies the generated app.ini and TLS cert/key into the
+// running container's /data tree and restarts Gitea so it picks them up. This
+// makes provisioning robust when the -v bind mount does not reflect the host
+// files (remote/rootless Docker daemons).
+func (s *Service) syncConfigIntoContainer(ctx context.Context) error {
+	runtime := s.commandRuntime()
+	name := s.settings.ContainerName
+
+	// Ensure the target directories exist inside the container before copying.
+	if _, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: runtime,
+		Args: []string{"exec", name, "mkdir", "-p", "/data/gitea/conf", "/data/gitea/certs"},
+	}); err != nil {
+		return fmt.Errorf("prepare gitea config dirs in container: %w", err)
+	}
+
+	copies := []struct{ src, dst string }{
+		{s.layout.AppIniPath, "/data/gitea/conf/app.ini"},
+		{s.layout.ServerCertPath, "/data/gitea/certs/cert.pem"},
+		{s.layout.ServerKeyPath, "/data/gitea/certs/key.pem"},
+		{s.layout.CACertPath, "/data/gitea/certs/ca.pem"},
+	}
+	for _, c := range copies {
+		if _, err := s.executor.Run(ctx, localdev.RunOptions{
+			Name: runtime,
+			Args: []string{"cp", c.src, name + ":" + c.dst},
+		}); err != nil {
+			return fmt.Errorf("copy %s into gitea container: %w", filepath.Base(c.src), err)
+		}
+	}
+
+	// Align ownership inside the container to the git user and restart so Gitea
+	// re-reads the config and serves HTTPS on :3001.
+	if _, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: runtime,
+		Args: []string{"exec", "--user", "0:0", name, "chown", "-R",
+			fmt.Sprintf("%d:%d", giteaContainerUID, giteaContainerGID),
+			"/data/gitea/conf", "/data/gitea/certs"},
+	}); err != nil {
+		// Best effort: the image may not allow uid 0 exec; world-readable perms
+		// on the copied files already make them readable by the git user.
+		_ = err
+	}
+	if err := s.restart(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
