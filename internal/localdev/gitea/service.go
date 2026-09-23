@@ -94,6 +94,10 @@ type Service struct {
 	executor localdev.Executor
 	layout   localdev.Layout
 	settings Settings
+	// apiHost is the host that was found reachable for the Gitea API during
+	// waitForAPI (localhost under Docker, or the container IP under rootless
+	// Podman). Empty until the first successful probe.
+	apiHost string
 }
 
 // DefaultSettings returns the repo-local Gitea defaults.
@@ -753,19 +757,64 @@ func (s *Service) ensureUserToken(ctx context.Context, client *api.Client) (stri
 	return token, nil
 }
 
-func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
-	client, err := api.NewClient(fmt.Sprintf("https://localhost:%d", s.settings.HTTPSPort), s.layout.CACertPath)
+// reachableHosts returns the candidate hosts to probe for the Gitea API, in
+// preference order. localhost/127.0.0.1 work when the container's published
+// port is bound to the host loopback (Docker). Under rootless Podman the -p
+// mapping is not reachable via loopback, but the container is directly
+// reachable at its CNI IP (e.g. 10.88.0.x), so we also try that. The container
+// IP is added to the TLS cert SANs by ensureReachableCert before probing.
+func (s *Service) reachableHosts(ctx context.Context) []string {
+	hosts := []string{"localhost", "127.0.0.1"}
+	if ip := s.containerPrimaryIP(ctx); ip != "" {
+		hosts = append(hosts, ip)
+	}
+	return hosts
+}
+
+// containerPrimaryIP returns the first non-empty container IP address, or "".
+func (s *Service) containerPrimaryIP(ctx context.Context) string {
+	output, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: s.commandRuntime(),
+		Args: []string{"inspect", "--format",
+			"{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", s.settings.ContainerName},
+	})
 	if err != nil {
+		return ""
+	}
+	for _, f := range strings.Fields(string(output)) {
+		if ip := net.ParseIP(strings.TrimSpace(f)); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
+func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
+	// Reissue the cert to include the container IP as a SAN so a client that
+	// connects via the container IP (rootless Podman) still verifies against the
+	// local CA, then sync it into the container.
+	if err := s.ensureReachableCert(ctx); err != nil {
 		return nil, err
 	}
 
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(120 * time.Second)
+	var lastErr error
 	for {
-		if _, err := client.Version(ctx); err == nil {
-			return client, nil
+		for _, host := range s.reachableHosts(ctx) {
+			client, err := api.NewClient(fmt.Sprintf("https://%s:%d", host, s.settings.HTTPSPort), s.layout.CACertPath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if _, err := client.Version(ctx); err == nil {
+				s.apiHost = host
+				return client, nil
+			} else {
+				lastErr = err
+			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for gitea at https://localhost:%d", s.settings.HTTPSPort)
+			return nil, fmt.Errorf("timed out waiting for gitea on any of %v (last error: %v)", s.reachableHosts(ctx), lastErr)
 		}
 		select {
 		case <-ctx.Done():
@@ -773,6 +822,27 @@ func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// ensureReachableCert reissues the TLS certificate to include the running
+// container's IP as a SAN (in addition to localhost/127.0.0.1) and copies it
+// into the container, so clients connecting via the container IP verify against
+// the local CA. Best-effort: if the container IP cannot be determined the
+// existing localhost cert is left in place.
+func (s *Service) ensureReachableCert(ctx context.Context) error {
+	ip := s.containerPrimaryIP(ctx)
+	if ip == "" {
+		return nil
+	}
+	if err := s.writeCertificates([]string{ip}); err != nil {
+		return err
+	}
+	// Push the regenerated cert/key into the container and restart so Gitea
+	// serves the SAN-updated certificate.
+	if err := s.syncConfigIntoContainer(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) connectKindNetwork(ctx context.Context) error {
