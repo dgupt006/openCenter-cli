@@ -360,7 +360,25 @@ func (s *BootstrapService) Bootstrap(ctx context.Context, opts BootstrapOptions)
 	result.ClusterDeployed = true
 	s.progress("✓ Cluster deployed")
 
-	// Wait for cluster to be ready
+	// Wait for cluster to be ready.
+	//
+	// A single-step run (--step / OnlyStep) is a deliberate partial operation:
+	// the caller is executing one intermediate step (e.g. kind-create) and does
+	// not expect a fully reconciled, ready cluster afterward. Running the full
+	// readiness wait in that case blocks until the timeout because the later
+	// pipeline steps (CNI install, Flux bootstrap, service reconciliation) have
+	// not run yet. Skip the readiness wait for single-step runs; it still runs
+	// for a normal full deploy and for a --from-step resume that continues
+	// through the end of the pipeline.
+	if strings.TrimSpace(opts.OnlyStep) != "" {
+		logging.Debugf("bootstrap: single-step run (%s); skipping cluster readiness wait", opts.OnlyStep)
+		result.Duration = time.Since(startTime)
+		if err := s.removeBootstrapState(runtimePaths.StatePath); err != nil {
+			logBootstrapMessage(ctx, "warning: failed to remove bootstrap state %s: %v", runtimePaths.StatePath, err)
+		}
+		return result, nil
+	}
+
 	s.progress("\nWaiting for cluster readiness (timeout: %s)...", opts.Timeout)
 	logging.Debugf("bootstrap: waiting for cluster readiness, timeout=%s", opts.Timeout)
 	endpoint, err := s.waitForReady(ctx, &cfg, opts.Timeout, opts.KubeconfigPath)
