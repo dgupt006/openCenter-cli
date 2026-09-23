@@ -356,6 +356,34 @@ jobs:
           cluster_config="${OPENCENTER_CONFIG_DIR}/clusters/blueprints/local/${CLUSTER_NAME}/${CLUSTER_NAME}-config.yaml"
           echo "CLUSTER_CONFIG_PATH=${cluster_config}" >> "${GITHUB_ENV}"
 
+          # FIX 7: kind enables loki/tempo by default, but these require an
+          # external S3 endpoint + access keys that a disposable e2e does not have,
+          # so generation validation fails on their missing secrets. Disable them.
+          # keycloak is KEPT enabled (it is a core identity service we want to
+          # exercise); its required secrets are provided below instead of disabling
+          # it. `cluster set` cannot toggle service-map booleans, so edit the config
+          # for the service enable flags: find each "<svc>:" line and flip the FIRST
+          # "enabled: true" at/after it to false.
+          disable_service() {
+            local svc="$1" cfg="$2" line
+            line="$(awk -v s="    ${svc}:" '$0==s{f=NR} f && /enabled: true/ && NR>=f{print NR; exit}' "${cfg}")"
+            if [[ -n "${line}" ]]; then
+              sed -i "${line}s/enabled: true/enabled: false/" "${cfg}"
+              echo "disabled ${svc} (line ${line})"
+            fi
+          }
+          for svc in loki tempo; do
+            disable_service "${svc}" "${cluster_config}"
+          done
+
+          # keycloak stays enabled: supply the secrets its generation validation
+          # requires (disposable, non-production values). headlamp uses keycloak
+          # for OIDC, so give it a client secret too and keep OIDC on.
+          opencenter cluster set "${CLUSTER_NAME}" \
+            "secrets.keycloak.admin_password=DisposableKeycloakAdmin1!" \
+            "secrets.keycloak.client_secret=disposable-keycloak-client-secret" \
+            "secrets.headlamp.oidc_client_secret=disposable-headlamp-oidc-secret"
+
           # Export the age key path for SOPS-aware generate/secrets steps.
           echo "SOPS_AGE_KEY_FILE=${OPENCENTER_CONFIG_DIR}/clusters/secrets/local/${CLUSTER_NAME}/age/keys/${CLUSTER_NAME}-key.txt" >> "${GITHUB_ENV}"
 
