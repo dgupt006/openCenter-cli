@@ -270,6 +270,12 @@ func (s *Service) Destroy(ctx context.Context) error {
 	if err := s.stopAndRemove(ctx); err != nil {
 		return err
 	}
+	// Remove the dedicated network (best effort; it only exists after a run and
+	// may be shared briefly during teardown).
+	_, _ = s.executor.Run(ctx, localdev.RunOptions{
+		Name: s.commandRuntime(),
+		Args: []string{"network", "rm", giteaNetworkName},
+	})
 	if err := os.RemoveAll(s.layout.Root); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", s.layout.Root, err)
 	}
@@ -471,7 +477,10 @@ ENABLE_CAPTCHA = false
 }
 
 func (s *Service) writeCertificates(extraIPs []string) error {
-	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	// Always include the pinned container IP so a client reaching Gitea at the
+	// container address (rootless Podman) verifies against the local CA, plus the
+	// host loopback for the Docker case.
+	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1"), net.ParseIP(giteaStaticIP)}
 	for _, rawIP := range extraIPs {
 		if ip := net.ParseIP(strings.TrimSpace(rawIP)); ip != nil {
 			ips = append(ips, ip)
@@ -561,11 +570,50 @@ const (
 	giteaContainerGID = 1000
 )
 
+// giteaNetworkName / giteaStaticIP give the container a stable address on a
+// dedicated bridge network. Rootless Podman does not expose the published port
+// on the host loopback, so the CLI reaches Gitea at this container IP; pinning
+// it means the IP is stable across restarts and can be baked into the TLS cert
+// SANs up front (no restart/IP race).
+const (
+	giteaNetworkName = "opencenter-gitea"
+	giteaStaticIP    = "10.89.7.2"
+	giteaNetworkCIDR = "10.89.7.0/24"
+)
+
+// ensureNetwork creates the dedicated bridge network with a fixed subnet if it
+// does not already exist, so the container can be given a stable --ip. Idempotent.
+func (s *Service) ensureNetwork(ctx context.Context) error {
+	runtime := s.commandRuntime()
+	if _, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: runtime,
+		Args: []string{"network", "inspect", giteaNetworkName},
+	}); err == nil {
+		return nil // already exists
+	}
+	if _, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: runtime,
+		Args: []string{"network", "create", "--subnet", giteaNetworkCIDR, giteaNetworkName},
+	}); err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "already exists") {
+			return nil
+		}
+		return fmt.Errorf("create gitea network: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) runContainer(ctx context.Context) error {
 	runtime := s.commandRuntime()
+	if err := s.ensureNetwork(ctx); err != nil {
+		return err
+	}
 	args := []string{
 		"run", "-d",
 		"--name", s.settings.ContainerName,
+		"--network", giteaNetworkName,
+		"--ip", giteaStaticIP,
 		"-v", fmt.Sprintf("%s:/data", s.layout.GiteaDataDir),
 		"-p", fmt.Sprintf("%d:3000", s.settings.HTTPPort),
 		"-p", fmt.Sprintf("%d:3001", s.settings.HTTPSPort),
@@ -760,47 +808,17 @@ func (s *Service) ensureUserToken(ctx context.Context, client *api.Client) (stri
 // reachableHosts returns the candidate hosts to probe for the Gitea API, in
 // preference order. localhost/127.0.0.1 work when the container's published
 // port is bound to the host loopback (Docker). Under rootless Podman the -p
-// mapping is not reachable via loopback, but the container is directly
-// reachable at its CNI IP (e.g. 10.88.0.x), so we also try that. The container
-// IP is added to the TLS cert SANs by ensureReachableCert before probing.
-func (s *Service) reachableHosts(ctx context.Context) []string {
-	hosts := []string{"localhost", "127.0.0.1"}
-	if ip := s.containerPrimaryIP(ctx); ip != "" {
-		hosts = append(hosts, ip)
-	}
-	return hosts
-}
-
-// containerPrimaryIP returns the first non-empty container IP address, or "".
-func (s *Service) containerPrimaryIP(ctx context.Context) string {
-	output, err := s.executor.Run(ctx, localdev.RunOptions{
-		Name: s.commandRuntime(),
-		Args: []string{"inspect", "--format",
-			"{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", s.settings.ContainerName},
-	})
-	if err != nil {
-		return ""
-	}
-	for _, f := range strings.Fields(string(output)) {
-		if ip := net.ParseIP(strings.TrimSpace(f)); ip != nil {
-			return ip.String()
-		}
-	}
-	return ""
+// mapping is not reachable via loopback, but the container is reachable at its
+// pinned static IP (giteaStaticIP), which is baked into the cert SANs.
+func (s *Service) reachableHosts() []string {
+	return []string{"localhost", "127.0.0.1", giteaStaticIP}
 }
 
 func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
-	// Reissue the cert to include the container IP as a SAN so a client that
-	// connects via the container IP (rootless Podman) still verifies against the
-	// local CA, then sync it into the container.
-	if err := s.ensureReachableCert(ctx); err != nil {
-		return nil, err
-	}
-
 	deadline := time.Now().Add(120 * time.Second)
 	var lastErr error
 	for {
-		for _, host := range s.reachableHosts(ctx) {
+		for _, host := range s.reachableHosts() {
 			client, err := api.NewClient(fmt.Sprintf("https://%s:%d", host, s.settings.HTTPSPort), s.layout.CACertPath)
 			if err != nil {
 				lastErr = err
@@ -814,7 +832,7 @@ func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
 			}
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for gitea on any of %v (last error: %v)", s.reachableHosts(ctx), lastErr)
+			return nil, fmt.Errorf("timed out waiting for gitea on any of %v (last error: %v)", s.reachableHosts(), lastErr)
 		}
 		select {
 		case <-ctx.Done():
@@ -822,27 +840,6 @@ func (s *Service) waitForAPI(ctx context.Context) (*api.Client, error) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-}
-
-// ensureReachableCert reissues the TLS certificate to include the running
-// container's IP as a SAN (in addition to localhost/127.0.0.1) and copies it
-// into the container, so clients connecting via the container IP verify against
-// the local CA. Best-effort: if the container IP cannot be determined the
-// existing localhost cert is left in place.
-func (s *Service) ensureReachableCert(ctx context.Context) error {
-	ip := s.containerPrimaryIP(ctx)
-	if ip == "" {
-		return nil
-	}
-	if err := s.writeCertificates([]string{ip}); err != nil {
-		return err
-	}
-	// Push the regenerated cert/key into the container and restart so Gitea
-	// serves the SAN-updated certificate.
-	if err := s.syncConfigIntoContainer(ctx); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *Service) connectKindNetwork(ctx context.Context) error {
