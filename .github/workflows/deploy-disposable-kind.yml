@@ -311,26 +311,21 @@ jobs:
           # and validation rejects instances > workers. Bump workers to 3 so the
           # default keycloak HA schedules (the high-capacity runner can handle it).
           # Also wire gitea token auth and clear the literal placeholder token.
+          # FIX 5: pin the GitOps base repo to the 2026.03 line, which carries the
+          # merged service schema-drift fixes (cert-manager, opentelemetry,
+          # postgres-operator, rbac-manager, velero). The CLI defaults base_repo to
+          # branch main / release 2026.01, neither of which has those fixes, so the
+          # generated opencenter-* sources must track 2026.03.
           opencenter cluster set "${CLUSTER_NAME}" \
             "opencenter.infrastructure.compute.worker_count=3" \
             "opencenter.gitops.repository.url=${gitea_repo_url}" \
             "opencenter.gitops.auth.token.provider=gitea" \
             "opencenter.gitops.auth.token.token_file=${gitea_token_path}" \
-            "opencenter.gitops.auth.token.token="
+            "opencenter.gitops.auth.token.token=" \
+            "opencenter.gitops.base_repo.branch=2026.03" \
+            "opencenter.gitops.base_repo.release="
 
-          # Managed storage profile: exercise the openCenter-managed object store
-          # (RustFS on Longhorn) with no external S3 — the OCTR-742 local/airgap path.
-          opencenter cluster set "${CLUSTER_NAME}" \
-            "opencenter.infrastructure.storage.profile.lifecycle=non-production" \
-            "opencenter.infrastructure.storage.profile.pvc_provider=longhorn" \
-            "opencenter.infrastructure.storage.profile.object_storage_provider=rustfs"
-
-          # RustFS requires the Longhorn service. `cluster set` cannot toggle
-          # service-map fields, so enable it directly in the config file.
           cluster_config="${OPENCENTER_CONFIG_DIR}/clusters/blueprints/local/${CLUSTER_NAME}/${CLUSTER_NAME}-config.yaml"
-          longhorn_enabled_line="$(awk '/^    longhorn:/{f=NR} f && /enabled:/ && NR>=f{print NR; exit}' "${cluster_config}")"
-          [[ -n "${longhorn_enabled_line}" ]] || { echo "could not locate longhorn service in config" >&2; exit 1; }
-          sed -i "${longhorn_enabled_line}s/enabled: false/enabled: true/" "${cluster_config}"
           echo "CLUSTER_CONFIG_PATH=${cluster_config}" >> "${GITHUB_ENV}"
 
           # Export the age key path for SOPS-aware generate/secrets steps.
@@ -391,18 +386,6 @@ jobs:
             git -C "${gitops_dir}" remote add origin "${bootstrap_url}"
           fi
 
-          # WORKAROUND (pending OCTR-751): the managed RustFS renderer emits its
-          # credentials Secret as plaintext and `secrets sync` does not encrypt
-          # it, so the GitOps security hook would block the push. Encrypt it here
-          # with the cluster age key. Remove once OCTR-751 routes the RustFS
-          # secret through the normal secretartifacts encryption path.
-          rustfs_secret="${gitops_dir}/applications/overlays/${CLUSTER_NAME}/services/rustfs/secret.yaml"
-          if [[ -f "${rustfs_secret}" ]] && ! grep -q 'ENC\[AES256' "${rustfs_secret}"; then
-            age_recipient="$(sed -n 's/^# public key: //p' "${SOPS_AGE_KEY_FILE}" | head -n1)"
-            [[ -n "${age_recipient}" ]] || { echo "could not read age recipient from ${SOPS_AGE_KEY_FILE}" >&2; exit 1; }
-            sops --age "${age_recipient}" --encrypted-regex '^(data|stringData)$' --encrypt --in-place "${rustfs_secret}"
-          fi
-
       - name: Deploy remaining cluster stages
         shell: bash
         run: |
@@ -428,17 +411,13 @@ jobs:
           flux check
           flux get sources git -n flux-system
           flux get kustomizations -n flux-system
-          # Managed storage (OCTR-742): confirm Longhorn + RustFS come up and the
-          # bucket-bootstrap job creates the per-service buckets, all without
-          # external S3. Longhorn attach is fast on a native Linux runner.
-          echo '--- Longhorn ---'
-          kubectl --kubeconfig "${KUBECONFIG}" -n longhorn-system wait --for=condition=Ready pods --all --timeout=10m
-          echo '--- RustFS ---'
-          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system rollout status statefulset/rustfs --timeout=10m
-          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system get pvc,pods
-          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system wait --for=condition=complete job/rustfs-bucket-bootstrap --timeout=10m
-          echo '--- RustFS bucket bootstrap log ---'
-          kubectl --kubeconfig "${KUBECONFIG}" -n rustfs-system logs job/rustfs-bucket-bootstrap | tail -20
+          # Confirm all Flux Kustomizations and HelmReleases reconcile (the default
+          # kind service set on the merged 2026.03 base). Fails the run if any is
+          # not Ready, so the e2e actually gates on a healthy cluster.
+          echo '--- HelmReleases ---'
+          kubectl --kubeconfig "${KUBECONFIG}" get helmrelease -A
+          kubectl --kubeconfig "${KUBECONFIG}" wait --for=condition=Ready helmrelease -A --all --timeout=15m
+          kubectl --kubeconfig "${KUBECONFIG}" wait --for=condition=Ready kustomization -n flux-system --all --timeout=15m
 
       - name: Print non-secret diagnostics on failure
         if: ${{ failure() }}

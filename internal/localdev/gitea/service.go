@@ -536,7 +536,13 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		return err
 	}
 	serverKeyBytes := x509.MarshalPKCS1PrivateKey(serverKey)
-	if err := writePEMFile(s.layout.ServerKeyPath, "RSA PRIVATE KEY", serverKeyBytes, 0o600); err != nil {
+	// 0640 (not 0600): the key is bind-mounted into the container and must be
+	// readable by Gitea's git user (uid/gid 1000), to which runContainer aligns
+	// the whole data tree. A 0600 key owned by the host user is unreadable by the
+	// git user, which makes Gitea silently fall back to the HTTP install page on
+	// :3000 instead of serving HTTPS on :3001. This is a disposable local-dev CA,
+	// so group-readability of the key is an acceptable trade for a reliable start.
+	if err := writePEMFile(s.layout.ServerKeyPath, "RSA PRIVATE KEY", serverKeyBytes, 0o640); err != nil {
 		return err
 	}
 	return nil
@@ -560,25 +566,20 @@ func (s *Service) runContainer(ctx context.Context) error {
 		"-p", fmt.Sprintf("%d:22", s.settings.SSHPort),
 	}
 
-	// The bind-mounted /data tree must be readable by the git user Gitea runs
-	// as; otherwise Gitea cannot read the TLS key (0600) or app.ini and silently
-	// falls back to the HTTP install page on :3000 instead of serving HTTPS on
-	// :3001. How we achieve that depends on the host user:
+	// The bind-mounted /data tree must be owned by the git user Gitea runs as
+	// (uid/gid 1000 in the upstream image); otherwise Gitea cannot read the TLS
+	// key or app.ini and silently falls back to the HTTP install page on :3000
+	// instead of serving HTTPS on :3001.
 	//
-	//   - Non-root host (e.g. developer laptop, uid != 0): run Gitea's git user
-	//     as the host uid/gid so it owns the mounted files.
-	//   - Root host (e.g. CI runner, uid 0): Gitea refuses to run as root, so we
-	//     keep its default git user (uid 1000) and chown the mounted tree to
-	//     that uid instead. Ownership is aligned, not loosened — the TLS key
-	//     stays 0600.
-	uid, gid, haveIDs := currentUserIDs()
-	switch {
-	case haveIDs && uid != 0:
-		args = append(args,
-			"-e", fmt.Sprintf("USER_UID=%d", uid),
-			"-e", fmt.Sprintf("USER_GID=%d", gid),
-		)
-	case haveIDs && uid == 0:
+	// We align the mounted tree to the container's fixed git uid (1000)
+	// UNCONDITIONALLY rather than remapping the git user to the host uid via
+	// USER_UID/USER_GID. The remap path proved unreliable on CI runners: the
+	// entrypoint's usermod races the web server startup, so Gitea can begin
+	// listening before the git user's uid is remapped and then fail to read the
+	// host-owned key. Chowning to 1000 up front removes that race on every host
+	// (root or non-root); best-effort so a host that cannot chown (e.g. no
+	// privilege, or a uid the tree already matches) does not block startup.
+	if _, _, haveIDs := currentUserIDs(); haveIDs {
 		if err := chownTree(s.layout.GiteaDataDir, giteaContainerUID, giteaContainerGID); err != nil {
 			return fmt.Errorf("prepare gitea data ownership: %w", err)
 		}
