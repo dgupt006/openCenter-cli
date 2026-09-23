@@ -267,51 +267,6 @@ export KUBECONFIG=~/dev-cluster-gitops/infrastructure/clusters/dev-cluster/kubec
 watch -n 2 'kubectl get pods -A'
 ```
 
-## Optional: Low-Resource Longhorn and RustFS Smoke Profile
-
-Use the managed RustFS profile only for non-production Kind validation. Longhorn supplies the RustFS PVC; it does not turn Longhorn itself into object storage. This exercise deploys the in-cluster RustFS StatefulSet, creates the generated buckets, and configures enabled S3 consumers to use the cluster-local endpoint.
-
-> **Resource note:** This is intentionally not part of the default Kind tutorial. Run it on a disposable Docker environment with at least 4 CPUs, 12 GiB Docker memory, and 30 GiB free disk. It is not supported for production, Edge Production, disconnected production, or air-gapped production.
-
-Before generating, enable Longhorn and select the profile:
-
-```yaml
-opencenter:
-  infrastructure:
-    storage:
-      profile:
-        lifecycle: non-production
-        pvc_provider: longhorn
-        object_storage_provider: rustfs
-  services:
-    longhorn:
-      enabled: true
-    loki:
-      enabled: true
-    tempo:
-      enabled: true
-    velero:
-      enabled: true
-```
-
-Then validate, generate, and deploy serially:
-
-```bash
-opencenter cluster validate dev-cluster --validation offline
-opencenter cluster generate dev-cluster
-opencenter cluster deploy dev-cluster
-```
-
-After Flux reconciliation, verify the workload, generated bucket job, and selected consumers:
-
-```bash
-kubectl -n rustfs-system get statefulset,pods,jobs
-kubectl -n rustfs-system logs job/rustfs-bucket-bootstrap
-flux get kustomizations -A | grep -E 'rustfs|loki|tempo|velero'
-```
-
-For production and air-gapped deployments, use an externally managed S3-compatible service instead (Ceph RGW is the reference self-hosted option), mirror all required images with `openCenter-AirGap`, and validate that external S3 credentials, endpoint, retention, and recovery procedures are available. Do not migrate a Swift configuration in place: convert every enabled bulk-data service to S3-compatible fields first.
-
 ## Step 6: Verify Cluster
 
 Verify the cluster is working:

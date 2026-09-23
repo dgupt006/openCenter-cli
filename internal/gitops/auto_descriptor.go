@@ -225,9 +225,6 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 			extraDeps = append(extraDeps, cd.Name)
 		}
 	}
-	if v2.UsesManagedObjectStorage(&cfg) && isManagedObjectStorageConsumer(serviceName) {
-		extraDeps = append(extraDeps, "rustfs")
-	}
 
 	generatedResourceFiles := append([]string{}, spec.GeneratedResourceFiles...)
 	if secretArtifactTargetMaterialized(cfg, serviceName, artifacts) && !containsString(generatedResourceFiles, "secret.yaml") {
@@ -255,7 +252,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		EnterpriseRegistry:     spec.EnterpriseRegistry,
 		GeneratedResourceFiles: generatedResourceFiles,
 		ExtraDependencies:      extraDeps,
-		OverrideDependsOn:      managedObjectStorageDependencies(cfg, serviceName, spec.OverrideDependsOn),
+		OverrideDependsOn:      append([]string{}, spec.OverrideDependsOn...),
 		OverrideValues:         spec.OverrideValues,
 		OverrideValuesRenderer: spec.OverrideValuesRenderer,
 		KustomizationContent:   spec.KustomizationContent,

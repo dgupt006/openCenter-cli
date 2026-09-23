@@ -29,13 +29,13 @@ persistence:
     imageChartStorage:
         type: s3
         s3:
-            region: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} us-east-1{{ else }} {{ .OpenCenter.Meta.Region }}{{ end }}
-            bucket: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} {{ printf "%s-harbor" .OpenCenter.Cluster.ClusterName }}{{ else }} {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}{{ end }}
+            region: {{ .OpenCenter.Meta.Region }}
+            bucket: {{ $harbor.S3Bucket | default (printf "%s-harbor" .OpenCenter.Cluster.ClusterName) }}
             accesskey: {{ .GetHarborS3AccessKey }}
             secretkey: {{ .GetHarborS3SecretKey }}
-            regionendpoint: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} http://rustfs.rustfs-system.svc.cluster.local:9000{{ else }} {{ $harbor.S3Endpoint }}{{ end }}
+            regionendpoint: {{ $harbor.S3Endpoint }}
             v4auth: true
-            secure: {{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }} false{{ else }} true{{ end }}
+            secure: true
             rootdirectory: images
 harborAdminPassword: {{ .Secrets.Harbor.AdminPassword | quote }}
 metrics:

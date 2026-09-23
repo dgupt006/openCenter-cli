@@ -78,39 +78,8 @@ func (c Config) EnabledCertManagerCloudflareCredentials() map[string]CertManager
 	return result
 }
 
-const managedRustFSEndpoint = "http://rustfs.rustfs-system.svc.cluster.local:9000"
-
-// ManagedObjectStorageEndpoint returns the cluster-local RustFS endpoint for
-// the managed profile. External S3 endpoints remain service configuration.
-func (c Config) ManagedObjectStorageEndpoint() string {
-	if UsesManagedObjectStorage(&c) {
-		return managedRustFSEndpoint
-	}
-	return ""
-}
-
-// ManagedObjectStorageBucket returns the stable bucket assigned to a platform
-// service under the managed RustFS profile.
-func (c Config) ManagedObjectStorageBucket(service string) string {
-	name := c.ClusterName()
-	if name == "" {
-		name = "opencenter"
-	}
-	return name + "-" + strings.TrimSpace(service)
-}
-
-func (c Config) managedObjectStorageCredentials() (accessKey, secretKey string, managed bool) {
-	if !UsesManagedObjectStorage(&c) {
-		return "", "", false
-	}
-	return c.Secrets.RustFS.AccessKey, c.Secrets.RustFS.SecretKey, true
-}
-
 // GetLokiS3Credentials resolves Loki S3 credentials.
 func (c Config) GetLokiS3Credentials() (accessKey, secretKey string) {
-	if accessKey, secretKey, managed := c.managedObjectStorageCredentials(); managed {
-		return accessKey, secretKey
-	}
 	if c.Secrets.Loki.S3AccessKeyID != "" && c.Secrets.Loki.S3SecretAccessKey != "" {
 		return c.Secrets.Loki.S3AccessKeyID, c.Secrets.Loki.S3SecretAccessKey
 	}
@@ -120,9 +89,6 @@ func (c Config) GetLokiS3Credentials() (accessKey, secretKey string) {
 
 // GetTempoS3Credentials resolves Tempo S3 credentials.
 func (c Config) GetTempoS3Credentials() (accessKey, secretKey string) {
-	if accessKey, secretKey, managed := c.managedObjectStorageCredentials(); managed {
-		return accessKey, secretKey
-	}
 	if c.Secrets.Tempo.AccessKey != "" && c.Secrets.Tempo.SecretKey != "" {
 		return c.Secrets.Tempo.AccessKey, c.Secrets.Tempo.SecretKey
 	}
@@ -132,35 +98,11 @@ func (c Config) GetTempoS3Credentials() (accessKey, secretKey string) {
 
 // GetHarborS3Credentials resolves Harbor S3 credentials.
 func (c Config) GetHarborS3Credentials() (accessKey, secretKey string) {
-	if accessKey, secretKey, managed := c.managedObjectStorageCredentials(); managed {
-		return accessKey, secretKey
-	}
 	if c.Secrets.Harbor.S3AccessKeyID != "" && c.Secrets.Harbor.S3SecretAccessKey != "" {
 		return c.Secrets.Harbor.S3AccessKeyID, c.Secrets.Harbor.S3SecretAccessKey
 	}
 
 	return c.GetAWSApplicationCredentials()
-}
-
-// GetMimirS3Credentials resolves Mimir S3 credentials.
-func (c Config) GetMimirS3Credentials() (accessKey, secretKey string) {
-	if accessKey, secretKey, managed := c.managedObjectStorageCredentials(); managed {
-		return accessKey, secretKey
-	}
-	if c.Secrets.Mimir.S3AccessKeyID != "" && c.Secrets.Mimir.S3SecretAccessKey != "" {
-		return c.Secrets.Mimir.S3AccessKeyID, c.Secrets.Mimir.S3SecretAccessKey
-	}
-	return c.GetAWSApplicationCredentials()
-}
-
-func (c Config) GetMimirS3AccessKey() string {
-	accessKey, _ := c.GetMimirS3Credentials()
-	return accessKey
-}
-
-func (c Config) GetMimirS3SecretKey() string {
-	_, secretKey := c.GetMimirS3Credentials()
-	return secretKey
 }
 
 // GetLokiSwiftPassword returns the Loki Swift Keystone password for username/password auth.

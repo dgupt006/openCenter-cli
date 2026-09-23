@@ -104,7 +104,6 @@ type SecretsConfig struct {
 	CertManager    CertManagerSecrets `yaml:"cert_manager,omitempty" json:"cert_manager,omitempty"`
 	Loki           LokiSecrets        `yaml:"loki,omitempty" json:"loki,omitempty"`
 	Mimir          MimirSecrets       `yaml:"mimir,omitempty" json:"mimir,omitempty"`
-	RustFS         RustFSSecrets      `yaml:"rustfs,omitempty" json:"rustfs,omitempty"`
 	Keycloak       KeycloakSecrets    `yaml:"keycloak,omitempty" json:"keycloak,omitempty"`
 	Headlamp       HeadlampSecrets    `yaml:"headlamp,omitempty" json:"headlamp,omitempty"`
 	WeaveGitOps    WeaveGitOpsSecrets `yaml:"weave_gitops,omitempty" json:"weave_gitops,omitempty"`
@@ -211,14 +210,7 @@ type HarborSecrets struct {
 }
 
 type MimirSecrets struct {
-	SwiftApplicationCredentialSecret string `yaml:"swift_application_credential_secret,omitempty" json:"swift_application_credential_secret,omitempty" jsonschema:"secret=true,description=Deprecated Swift application credential secret for Mimir blocks storage"`
-	S3AccessKeyID                    string `yaml:"s3_access_key_id,omitempty" json:"s3_access_key_id,omitempty" jsonschema:"secret=true,description=S3 access key ID for Mimir blocks storage"`
-	S3SecretAccessKey                string `yaml:"s3_secret_access_key,omitempty" json:"s3_secret_access_key,omitempty" jsonschema:"secret=true,description=S3 secret access key for Mimir blocks storage"`
-}
-
-type RustFSSecrets struct {
-	AccessKey string `yaml:"access_key,omitempty" json:"access_key,omitempty" jsonschema:"secret=true,description=Generated RustFS S3 access key"`
-	SecretKey string `yaml:"secret_key,omitempty" json:"secret_key,omitempty" jsonschema:"secret=true,description=Generated RustFS S3 secret key"`
+	SwiftApplicationCredentialSecret string `yaml:"swift_application_credential_secret,omitempty" json:"swift_application_credential_secret,omitempty" jsonschema:"secret=true,description=Swift application credential secret for Mimir blocks storage"`
 }
 
 type TempoSecrets struct {

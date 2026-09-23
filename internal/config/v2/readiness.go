@@ -55,7 +55,6 @@ func ValidateReadiness(cfg *Config) ReadinessReport {
 	r.validateNetworkPlugin(cfg)
 	r.validateGitOps(cfg)
 	r.validateServiceSchedulingCapacity(cfg)
-	r.validateStorageProfile(cfg)
 	r.validateServiceSecrets(cfg)
 
 	return r.report
@@ -641,12 +640,6 @@ func configuredSchedulableLinuxWorkers(cfg *Config) int {
 	return capacity
 }
 
-func (r *readinessBuilder) validateStorageProfile(cfg *Config) {
-	for _, issue := range storagePolicyIssues(cfg) {
-		r.addError(CategoryServices, issue.path, issue.message, "Use the supported external S3 or non-production Longhorn/RustFS storage profile.")
-	}
-}
-
 func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	if serviceEnabled(cfg, "keycloak") {
 		if !oidcClientSecretsProvidedInternally(cfg) {
@@ -663,7 +656,6 @@ func (r *readinessBuilder) validateServiceSecrets(cfg *Config) {
 	}
 	r.validateCertManagerSecrets(cfg)
 	r.validateEtcdBackupSecrets(cfg)
-	r.validateRustFSSecrets(cfg)
 	r.validateLokiSecrets(cfg)
 	r.validateTempoSecrets(cfg)
 	r.validateMimirSecrets(cfg)
@@ -723,16 +715,8 @@ func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 	}
 }
 
-func (r *readinessBuilder) validateRustFSSecrets(cfg *Config) {
-	if !UsesManagedObjectStorage(cfg) {
-		return
-	}
-	r.requireSecret("secrets.rustfs.access_key", cfg.Secrets.RustFS.AccessKey, "Managed RustFS requires a generated access key.")
-	r.requireSecret("secrets.rustfs.secret_key", cfg.Secrets.RustFS.SecretKey, "Managed RustFS requires a generated secret key.")
-}
-
 func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "etcd-backup") || UsesManagedObjectStorage(cfg) {
+	if !serviceEnabled(cfg, "etcd-backup") {
 		return
 	}
 	service := configuredService(cfg, "etcd-backup")
@@ -753,7 +737,7 @@ func (r *readinessBuilder) validateEtcdBackupSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "loki") || UsesManagedObjectStorage(cfg) {
+	if !serviceEnabled(cfg, "loki") {
 		return
 	}
 	switch ResolveObjectStorageBackend(cfg, "loki") {
@@ -771,7 +755,7 @@ func (r *readinessBuilder) validateLokiSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "tempo") || UsesManagedObjectStorage(cfg) {
+	if !serviceEnabled(cfg, "tempo") {
 		return
 	}
 	switch ResolveObjectStorageBackend(cfg, "tempo") {
@@ -789,18 +773,10 @@ func (r *readinessBuilder) validateTempoSecrets(cfg *Config) {
 }
 
 func (r *readinessBuilder) validateMimirSecrets(cfg *Config) {
-	if !serviceEnabled(cfg, "mimir") || UsesManagedObjectStorage(cfg) {
+	if !serviceEnabled(cfg, "mimir") {
 		return
 	}
-	mimir, _ := configuredService(cfg, "mimir").(*services.MimirConfig)
-	if mimir == nil {
-		r.addError(CategoryServices, "opencenter.services.mimir", "Mimir has unexpected configuration type.", "Use the typed Mimir S3 configuration.")
-		return
-	}
-	r.requireS3Endpoint("opencenter.services.mimir.s3_endpoint", mimir.S3Endpoint, "Mimir S3 storage requires a configured endpoint.")
-	accessKey, secretKey := cfg.GetMimirS3Credentials()
-	r.requireSecret("secrets.mimir.s3_access_key_id", accessKey, "Mimir S3 storage requires an access key ID.")
-	r.requireSecret("secrets.mimir.s3_secret_access_key", secretKey, "Mimir S3 storage requires a secret access key.")
+	r.requireSecret("secrets.mimir.swift_application_credential_secret", cfg.GetMimirSwiftApplicationCredentialSecret(), "Mimir Swift blocks storage requires an application credential secret.")
 }
 
 func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
@@ -808,16 +784,14 @@ func (r *readinessBuilder) validateHarborSecrets(cfg *Config) {
 		return
 	}
 	harbor, _ := configuredService(cfg, "harbor").(*services.HarborConfig)
-	if !UsesManagedObjectStorage(cfg) {
-		if harbor != nil {
-			r.requireS3Endpoint("opencenter.services.harbor.s3_endpoint", harbor.S3Endpoint, "Harbor S3 storage requires a configured endpoint.")
-		}
-		r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
-		r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
+	if harbor != nil {
+		r.requireS3Endpoint("opencenter.services.harbor.s3_endpoint", harbor.S3Endpoint, "Harbor S3 storage requires a configured endpoint.")
 	}
 	r.requireSecret("secrets.harbor.admin_password", cfg.Secrets.Harbor.AdminPassword, "Harbor admin password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.registry_password", cfg.Secrets.Harbor.RegistryPassword, "Harbor registry password is required when Harbor is enabled.")
 	r.requireSecret("secrets.harbor.database_password", cfg.Secrets.Harbor.DatabasePassword, "Harbor database password is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.s3_access_key_id", cfg.GetHarborS3AccessKey(), "Harbor S3 access key is required when Harbor is enabled.")
+	r.requireSecret("secrets.harbor.s3_secret_access_key", cfg.GetHarborS3SecretKey(), "Harbor S3 secret access key is required when Harbor is enabled.")
 }
 
 func (r *readinessBuilder) requireS3Endpoint(path, value, message string) {

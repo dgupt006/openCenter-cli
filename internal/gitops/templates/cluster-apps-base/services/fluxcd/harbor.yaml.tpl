@@ -10,10 +10,6 @@ spec:
       namespace: flux-system
     - name: harbor-namespace
       namespace: flux-system
-{{- if eq .OpenCenter.Infrastructure.Storage.Profile.ObjectStorageProvider "rustfs" }}
-    - name: rustfs
-      namespace: flux-system
-{{- end }}
   interval: 5m
   retryInterval: 1m
   timeout: 10m

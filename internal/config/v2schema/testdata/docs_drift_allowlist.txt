@@ -123,6 +123,7 @@ docs/reference/configuration-schema.md:opencenter.gitops.git_branch
 docs/reference/configuration-schema.md:opencenter.gitops.gitops_base_repo
 docs/reference/configuration-schema.md:opencenter.gitops.gitops_base_release
 docs/reference/configuration-schema.md:opencenter.gitops.gitops_branch
+docs/reference/configuration-schema.md:opencenter.storage
 docs/reference/configuration-schema.md:secrets.global.openstack
 docs/reference/configuration-schema.md:opencenter.infrastructure.ssh_user
 docs/reference/configuration-schema.md:opencenter.infrastructure.node_naming.worker

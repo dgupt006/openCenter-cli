@@ -2442,33 +2442,6 @@
                 "master_volume_type": {
                   "type": "string"
                 },
-                "profile": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "lifecycle": {
-                      "enum": [
-                        "production",
-                        "non-production"
-                      ],
-                      "type": "string"
-                    },
-                    "object_storage_provider": {
-                      "enum": [
-                        "external-s3",
-                        "rustfs"
-                      ],
-                      "type": "string"
-                    },
-                    "pvc_provider": {
-                      "enum": [
-                        "external",
-                        "longhorn"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
                 "worker_volume_delete_on_termination": {
                   "type": "boolean"
                 },
@@ -3890,21 +3863,6 @@
                   "type": "object"
                 },
                 "namespace": {
-                  "type": "string"
-                },
-                "s3_bucket_name": {
-                  "type": "string"
-                },
-                "s3_endpoint": {
-                  "type": "string"
-                },
-                "s3_force_path_style": {
-                  "type": "boolean"
-                },
-                "s3_insecure": {
-                  "type": "boolean"
-                },
-                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -5974,21 +5932,6 @@
                   "type": "object"
                 },
                 "namespace": {
-                  "type": "string"
-                },
-                "s3_bucket_name": {
-                  "type": "string"
-                },
-                "s3_endpoint": {
-                  "type": "string"
-                },
-                "s3_force_path_style": {
-                  "type": "boolean"
-                },
-                "s3_insecure": {
-                  "type": "boolean"
-                },
-                "s3_region": {
                   "type": "string"
                 },
                 "source": {
@@ -8136,21 +8079,6 @@
                 "namespace": {
                   "type": "string"
                 },
-                "s3_bucket_name": {
-                  "type": "string"
-                },
-                "s3_endpoint": {
-                  "type": "string"
-                },
-                "s3_force_path_style": {
-                  "type": "boolean"
-                },
-                "s3_insecure": {
-                  "type": "boolean"
-                },
-                "s3_region": {
-                  "type": "string"
-                },
                 "source": {
                   "additionalProperties": false,
                   "properties": {
@@ -9155,12 +9083,6 @@
         "mimir": {
           "additionalProperties": false,
           "properties": {
-            "s3_access_key_id": {
-              "type": "string"
-            },
-            "s3_secret_access_key": {
-              "type": "string"
-            },
             "swift_application_credential_secret": {
               "type": "string"
             }
@@ -9184,18 +9106,6 @@
                 }
               },
               "type": "object"
-            }
-          },
-          "type": "object"
-        },
-        "rustfs": {
-          "additionalProperties": false,
-          "properties": {
-            "access_key": {
-              "type": "string"
-            },
-            "secret_key": {
-              "type": "string"
             }
           },
           "type": "object"

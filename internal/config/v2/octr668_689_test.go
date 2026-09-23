@@ -62,16 +62,76 @@ func TestDefaultStorageClassSeparatesKubernetesClassFromBlockVolumeType(t *testi
 	}
 }
 
-func TestValidateForDeploymentMatchesReadinessForSwiftMigrationError(t *testing.T) {
-	cfg := readinessTestConfigForDeployment(t)
-	cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).StorageType = "swift"
+func TestValidateForDeploymentMatchesReadinessForSelectedLokiTempoBackends(t *testing.T) {
+	tests := []struct {
+		name          string
+		configure     func(*Config)
+		wantPaths     []string
+		dontWantPaths []string
+	}{
+		{
+			name: "loki s3 and tempo swift",
+			configure: func(cfg *Config) {
+				cfg.OpenCenter.Services["loki"].(*services.LokiConfig).StorageType = "s3"
+				cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).StorageType = "swift"
+				cfg.Secrets.Loki.S3AccessKeyID = PlaceholderSecret
+				cfg.Secrets.Loki.S3SecretAccessKey = PlaceholderSecret
+				cfg.Secrets.Loki.SwiftApplicationCredentialSecret = "loki-swift-secret"
+				cfg.Secrets.Tempo.SwiftApplicationCredentialSecret = PlaceholderSecret
+				cfg.Secrets.Tempo.AccessKey = "tempo-s3-access"
+				cfg.Secrets.Tempo.SecretKey = "tempo-s3-secret"
+			},
+			wantPaths: []string{
+				"secrets.loki.s3_access_key_id",
+				"secrets.loki.s3_secret_access_key",
+				"secrets.tempo.swift_application_credential_secret",
+			},
+			dontWantPaths: []string{
+				"secrets.loki.swift_application_credential_secret",
+				"secrets.tempo.access_key",
+				"secrets.tempo.secret_key",
+			},
+		},
+		{
+			name: "global application credentials satisfy selected s3 backends",
+			configure: func(cfg *Config) {
+				cfg.OpenCenter.Services["loki"].(*services.LokiConfig).StorageType = "s3"
+				cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).StorageType = "s3"
+				cfg.Secrets.Global.AWS.Application.AccessKey = "global-access"
+				cfg.Secrets.Global.AWS.Application.SecretAccessKey = "global-secret"
+				cfg.Secrets.Loki.S3AccessKeyID = ""
+				cfg.Secrets.Loki.S3SecretAccessKey = ""
+				cfg.Secrets.Tempo.AccessKey = ""
+				cfg.Secrets.Tempo.SecretKey = ""
+				cfg.Secrets.Loki.SwiftApplicationCredentialSecret = PlaceholderSecret
+				cfg.Secrets.Tempo.SwiftApplicationCredentialSecret = PlaceholderSecret
+			},
+		},
+	}
 
-	readiness := ValidateReadiness(cfg)
-	assertIssue(t, readiness, SeverityError, CategoryServices, "opencenter.services.tempo.storage_type")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := readinessTestConfigForDeployment(t)
+			tt.configure(cfg)
 
-	err := ValidateForDeployment(cfg)
-	if err == nil || !strings.Contains(err.Error(), "opencenter.services.tempo.storage_type") || !strings.Contains(err.Error(), "Swift is no longer supported") {
-		t.Fatalf("expected matching Swift migration error from deployment validation, got %v", err)
+			readiness := ValidateReadiness(cfg)
+			deploymentErr := ValidateForDeployment(cfg)
+			deploymentText := ""
+			if deploymentErr != nil {
+				deploymentText = deploymentErr.Error()
+			}
+
+			for _, path := range tt.wantPaths {
+				if !readinessHasPath(readiness, path) || !strings.Contains(deploymentText, path) {
+					t.Errorf("selected backend path %q not reported by both validators; readiness=%v deployment=%q", path, readinessHasPath(readiness, path), deploymentText)
+				}
+			}
+			for _, path := range tt.dontWantPaths {
+				if readinessHasPath(readiness, path) || strings.Contains(deploymentText, path) {
+					t.Errorf("unused backend path %q reported; readiness=%v deployment=%q", path, readinessHasPath(readiness, path), deploymentText)
+				}
+			}
+		})
 	}
 }
 
@@ -96,16 +156,35 @@ func readinessHasPath(report ReadinessReport, path string) bool {
 	return false
 }
 
-func TestResolveObjectStorageBackendAlwaysUsesPortableS3Contract(t *testing.T) {
-	for _, provider := range []string{"openstack", "kind"} {
-		for _, serviceName := range []string{"loki", "tempo"} {
-			t.Run(provider+" "+serviceName, func(t *testing.T) {
-				cfg := validReadinessConfig(t, provider)
-				if got := ResolveObjectStorageBackend(cfg, serviceName); got != "s3" {
-					t.Fatalf("ResolveObjectStorageBackend() = %q, want s3", got)
-				}
-			})
-		}
+func TestResolveObjectStorageBackendProviderDefaultsAndExplicitOverrides(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		service  string
+		explicit string
+		want     string
+	}{
+		{name: "openstack loki omitted", provider: "openstack", service: "loki", want: "swift"},
+		{name: "openstack tempo omitted", provider: "openstack", service: "tempo", want: "swift"},
+		{name: "generic loki omitted", provider: "kind", service: "loki", want: "s3"},
+		{name: "generic tempo omitted", provider: "kind", service: "tempo", want: "s3"},
+		{name: "openstack explicit s3", provider: "openstack", service: "loki", explicit: "S3", want: "s3"},
+		{name: "generic explicit swift", provider: "kind", service: "tempo", explicit: "SWIFT", want: "swift"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validReadinessConfig(t, tt.provider)
+			switch tt.service {
+			case "loki":
+				cfg.OpenCenter.Services["loki"].(*services.LokiConfig).StorageType = tt.explicit
+			case "tempo":
+				cfg.OpenCenter.Services["tempo"].(*services.TempoConfig).StorageType = tt.explicit
+			}
+			if got := ResolveObjectStorageBackend(cfg, tt.service); got != tt.want {
+				t.Fatalf("ResolveObjectStorageBackend() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -100,33 +100,3 @@ func schemaObject(root map[string]any, path ...string) map[string]any {
 	}
 	return object
 }
-
-func TestCheckedInSchemaContainsManagedStorageProfileAndMimirS3(t *testing.T) {
-	root := repoRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, "schema", "opencenter-v2.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema map[string]any
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatal(err)
-	}
-	profile := schemaObject(schema, "properties", "opencenter", "properties", "infrastructure", "properties", "storage", "properties", "profile", "properties")
-	for _, field := range []string{"lifecycle", "pvc_provider", "object_storage_provider"} {
-		if _, ok := profile[field]; !ok {
-			t.Fatalf("schema missing storage profile field %q", field)
-		}
-	}
-	rustFS := schemaObject(schema, "properties", "secrets", "properties", "rustfs", "properties")
-	for _, field := range []string{"access_key", "secret_key"} {
-		if _, ok := rustFS[field]; !ok {
-			t.Fatalf("schema missing secrets.rustfs.%s", field)
-		}
-	}
-	mimir := schemaObject(schema, "properties", "opencenter", "properties", "services", "properties", "mimir", "properties")
-	for _, field := range []string{"s3_endpoint", "s3_bucket_name", "s3_force_path_style", "s3_insecure"} {
-		if _, ok := mimir[field]; !ok {
-			t.Fatalf("schema missing opencenter.services.mimir.%s", field)
-		}
-	}
-}

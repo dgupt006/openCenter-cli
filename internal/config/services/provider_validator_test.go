@@ -154,8 +154,16 @@ func TestValidateLokiStorageProvider_AutoSelect(t *testing.T) {
 			infraProvider: ProviderAWS,
 			expected:      "s3",
 		},
-		{name: "OpenStack auto-selects S3", infraProvider: ProviderOpenStack, expected: "s3"},
-		{name: "GCP auto-selects S3", infraProvider: ProviderGCP, expected: "s3"},
+		{
+			name:          "OpenStack auto-selects Swift",
+			infraProvider: ProviderOpenStack,
+			expected:      "swift",
+		},
+		{
+			name:          "GCP auto-selects GCS",
+			infraProvider: ProviderGCP,
+			expected:      "gcs",
+		},
 	}
 
 	for _, tt := range tests {
@@ -228,7 +236,7 @@ func TestValidateServiceProviders_MultipleErrors(t *testing.T) {
 		},
 		"loki": &LokiConfig{
 			BaseConfig:  BaseConfig{Enabled: true},
-			StorageType: "s3",
+			StorageType: "swift", // Invalid for AWS (but we're using OpenStack)
 		},
 	}
 

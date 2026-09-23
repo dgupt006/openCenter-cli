@@ -110,7 +110,7 @@ func TestGetDefaultProvider_OpenStackDNS_WithoutDesignate(t *testing.T) {
 	}
 }
 
-func TestGetDefaultProvider_LokiStorageAlwaysUsesS3(t *testing.T) {
+func TestGetDefaultProvider_LokiStorage(t *testing.T) {
 	registry := GetProviderRegistry()
 
 	tests := []struct {
@@ -123,9 +123,21 @@ func TestGetDefaultProvider_LokiStorageAlwaysUsesS3(t *testing.T) {
 			infraProvider: ProviderAWS,
 			expected:      StorageProviderS3,
 		},
-		{name: "OpenStack defaults to S3", infraProvider: ProviderOpenStack, expected: StorageProviderS3},
-		{name: "GCP defaults to S3", infraProvider: ProviderGCP, expected: StorageProviderS3},
-		{name: "Azure defaults to S3", infraProvider: ProviderAzure, expected: StorageProviderS3},
+		{
+			name:          "OpenStack defaults to Swift",
+			infraProvider: ProviderOpenStack,
+			expected:      StorageProviderSwift,
+		},
+		{
+			name:          "GCP defaults to GCS",
+			infraProvider: ProviderGCP,
+			expected:      StorageProviderGCS,
+		},
+		{
+			name:          "Azure defaults to Azure",
+			infraProvider: ProviderAzure,
+			expected:      StorageProviderAzure,
+		},
 	}
 
 	for _, tt := range tests {
@@ -223,10 +235,10 @@ func TestValidateCompatibility_LokiStorage(t *testing.T) {
 			expectError:     true,
 		},
 		{
-			name:            "Swift incompatible with OpenStack",
+			name:            "Swift compatible with OpenStack",
 			infraProvider:   ProviderOpenStack,
 			serviceProvider: StorageProviderSwift,
-			expectError:     true,
+			expectError:     false,
 		},
 		{
 			name:            "S3 compatible with OpenStack",

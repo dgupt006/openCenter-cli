@@ -8,14 +8,14 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
-func TestValidateServiceUsesPortableS3StorageDefaults(t *testing.T) {
+func TestValidateServiceUsesProviderAwareLokiTempoStorageDefaults(t *testing.T) {
 	tests := []struct {
 		name     string
 		provider string
 		service  string
 		wantErr  string
 	}{
-		{name: "OpenStack omitted Loki uses S3", provider: "openstack", service: "loki", wantErr: "s3_endpoint"},
+		{name: "OpenStack omitted Loki uses Swift", provider: "openstack", service: "loki"},
 		{name: "generic omitted Loki uses S3", provider: "kind", service: "loki", wantErr: "s3_endpoint"},
 		{name: "generic omitted Tempo uses S3", provider: "kind", service: "tempo", wantErr: "s3_endpoint"},
 	}
@@ -50,21 +50,5 @@ func TestValidateServiceUsesPortableS3StorageDefaults(t *testing.T) {
 				t.Fatalf("validateServiceWithConfig() error = %v, want %q", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestValidateServiceUsesManagedRustFSWithoutExternalS3Values(t *testing.T) {
-	cfg, err := v2.NewV2Default("task16-rustfs", "kind")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.OpenCenter.Infrastructure.Storage.Profile = v2.StorageProfileConfig{
-		Lifecycle: v2.StorageLifecycleNonProduction, PVCProvider: v2.StoragePVCProviderLonghorn, ObjectStorageProvider: v2.StorageObjectProviderRustFS,
-	}
-	for _, serviceName := range []string{"loki", "tempo"} {
-		service := cfg.OpenCenter.Services[serviceName]
-		if err := validateServiceWithConfig(serviceName, service, &cfg.Secrets, cfg); err != nil {
-			t.Fatalf("%s managed RustFS validation: %v", serviceName, err)
-		}
 	}
 }

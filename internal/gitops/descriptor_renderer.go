@@ -473,16 +473,11 @@ func planClusterAppActionsWithArtifacts(cfg v2.Config) ([]clusterAppAction, []se
 		return nil, nil, err
 	}
 	actions = append(actions, autoActions...)
-	rustFSActions, err := planRustFSActions(cfg, artifacts)
-	if err != nil {
-		return nil, nil, err
-	}
-	actions = append(actions, rustFSActions...)
 	if err := validateClusterAppActions(actions, ""); err != nil {
 		return nil, nil, fmt.Errorf("planned GitOps action output validation failed: %w", err)
 	}
 
-	for _, action := range append(autoActions, rustFSActions...) {
+	for _, action := range autoActions {
 		diag.Actions = append(diag.Actions, ActionDiagnostic{
 			Owner:    action.Owner,
 			Output:   action.Output,

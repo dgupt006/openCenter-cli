@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
@@ -137,10 +136,10 @@ func TestHydrateBuiltInServiceConfigCoversStorageAndRepresentativeBuiltIns(t *te
 		},
 		{
 			name:     "mimir",
-			existing: &services.MimirConfig{},
+			existing: &services.DefaultServiceConfig{},
 			explicit: map[string]any{},
 			assertions: func(t *testing.T, value any) {
-				if got := value.(*services.MimirConfig).Namespace; got != "observability" {
+				if got := value.(*services.DefaultServiceConfig).Namespace; got != "observability" {
 					t.Fatalf("mimir namespace = %q", got)
 				}
 			},
@@ -177,34 +176,5 @@ func TestHydrateBuiltInServiceConfigCoversStorageAndRepresentativeBuiltIns(t *te
 			}
 			tt.assertions(t, got)
 		})
-	}
-}
-
-func TestObjectStorageServiceOptionsAreS3Only(t *testing.T) {
-	lokiOptions := getServiceOptions("loki")
-	for _, option := range lokiOptions {
-		if strings.Contains(option.Name, "swift") || strings.Contains(strings.ToLower(option.Description), "swift") {
-			t.Fatalf("Loki options must not advertise retired Swift configuration: %#v", option)
-		}
-	}
-	for _, option := range getServiceSecrets("loki") {
-		if strings.Contains(option.Name, "swift") || strings.Contains(strings.ToLower(option.Description), "swift") {
-			t.Fatalf("Loki secrets must not advertise retired Swift configuration: %#v", option)
-		}
-	}
-	mimirOptions := getServiceOptions("mimir")
-	if len(mimirOptions) == 0 {
-		t.Fatal("Mimir must expose typed S3 service options")
-	}
-	for _, required := range []string{"s3_endpoint", "s3_bucket_name"} {
-		found := false
-		for _, option := range mimirOptions {
-			if option.Name == required {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("Mimir options missing %q: %#v", required, mimirOptions)
-		}
 	}
 }

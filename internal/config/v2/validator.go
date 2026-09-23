@@ -26,160 +26,31 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 )
 
-const (
-	StorageLifecycleProduction    = "production"
-	StorageLifecycleNonProduction = "non-production"
-
-	StoragePVCProviderExternal = "external"
-	StoragePVCProviderLonghorn = "longhorn"
-
-	StorageObjectProviderExternalS3 = "external-s3"
-	StorageObjectProviderRustFS     = "rustfs"
-)
-
-type storagePolicyIssue struct {
-	path    string
-	message string
-}
-
-// EffectiveStorageProfile returns normalized profile values. Empty fields retain
-// safe compatibility defaults, while new configurations materialize them in NewV2Default.
-func EffectiveStorageProfile(cfg *Config) StorageProfileConfig {
-	profile := StorageProfileConfig{
-		Lifecycle:             StorageLifecycleNonProduction,
-		PVCProvider:           StoragePVCProviderExternal,
-		ObjectStorageProvider: StorageObjectProviderExternalS3,
+// ResolveObjectStorageBackend returns the explicitly configured Loki/Tempo
+// backend. When omitted, OpenStack uses Swift and all other providers use S3,
+// matching the Loki and Tempo renderer contract.
+func ResolveObjectStorageBackend(cfg *Config, serviceName string) string {
+	var storageType string
+	if service := configuredService(cfg, serviceName); service != nil {
+		switch serviceName {
+		case "loki":
+			if loki, ok := service.(*services.LokiConfig); ok {
+				storageType = loki.StorageType
+			}
+		case "tempo":
+			if tempo, ok := service.(*services.TempoConfig); ok {
+				storageType = tempo.StorageType
+			}
+		}
 	}
-	if cfg == nil {
-		return profile
+	storageType = strings.ToLower(strings.TrimSpace(storageType))
+	if storageType != "" {
+		return storageType
 	}
-	configured := cfg.OpenCenter.Infrastructure.Storage.Profile
-	if value := strings.ToLower(strings.TrimSpace(configured.Lifecycle)); value != "" {
-		profile.Lifecycle = value
+	if cfg != nil && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") {
+		return "swift"
 	}
-	if value := strings.ToLower(strings.TrimSpace(configured.PVCProvider)); value != "" {
-		profile.PVCProvider = value
-	}
-	if value := strings.ToLower(strings.TrimSpace(configured.ObjectStorageProvider)); value != "" {
-		profile.ObjectStorageProvider = value
-	}
-	return profile
-}
-
-// UsesManagedObjectStorage reports whether the non-production RustFS profile is selected.
-func UsesManagedObjectStorage(cfg *Config) bool {
-	return EffectiveStorageProfile(cfg).ObjectStorageProvider == StorageObjectProviderRustFS
-}
-
-// ResolveObjectStorageBackend deliberately ignores infrastructure provider.
-// Platform bulk data always uses an S3-compatible API, supplied externally or by RustFS.
-func ResolveObjectStorageBackend(cfg *Config, _ string) string {
 	return "s3"
-}
-
-func storagePolicyIssues(cfg *Config) []storagePolicyIssue {
-	if cfg == nil {
-		return nil
-	}
-	profile := EffectiveStorageProfile(cfg)
-	var issues []storagePolicyIssue
-	add := func(path, message string) {
-		issues = append(issues, storagePolicyIssue{path: path, message: message})
-	}
-
-	switch profile.Lifecycle {
-	case StorageLifecycleProduction, StorageLifecycleNonProduction:
-	default:
-		add("opencenter.infrastructure.storage.profile.lifecycle", "storage profile lifecycle must be production or non-production.")
-	}
-	switch profile.PVCProvider {
-	case StoragePVCProviderExternal, StoragePVCProviderLonghorn:
-	default:
-		add("opencenter.infrastructure.storage.profile.pvc_provider", "storage profile pvc_provider must be external or longhorn.")
-	}
-	switch profile.ObjectStorageProvider {
-	case StorageObjectProviderExternalS3, StorageObjectProviderRustFS:
-	default:
-		add("opencenter.infrastructure.storage.profile.object_storage_provider", "storage profile object_storage_provider must be external-s3 or rustfs.")
-	}
-
-	if profile.ObjectStorageProvider == StorageObjectProviderRustFS {
-		if profile.Lifecycle == StorageLifecycleProduction {
-			add("opencenter.infrastructure.storage.profile.object_storage_provider", "RustFS is non-production only; production and Edge Production require externally managed S3-compatible storage.")
-		}
-		if profile.PVCProvider != StoragePVCProviderLonghorn {
-			add("opencenter.infrastructure.storage.profile.pvc_provider", "RustFS requires pvc_provider: longhorn.")
-		}
-		if !isServiceEnabled(cfg, "longhorn") {
-			add("opencenter.services.longhorn", "RustFS requires the openCenter-managed Longhorn service to be enabled.")
-		}
-		if isMissingSecret(cfg.Secrets.RustFS.AccessKey) {
-			add("secrets.rustfs.access_key", "RustFS requires a generated access key.")
-		}
-		if isMissingSecret(cfg.Secrets.RustFS.SecretKey) {
-			add("secrets.rustfs.secret_key", "RustFS requires a generated secret key.")
-		}
-	} else if profile.Lifecycle == StorageLifecycleProduction {
-		for _, serviceName := range []string{"loki", "tempo", "velero", "harbor", "etcd-backup", "mimir"} {
-			if !isServiceEnabled(cfg, serviceName) {
-				continue
-			}
-			if err := ValidateS3Endpoint(externalS3Endpoint(cfg, serviceName)); err != nil {
-				add("opencenter.services."+serviceName+".s3_endpoint", "external S3-compatible storage requires a configured absolute HTTP(S) endpoint.")
-			}
-		}
-	}
-
-	for _, serviceName := range []string{"loki", "tempo", "velero", "harbor"} {
-		if !isServiceEnabled(cfg, serviceName) {
-			continue
-		}
-		storageType := configuredBulkStorageType(cfg, serviceName)
-		if storageType == "" || storageType == "s3" {
-			continue
-		}
-		path := "opencenter.services." + serviceName + ".storage_type"
-		if storageType == "swift" {
-			add(path, "Swift is no longer supported for platform bulk data; migrate to the S3-compatible storage profile.")
-			continue
-		}
-		add(path, fmt.Sprintf("storage_type %q is unsupported; platform bulk data must use S3-compatible storage.", storageType))
-	}
-	return issues
-}
-
-func externalS3Endpoint(cfg *Config, serviceName string) string {
-	switch service := configuredService(cfg, serviceName).(type) {
-	case *services.LokiConfig:
-		return service.S3Endpoint
-	case *services.TempoConfig:
-		return service.S3Endpoint
-	case *services.VeleroConfig:
-		return service.S3Endpoint
-	case *services.HarborConfig:
-		return service.S3Endpoint
-	case *services.EtcdBackupConfig:
-		return service.S3Endpoint
-	case *services.MimirConfig:
-		return service.S3Endpoint
-	default:
-		return ""
-	}
-}
-
-func configuredBulkStorageType(cfg *Config, serviceName string) string {
-	switch service := configuredService(cfg, serviceName).(type) {
-	case *services.LokiConfig:
-		return strings.ToLower(strings.TrimSpace(service.StorageType))
-	case *services.TempoConfig:
-		return strings.ToLower(strings.TrimSpace(service.StorageType))
-	case *services.VeleroConfig:
-		return strings.ToLower(strings.TrimSpace(service.StorageType))
-	case *services.HarborConfig:
-		return strings.ToLower(strings.TrimSpace(service.StorageType))
-	default:
-		return ""
-	}
 }
 
 func configuredService(cfg *Config, serviceName string) any {
@@ -216,10 +87,6 @@ func ValidateS3Endpoint(raw string) error {
 // decoder supplies defaults for omitted PVC fields; explicit non-positive values
 // are rejected by runtime validation and the generated schema.
 func ValidateHarborConfig(config *services.HarborConfig) error {
-	return validateHarborConfig(config, true)
-}
-
-func validateHarborConfig(config *services.HarborConfig, requireS3Endpoint bool) error {
 	if config == nil {
 		return fmt.Errorf("Harbor configuration must not be nil")
 	}
@@ -229,7 +96,7 @@ func validateHarborConfig(config *services.HarborConfig, requireS3Endpoint bool)
 	}
 	endpoint := strings.TrimSpace(config.S3Endpoint)
 	if endpoint == "" {
-		if config.Enabled && requireS3Endpoint {
+		if config.Enabled {
 			return fmt.Errorf("Harbor s3_endpoint is required when Harbor is enabled")
 		}
 	} else {
@@ -363,10 +230,6 @@ func (v *defaultValidator) ValidateSchema(cfg *Config) error {
 // ValidateBusinessRules validates cross-field dependencies and value ranges.
 // Requirements: 11.2
 func (v *defaultValidator) ValidateBusinessRules(cfg *Config) error {
-	if issues := storagePolicyIssues(cfg); len(issues) > 0 {
-		issue := issues[0]
-		return fmt.Errorf("%s: %s", issue.path, issue.message)
-	}
 	if len(cfg.OpenCenter.LegacyTalos) > 0 {
 		return fmt.Errorf("opencenter.talos is not supported in v2; remove the opencenter.talos section")
 	}
@@ -563,7 +426,7 @@ func (v *defaultValidator) ValidateServices(cfg *Config) error {
 		if !ok {
 			return fmt.Errorf("harbor service has unexpected configuration type %T", service)
 		}
-		if err := validateHarborConfig(harbor, !UsesManagedObjectStorage(cfg)); err != nil {
+		if err := ValidateHarborConfig(harbor); err != nil {
 			return err
 		}
 	}
@@ -785,7 +648,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 	}
 
 	// Loki secrets
-	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "loki") {
+	if isServiceEnabled(cfg, "loki") {
 		switch ResolveObjectStorageBackend(cfg, "loki") {
 		case "swift":
 			if isMissingSecret(cfg.GetLokiSwiftApplicationCredentialSecret()) {
@@ -803,7 +666,7 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 	}
 
 	// Tempo secrets
-	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "tempo") {
+	if isServiceEnabled(cfg, "tempo") {
 		switch ResolveObjectStorageBackend(cfg, "tempo") {
 		case "swift":
 			if isMissingSecret(cfg.GetTempoSwiftApplicationCredentialSecret()) {
@@ -820,16 +683,9 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 		}
 	}
 
-	// Mimir uses the typed portable S3 contract. Managed RustFS credentials are
-	// generated in secrets.rustfs and validated by the storage profile gate.
-	if !UsesManagedObjectStorage(cfg) && isServiceEnabled(cfg, "mimir") {
-		accessKey, secretKey := cfg.GetMimirS3Credentials()
-		if isMissingSecret(accessKey) {
-			placeholders = append(placeholders, "secrets.mimir.s3_access_key_id")
-		}
-		if isMissingSecret(secretKey) {
-			placeholders = append(placeholders, "secrets.mimir.s3_secret_access_key")
-		}
+	// Mimir Swift blocks storage
+	if isServiceEnabled(cfg, "mimir") && isMissingSecret(cfg.GetMimirSwiftApplicationCredentialSecret()) {
+		placeholders = append(placeholders, "secrets.mimir.swift_application_credential_secret")
 	}
 
 	// Harbor secrets
@@ -917,7 +773,7 @@ func isServiceEnabled(cfg *Config, serviceName string) bool {
 }
 
 func missingHarborDeploymentSecretPaths(cfg *Config) []string {
-	if !isServiceEnabled(cfg, "harbor") || UsesManagedObjectStorage(cfg) {
+	if !isServiceEnabled(cfg, "harbor") {
 		return nil
 	}
 	var missing []string
