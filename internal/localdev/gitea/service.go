@@ -487,36 +487,21 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		}
 	}
 
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	now := time.Now().UTC()
+
+	// Load an existing CA (key + cert) if present, otherwise create one and
+	// persist it. writeCertificates is called multiple times (initial up, kind
+	// attach re-issue, reachable-cert reissue); each call re-signs the server
+	// cert, but the CA MUST stay stable so a client that already read CACertPath
+	// keeps trusting newly issued server certs. Regenerating the CA every call
+	// caused "x509: certificate signed by unknown authority" on reissue.
+	caKey, caTemplate, err := s.loadOrCreateCA(now)
 	if err != nil {
-		return fmt.Errorf("generate gitea CA key: %w", err)
+		return err
 	}
 	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return fmt.Errorf("generate gitea server key: %w", err)
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return fmt.Errorf("generate CA serial: %w", err)
-	}
-	now := time.Now().UTC()
-
-	caTemplate := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName:   "opencenter-local-gitea-ca",
-			Organization: []string{"openCenter"},
-		},
-		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		return fmt.Errorf("create CA certificate: %w", err)
 	}
 
 	serverSerial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
@@ -542,9 +527,8 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		return fmt.Errorf("create server certificate: %w", err)
 	}
 
-	if err := writePEMFile(s.layout.CACertPath, "CERTIFICATE", caDER, 0o644); err != nil {
-		return err
-	}
+	// CACertPath is (re)written by loadOrCreateCA; only the server cert/key
+	// change per reissue.
 	if err := writePEMFile(s.layout.ServerCertPath, "CERTIFICATE", serverDER, 0o644); err != nil {
 		return err
 	}
@@ -561,6 +545,69 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		return err
 	}
 	return nil
+}
+
+// caKeyPath returns the path where the persistent CA private key is stored,
+// alongside the CA certificate.
+func (s *Service) caKeyPath() string {
+	return filepath.Join(filepath.Dir(s.layout.CACertPath), "ca-key.pem")
+}
+
+// loadOrCreateCA returns the CA private key and certificate, reusing the
+// persisted CA (key at caKeyPath, cert at CACertPath) if both exist and parse,
+// otherwise generating a new CA and persisting both. Keeping the CA stable
+// across reissues is required so clients that already read CACertPath continue
+// to trust newly issued server certificates.
+func (s *Service) loadOrCreateCA(now time.Time) (*rsa.PrivateKey, *x509.Certificate, error) {
+	keyPEM, keyErr := os.ReadFile(s.caKeyPath())
+	certPEM, certErr := os.ReadFile(s.layout.CACertPath)
+	if keyErr == nil && certErr == nil {
+		if kBlock, _ := pem.Decode(keyPEM); kBlock != nil {
+			if cBlock, _ := pem.Decode(certPEM); cBlock != nil {
+				if caKey, err := x509.ParsePKCS1PrivateKey(kBlock.Bytes); err == nil {
+					if caCert, err := x509.ParseCertificate(cBlock.Bytes); err == nil {
+						return caKey, caCert, nil
+					}
+				}
+			}
+		}
+	}
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate gitea CA key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate CA serial: %w", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   "opencenter-local-gitea-ca",
+			Organization: []string{"openCenter"},
+		},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create CA certificate: %w", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse CA certificate: %w", err)
+	}
+	if err := writePEMFile(s.layout.CACertPath, "CERTIFICATE", caDER, 0o644); err != nil {
+		return nil, nil, err
+	}
+	if err := writePEMFile(s.caKeyPath(), "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey), 0o644); err != nil {
+		return nil, nil, err
+	}
+	return caKey, caCert, nil
 }
 
 // giteaContainerUID / giteaContainerGID are the fixed uid/gid of the git user
