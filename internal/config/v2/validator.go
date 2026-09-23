@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -488,6 +489,10 @@ func (v *defaultValidator) ValidateProvider(cfg *Config) error {
 		if cfg.OpenCenter.Infrastructure.Cloud.Azure == nil {
 			return fmt.Errorf("opencenter.infrastructure.cloud.azure must be configured for the azure provider")
 		}
+	case "magnum":
+		if err := validateMagnumCloudConfig(cfg.OpenCenter.Infrastructure.Cloud.Magnum); err != nil {
+			return err
+		}
 	case "baremetal":
 		// No provider-specific config block required for baremetal
 	case "":
@@ -496,6 +501,36 @@ func (v *defaultValidator) ValidateProvider(cfg *Config) error {
 		return fmt.Errorf("unsupported infrastructure provider: %s", provider)
 	}
 
+	return nil
+}
+
+// validateMagnumCloudConfig validates the credentials and cluster-template
+// contract used by the managed Magnum provider. Magnum cluster templates own
+// the VM image and network settings, so those OpenStack fields are not part of
+// this validation.
+func validateMagnumCloudConfig(config *MagnumCloudConfig) error {
+	if config == nil {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum must be configured for the magnum provider")
+	}
+	if strings.TrimSpace(config.AuthURL) == "" {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.auth_url is required for Keystone authentication")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(config.AuthURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.auth_url must be an absolute HTTP(S) Keystone URL")
+	}
+	if strings.TrimSpace(config.Region) == "" {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.region is required")
+	}
+	if strings.TrimSpace(config.ProjectID) == "" {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.project_id is required")
+	}
+	if isMissingSecret(config.ApplicationCredentialID) || isMissingSecret(config.ApplicationCredentialSecret) {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.application_credential_id and application_credential_secret are required")
+	}
+	if strings.TrimSpace(config.ClusterTemplate) == "" {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.cluster_template is required")
+	}
 	return nil
 }
 
@@ -532,15 +567,72 @@ func (v *defaultValidator) ValidateServices(cfg *Config) error {
 			return err
 		}
 	}
-	if !isServiceEnabled(cfg, "metallb") {
-		return nil
+	metallbEnabled := isServiceEnabled(cfg, "metallb")
+	var metallbCfg *services.MetalLBConfig
+	if metallbEnabled {
+		mlb, ok := cfg.OpenCenter.Services["metallb"].(*services.MetalLBConfig)
+		if !ok {
+			return fmt.Errorf("metallb service has unexpected configuration type %T", cfg.OpenCenter.Services["metallb"])
+		}
+		metallbCfg = mlb
+		if err := validateMetalLBConfig(mlb); err != nil {
+			return err
+		}
 	}
 
-	service, ok := cfg.OpenCenter.Services["metallb"].(*services.MetalLBConfig)
-	if !ok {
-		return fmt.Errorf("metallb service has unexpected configuration type %T", cfg.OpenCenter.Services["metallb"])
+	// OCTR-762: validate per-service MetalLB address pool selection. Any service
+	// that names an address_pool must reference a pool declared in
+	// services.metallb.ip_address_pools, which in turn requires metallb enabled.
+	if err := validateServiceAddressPools(cfg, metallbEnabled, metallbCfg); err != nil {
+		return err
 	}
-	return validateMetalLBConfig(service)
+
+	return nil
+}
+
+// validateServiceAddressPools ensures every service's address_pool (if set)
+// refers to a real MetalLB pool. Reuses the pool-membership pattern from
+// validateMetalLBConfig's L2Advertisement check.
+func validateServiceAddressPools(cfg *Config, metallbEnabled bool, metallbCfg *services.MetalLBConfig) error {
+	poolNames := make(map[string]struct{})
+	if metallbCfg != nil {
+		for _, pool := range metallbCfg.IPAddressPools {
+			if pool.Name != "" {
+				poolNames[pool.Name] = struct{}{}
+			}
+		}
+	}
+
+	names := make([]string, 0, len(cfg.OpenCenter.Services))
+	for name := range cfg.OpenCenter.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var problems []string
+	for _, name := range names {
+		svc := cfg.OpenCenter.Services[name]
+		pooler, ok := svc.(interface{ GetAddressPool() string })
+		if !ok {
+			continue
+		}
+		pool := strings.TrimSpace(pooler.GetAddressPool())
+		if pool == "" {
+			continue
+		}
+		if !metallbEnabled {
+			problems = append(problems, fmt.Sprintf("opencenter.services.%s.address_pool %q requires the metallb service to be enabled with matching ip_address_pools", name, pool))
+			continue
+		}
+		if _, exists := poolNames[pool]; !exists {
+			problems = append(problems, fmt.Sprintf("opencenter.services.%s.address_pool %q is not defined in services.metallb.ip_address_pools", name, pool))
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("service address pool validation failed:\n  - %s", strings.Join(problems, "\n  - "))
 }
 
 func validateMetalLBConfig(config *services.MetalLBConfig) error {
@@ -550,6 +642,7 @@ func validateMetalLBConfig(config *services.MetalLBConfig) error {
 
 	var problems []string
 	poolNames := make(map[string]struct{}, len(config.IPAddressPools))
+	defaultPools := make([]string, 0, 1)
 	for i, pool := range config.IPAddressPools {
 		path := fmt.Sprintf("services.metallb.ip_address_pools[%d]", i)
 		if pool.Name == "" {
@@ -561,6 +654,9 @@ func validateMetalLBConfig(config *services.MetalLBConfig) error {
 		} else {
 			poolNames[pool.Name] = struct{}{}
 		}
+		if pool.Default {
+			defaultPools = append(defaultPools, pool.Name)
+		}
 		if len(pool.Addresses) == 0 {
 			problems = append(problems, path+".addresses must contain at least one address")
 		}
@@ -569,6 +665,9 @@ func validateMetalLBConfig(config *services.MetalLBConfig) error {
 				problems = append(problems, fmt.Sprintf("%s.addresses[%d] %q is not a valid CIDR or IP range", path, j, address))
 			}
 		}
+	}
+	if len(defaultPools) > 1 {
+		problems = append(problems, fmt.Sprintf("services.metallb.ip_address_pools: at most one pool may set default: true, found %d (%s)", len(defaultPools), strings.Join(defaultPools, ", ")))
 	}
 
 	advertisementNames := make(map[string]struct{}, len(config.L2Advertisements))
@@ -582,6 +681,9 @@ func validateMetalLBConfig(config *services.MetalLBConfig) error {
 			problems = append(problems, fmt.Sprintf("%s.name %q is duplicated", path, advertisement.Name))
 		} else {
 			advertisementNames[advertisement.Name] = struct{}{}
+		}
+		if advertisement.Type != "" && advertisement.Type != services.L2AdvertisementType {
+			problems = append(problems, fmt.Sprintf("%s.type %q is not supported (only %q is supported today)", path, advertisement.Type, services.L2AdvertisementType))
 		}
 		seenInterfaces := make(map[string]struct{}, len(advertisement.Interfaces))
 		for j, iface := range advertisement.Interfaces {

@@ -32,10 +32,12 @@ opencenter cluster service disable <service-name> [flags]
 ### Options
 
 ```
-      --cluster string   Specify the cluster name
-  -h, --help             help for disable
-      --managed          Disable the service from the managed services list
-      --render           Render the cluster application manifests immediately after disabling
+      --adopt-generated   Claim differing planned files after creating backups during --render
+      --cluster string    Specify the cluster name
+  -h, --help              help for disable
+      --managed           Disable the service from the managed services list
+      --prune             Remove stale generated files during --render (default true)
+      --render            Render the cluster application manifests immediately after disabling
 ```
 
 ### Options inherited from parent commands

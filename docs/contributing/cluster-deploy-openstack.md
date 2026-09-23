@@ -1,346 +1,72 @@
 ---
 id: cluster-deploy-openstack
 title: "cluster deploy — OpenStack Provider"
-sidebar_label: cluster deploy —
-description: How cluster deploy works end-to-end for the OpenStack provider, including all phases, files, and the 7-step bootstrap sequence.
+sidebar_label: cluster deploy — OpenStack
+description: How cluster deploy works end-to-end for the OpenStack provider, including every bootstrap step and why the Kubespray steps are currently disabled.
 doc_type: explanation
 audience: "developers"
 tags: [openstack, deploy, bootstrap, kubespray, opentofu]
 ---
 # cluster deploy — OpenStack Provider
 
-**Purpose:** For developers, explains how `opencenter cluster deploy` works end-to-end for the OpenStack provider -- covering every phase, the files involved, and the 7-step bootstrap sequence.
+**Purpose:** For developers, explains how `opencenter cluster deploy` works end-to-end for the OpenStack provider: the CLI pre-flight, the bootstrap step sequence, and the current (not the originally-designed) way Kubespray gets run.
+
+The entry point is `cmd/cluster_deploy.go`. Orchestration lives in `internal/cluster/bootstrap_service.go`. The OpenStack-specific step sequence is built by `openstackBootstrapProvider.BuildSteps` in `internal/cluster/bootstrap_provider_infra.go` — **not** a separate `openstack_bootstrap_provider.go` file (that filename does not exist in the current tree; don't trust older references to it).
 
 ## Overview
 
-`cluster deploy` for OpenStack runs in four phases:
+1. **CLI pre-flight** (`cmd/cluster_deploy.go`) — resolve the cluster name, load and validate the config, check provider availability, acquire a deploy lock, verify the GitOps working tree is clean, verify the Git remote matches config, mark cluster status `running`.
+2. **Bootstrap orchestration** (`internal/cluster/bootstrap_service.go`) — resolve cluster paths, open the bootstrap log, load any saved resume state, then hand off to the provider's `BuildSteps`.
+3. **Step execution** (`internal/cluster/bootstrap_provider_infra.go`) — the OpenStack step sequence below.
+4. **Readiness polling** — wait for the Kubernetes API to respond before declaring success.
 
-1. **CLI pre-flight** -- lock, git hygiene, status update
-2. **Bootstrap orchestration** -- config load, path resolution, log setup
-3. **7-step infrastructure provisioning** -- OpenTofu + optional Kubespray
-4. **Readiness polling** -- wait for the Kubernetes API to respond
+## The current OpenStack step sequence
 
-The entry point is `cmd/cluster_deploy.go`. The business logic lives in `internal/cluster/bootstrap_service.go`. The OpenStack-specific steps are in `internal/cluster/openstack_bootstrap_provider.go`.
+`openstackBootstrapProvider.BuildSteps` builds these steps, in order:
 
----
+1. **`preflight`** — validates OpenStack credentials via `internal/credentials.Extractor.ExtractOpenStack()` plus `openstackprovider.PreflightOpenStack(authURL)`. Rejects empty credentials, and rejects `application_credential_id`/`application_credential_secret` still set to the `CHANGEME` placeholder.
+2. **`opentofu-init`** — runs `opentofu init` in the cluster's infrastructure directory (`<gitDir>/infrastructure/clusters/<cluster>`), with `OS_*` credential env vars merged in via `credentials.OpenStackCredentials.ToEnvMap()` (`OS_AUTH_URL`, `OS_REGION_NAME`, `OS_APPLICATION_CREDENTIAL_ID`, `OS_APPLICATION_CREDENTIAL_SECRET`, `OS_USERNAME`/`OS_PASSWORD` as a fallback, plus fixed `OS_INTERFACE=public` and `OS_IDENTITY_API_VERSION=3`) and `KUBECONFIG` set to the resolved cluster kubeconfig path.
+3. **`opentofu-apply`** — runs `opentofu apply -auto-approve` with the same environment.
+4. **`openstack-normalize-kubeconfig`** — finds whichever kubeconfig the tooling actually wrote (`opts.KubeconfigPath`, then `kubeconfig.yaml`, `kubeconfig`, or `kube_config_cluster.yml` inside the cluster directory, in that order), rewrites any `127.0.0.1`/`localhost`/`[::1]` server host to the cluster's API endpoint IP (`infrastructure.k8s_api_ip` if set, else the VRRP VIP when `vrrp_enabled: true`), and writes the result to `opts.KubeconfigPath` with mode `0600`.
+5. **Network plugin install step** (`buildNetworkPluginInstallStep`) — installs the enabled CNI (Calico/Cilium/Kube-OVN) so the cluster is network-ready.
+6. **Flux bootstrap step, SOPS age secret step, Grafana admin secret step** — added *only* when `gitops.auth.token` is configured with a non-empty provider and a real (non-placeholder) repository URL. These run after the CNI so FluxCD's source-controller has a working network when it starts reconciling. No credential Secret is created for the shared `openCenter-gitops-base` repository itself — it's public, so its `GitRepository` source is rendered anonymously.
 
-## Flow diagram
+There is deliberately **no automatic git push** — the operator commits and pushes the generated GitOps repository manually after `cluster deploy` completes.
 
-```mermaid
-flowchart TD
-    A([opencenter cluster deploy]) --> B[Resolve cluster name\ncmd/cluster_deploy.go]
-    B --> C[Load config + check provider\nloadCanonicalConfig]
-    C --> D{--dry-run?}
+### Why there's no separate Kubespray step anymore
 
-    D -- yes --> E[Build steps\nbuildBootstrapSteps]
-    E --> F[Print plan\nprintClusterDeployPlan]
-    F --> Z([exit])
+An earlier design added three more steps — `kubespray-venv-create`, `kubespray-pip-install`, `kubespray-ansible-playbook` — to run Kubespray's Ansible playbook explicitly. That code still exists (`buildKubespraySteps`) but is **commented out** in `BuildSteps`, with this reasoning left in the source:
 
-    D -- no --> G[Acquire deploy lock\nAcquireLockWithPrompt\n1h TTL]
-    G --> H[Check GitOps working tree\nensureCleanWorkingTree]
-    H --> I[Verify git remote\nverifyOriginMatchesGitURL]
-    I --> J[Update status → running\nconfig.UpdateStatus]
-    J --> K[BootstrapService.Bootstrap\ninternal/cluster/bootstrap_service.go]
+> The OpenTofu module for this provider already embeds a `null_resource.run_kubespray` with a `local-exec` provisioner that runs the full Ansible/Kubespray playbook as part of `opentofu-apply`. Appending these steps caused Ansible to run a second time against a cluster that was already provisioned, wasting ~1h of deploy time.
 
-    K --> L[Resolve cluster paths\npathResolver.Resolve]
-    L --> M[Load + validate config\nconfigurationMgr.Load]
-    M --> N[Resolve runtime paths\nlog + state file]
-    N --> O[Open log file\nopenBootstrapLogFile]
-    O --> P[Validate bootstrap config\nvalidateBootstrapConfig]
-    P --> Q[Load resume state\nstate.json]
+So today, for `deployment.method: kubespray`, the Kubespray run happens **inside** `opentofu-apply` (step 2 above), not as its own step. The tracked long-term fix is to remove the `null_resource.run_kubespray` local-exec from the OpenTofu templates so OpenTofu only provisions infrastructure and a dedicated step owns the Ansible run exclusively — if you're touching bootstrap sequencing, check whether that fix has landed before trusting a "kubespray step" description anywhere else.
 
-    Q --> R[Build + filter steps\nbuildBootstrapSteps → openstack]
+## State and resume
 
-    R --> S1["[1/7] openstack-preflight\nvalidate OS_* creds"]
-    S1 --> S2["[2/7] opentofu-init\nopentofu init"]
-    S2 --> S3["[3/7] opentofu-apply\nopentofu apply -auto-approve"]
-    S3 --> S4{deployment.method\n= kubespray?}
+Bootstrap step results are persisted to `state.json` after each step runs (`internal/cluster/bootstrap_service.go` / `bootstrap_runtime.go`):
 
-    S4 -- yes --> S5["[4/7] kubespray-venv-create\npython3 -m venv"]
-    S5 --> S6["[5/7] kubespray-pip-install\npip install -r requirements.txt"]
-    S6 --> S7["[6/7] kubespray-ansible-playbook\nansible-playbook cluster.yml -b"]
-    S7 --> S8
-
-    S4 -- no --> S8["[4/7 or 7/7] openstack-normalize-kubeconfig\nreplace localhost → VIP"]
-
-    S8 --> T[deployCluster — no-op for openstack]
-    T --> U[waitForCloudCluster\nkubectl cluster-info every 30s]
-    U --> V{API reachable?}
-    V -- no, retry --> U
-    V -- timeout --> ERR([error: timeout])
-    V -- yes --> W[Remove state.json\nUpdate status → success]
-    W --> X([Deploy complete])
-
-    style S1 fill:#e8f4f8
-    style S2 fill:#e8f4f8
-    style S3 fill:#e8f4f8
-    style S5 fill:#fff3cd
-    style S6 fill:#fff3cd
-    style S7 fill:#fff3cd
-    style S8 fill:#e8f4f8
+```
+<state dir>/bootstrap/<org>/<cluster>/state.json     — resume state
+<state dir>/logs/bootstrap/<org>/<cluster>/bootstrap-<timestamp>.log  — full command output
 ```
 
-Blue steps run for all OpenStack deploys. Yellow steps only run when `deployment.method: kubespray`.
-
----
-
-## Phase 1 -- CLI pre-flight
-
-**File:** `cmd/cluster_deploy.go`
-
-### Cluster name resolution
-
-`resolveClusterNameForCommand` reads the positional argument or falls back to the active cluster set by `cluster use`. Accepts both `cluster` and `org/cluster` formats.
-
-### Config load + provider check
-
-`loadCanonicalConfig` reads the YAML from `~/.config/opencenter/clusters/<org>/.<name>-config.yaml`. `checkProviderAvailability` rejects providers that are not yet implemented.
-
-### Deploy lock
-
-`AcquireLockWithPrompt` writes a lock file at `<state_dir>/locks/<name>.lock` with a 1-hour TTL. If a lock already exists:
-
-* Expired → cleaned up automatically
-* Active + `--break-lock` flag → force-broken without prompting
-* Active + no flag → user is prompted for confirmation
-
-The lock is released via `defer` when the command exits.
-
-### GitOps working tree check
-
-`ensureCleanWorkingTree` runs `git -C <gitDir> status --porcelain`. If the repo is dirty:
-
-* `--confirm-commit` → prompts before committing
-* default → auto-commits with message `chore: auto-commit before bootstrap`
-
-This prevents the `gitea-rebase` step from failing on a dirty tree.
-
-### Git remote verification
-
-`verifyOriginMatchesGitURL` runs `git -C <gitDir> remote get-url origin` and compares the result against `gitops.repository.url` in the config. A mismatch means the push step would target the wrong repository.
-
-### Status update
-
-`config.UpdateStatus(name, StageBootstrap, StatusRunning)` marks the cluster as in-progress before handing off.
-
----
-
-## Phase 2 -- Bootstrap orchestration
-
-**File:** `internal/cluster/bootstrap_service.go`
-
-### Path resolution
-
-`pathResolver.Resolve(ctx, clusterName, organization)` produces a `ClusterPaths` struct:
-
-| Field | Example |
-| --- | --- |
-| `ConfigPath` | `~/.config/opencenter/clusters/<org>/.<name>-config.yaml` |
-| `KubeconfigPath` | `~/.config/opencenter/clusters/<org>/secrets/<name>-kubeconfig` |
-| `GitOpsDir` | value of `gitops.repository.local_dir` in config |
-| `ClusterDir` | `<GitOpsDir>/infrastructure/clusters/<name>/` |
-| `VenvPath` | optional override for the Python venv location |
-
-### Config load
-
-`configurationMgr.Load(ctx, "org/cluster")` runs the full load pipeline: parse YAML → normalize → resolve references → apply defaults → validate → freeze. Requires `schema_version: "2.0"`.
-
-### Runtime paths
-
-`resolveBootstrapRuntimePaths` produces:
-
-| Path | Location |
-| --- | --- |
-| Log file | `<state_dir>/logs/bootstrap/<org>/<cluster>/bootstrap-<timestamp>.log` |
-| State file | `<state_dir>/bootstrap/<org>/<cluster>/state.json` |
-| Legacy state | `<ClusterDir>/logs/bootstrap-state.json` |
-
-`<state_dir>` defaults to `~/.local/state/opencenter`.
-
-### Log file
-
-`openBootstrapLogFile` creates the log file and injects a writer into the context via `withBootstrapLogWriter`. All subsequent command stdout and stderr is tee’d to this file through `execLifecycleCommandRunner`.
-
-### Resume state
-
-`loadBootstrapStateWithFallback` reads `state.json` if it exists. Each step’s result (`success`, `failed`, `running`) is persisted after it runs. On a re-run, steps already marked `success` are skipped (the ⏭ lines in the output). Use `--restart` to ignore saved state and rerun all steps.
-
----
-
-## Phase 3 -- The 7 bootstrap steps
-
-**File:** `internal/cluster/openstack_bootstrap_provider.go`
-
-Steps are built by `openstackBootstrapProvider.BuildSteps`. The Kubespray steps (4--6) are appended only when `cfg.Deployment.Method == "kubespray"`.
-
-Every step that runs an external command uses `execLifecycleCommandRunner.Run`, which:
-
-1. Prepares the command via `security.CommandRunner` (sanitized, no shell injection)
-2. Sets `cmd.Dir` to the step’s working directory
-3. Merges the step’s env map over `os.Environ()`
-4. Tees stdout and stderr to both the terminal and the log file
-
-### Step 1 -- `openstack-preflight`
-
-**Working dir:** `<ClusterDir>`
-
-Calls `extractOpenStackBootstrapCredentials` → `credentials.Extractor.ExtractOpenStack()`, which reads from `opencenter.infrastructure.cloud.openstack.*` in the config.
-
-`validateOpenStackBootstrap` then checks:
-
-* Credentials are not empty (`IsEmpty()` -- requires `auth_url` plus either app credentials or username/password)
-* `application_credential_id` and `application_credential_secret` are not `CHANGEME`
-* `internal/cloud/openstack/preflight.go:PreflightOpenStack` -- checks `openstack` CLI is on PATH and `auth_url` is non-empty
-
-### Step 2 -- `opentofu-init`
-
-**Working dir:** `<ClusterDir>`
-
-Builds the environment via `buildOpenStackBootstrapEnvironment`:
-
-1. `ExtractOpenStack()` → `creds.ToEnvMap()` → all `OS_*` variables
-2. Merges `KUBECONFIG=<kubeconfigPath>` and `PATH` from the current process
-
-Runs: `opentofu init`
-
-Writes: `<ClusterDir>/.terraform/`
-
-### Step 3 -- `opentofu-apply`
-
-**Working dir:** `<ClusterDir>`
-
-Same environment as step 2.
-
-Runs: `opentofu apply -auto-approve`
-
-Writes: OpenStack infrastructure resources and `<ClusterDir>/terraform.tfstate`
-
-### Step 4 -- `kubespray-venv-create` _(kubespray only)_
-
-**Working dir:** `<ClusterDir>`
-
-Venv path: `clusterPaths.VenvPath` if set, otherwise `<ClusterDir>/venv`.
-
-Runs: `python3 -m venv <venvDir>`
-
-### Step 5 -- `kubespray-pip-install` _(kubespray only)_
-
-**Working dir:** `<ClusterDir>`
-
-Sets `VIRTUAL_ENV=<venvDir>` so pip post-install hooks see the correct environment (equivalent to `source activate` without requiring a shell).
-
-Runs: `<venvDir>/bin/pip install -r <ClusterDir>/kubespray/requirements.txt`
-
-### Step 6 -- `kubespray-ansible-playbook` _(kubespray only)_
-
-**Working dir:** `<ClusterDir>/kubespray/` -- the only step that changes directory relative to the others.
-
-Additional environment:
-
-* `VIRTUAL_ENV=<venvDir>`
-* `PATH=<venvDir>/bin:<original PATH>` -- so Ansible can find helper binaries like `ansible-connection`
-* `ANSIBLE_HOST_KEY_CHECKING=False`
-
-Runs: `<venvDir>/bin/ansible-playbook -i <ClusterDir>/inventory/inventory.yaml cluster.yml -b`
-
-### Step 7 -- `openstack-normalize-kubeconfig`
-
-**Working dir:** `<ClusterDir>`
-
-Searches for the kubeconfig written by the tooling in this order:
-
-1. `opts.KubeconfigPath` (the cluster-owned path)
-2. `<ClusterDir>/kubeconfig.yaml`
-3. `<ClusterDir>/kubeconfig`
-4. `<ClusterDir>/kube_config_cluster.yml`
-
-`replaceLocalhostInKubeconfig` rewrites any server URL whose host is `127.0.0.1`, `localhost`, or `[::1]` to use the cluster VIP. The VIP is resolved from:
-
-* `opencenter.infrastructure.k8s_api_ip` if set
-* `opencenter.infrastructure.networking.vrrp_ip` if `vrrp_enabled: true`
-
-Writes the result to `opts.KubeconfigPath` with mode `0600`.
-
----
-
-## Phase 4 -- Readiness polling
-
-**File:** `internal/cluster/bootstrap_service.go` -- `waitForCloudCluster`
-
-Creates a context with `opts.Timeout` (default 30 minutes). Polls every 30 seconds:
-
-1. `kubectl --kubeconfig <path> cluster-info` -- confirms the API server responds
-2. On success: `kubectl config view --minify -o jsonpath={.clusters[0].cluster.server}` -- extracts the endpoint URL
-
-Returns the endpoint string on success, or a timeout error if the API never becomes reachable.
-
----
+Re-running `cluster deploy` reads saved state and skips steps already marked `success`. Relevant flags: `--restart` (ignore saved state, rerun everything), `--step <id>` (run exactly one step), `--from-step <id>` (run from a given step onward).
 
 ## Files involved
 
 | File | Role |
 | --- | --- |
-| `cmd/cluster_deploy.go` | Entry point: flags, lock, git checks, status updates |
-| `cmd/cluster_deploy_plan.go` | Renders `--dry-run` plan output |
-| `cmd/cluster.go` | `AcquireLockWithPrompt` implementation |
-| `internal/cluster/bootstrap_service.go` | Orchestrator: config load, step execution, state management |
-| `internal/cluster/bootstrap_provider.go` | `lifecycleBootstrapProvider` interface + `execLifecycleCommandRunner` |
-| `internal/cluster/openstack_bootstrap_provider.go` | All 7 OpenStack steps + kubeconfig normalization |
-| `internal/cluster/bootstrap_plan.go` | `BootstrapPlan` types + dry-run plan builder |
-| `internal/cluster/bootstrap_runtime.go` | Log file + state file path resolution, log writer context |
-| `internal/credentials/extractor.go` | Pulls OpenStack creds from `v2.Config` |
-| `internal/credentials/openstack.go` | `OpenStackCredentials` struct + `ToEnvMap()` |
-| `internal/cloud/openstack/preflight.go` | CLI availability check + `auth_url` validation |
-| `internal/di/app.go` | Wires `BootstrapService` with all dependencies |
+| `cmd/cluster_deploy.go` | Entry point: flags, lock acquisition, git hygiene checks, status updates. |
+| `internal/cluster/bootstrap_service.go` | Orchestrator: path resolution, config load, step execution, resume-state handling, readiness polling. |
+| `internal/cluster/bootstrap_provider.go` | `lifecycleBootstrapProvider` interface and the `bootstrapStep` type every provider builds. |
+| `internal/cluster/bootstrap_provider_infra.go` | The OpenStack (and shared infra-provider) step sequence described above. |
+| `internal/cluster/bootstrap_plan.go` | `BootstrapPlan` types and the `--dry-run` plan renderer. |
+| `internal/cluster/bootstrap_runtime.go` | Log-file and state-file path resolution. |
+| `internal/credentials/extractor.go`, `internal/credentials/openstack.go` | Pull OpenStack credentials out of `v2.Config` and turn them into `OS_*` env vars. |
+| `internal/cloud/openstack/preflight.go` | CLI availability + `auth_url` sanity checks. |
 
----
+## Related
 
-## State and resume
-
-Each step’s result is written to `state.json` immediately after it runs. If deploy fails mid-way, re-running `cluster deploy` reads the saved state and skips steps already marked `success`. The failed step re-runs from the beginning.
-
-```
-~/.local/state/opencenter/
-├── bootstrap/<org>/<cluster>/state.json     ← resume state
-└── logs/bootstrap/<org>/<cluster>/
-    └── bootstrap-<timestamp>.log            ← full command output
-```
-
-Flags that affect state behavior:
-
-| Flag | Effect |
-| --- | --- |
-| _(none)_ | Resume from last failed step |
-| `--restart` | Ignore saved state, rerun all steps |
-| `--step <id>` | Run exactly one step, ignore state |
-| `--from-step <id>` | Run from the given step onwards, ignore state |
-
----
-
-## Environment variables injected per step
-
-Steps 2--6 receive the full OpenStack credential set as process environment variables. The plan output (`--dry-run`) redacts sensitive values.
-
-| Variable | Source |
-| --- | --- |
-| `OS_AUTH_URL` | `opencenter.infrastructure.cloud.openstack.auth_url` |
-| `OS_APPLICATION_CREDENTIAL_ID` | `opencenter.infrastructure.cloud.openstack.application_credential_id` |
-| `OS_APPLICATION_CREDENTIAL_SECRET` | `opencenter.infrastructure.cloud.openstack.application_credential_secret` |
-| `OS_USERNAME` | `opencenter.infrastructure.cloud.openstack.username` (fallback) |
-| `OS_PASSWORD` | `opencenter.infrastructure.cloud.openstack.password` (fallback) |
-| `OS_PROJECT_NAME` | `opencenter.infrastructure.cloud.openstack.project_name` |
-| `OS_USER_DOMAIN_NAME` | `opencenter.infrastructure.cloud.openstack.user_domain_name` |
-| `OS_PROJECT_DOMAIN_NAME` | `opencenter.infrastructure.cloud.openstack.project_domain_name` |
-| `OS_REGION_NAME` | `opencenter.infrastructure.cloud.openstack.region` |
-| `OS_INTERFACE` | hardcoded `public` |
-| `OS_IDENTITY_API_VERSION` | hardcoded `3` |
-| `KUBECONFIG` | resolved cluster kubeconfig path |
-
----
-
-## Further reading
-
-* `docs/dev/cluster-init-details.md` -- how cluster config is created before deploy
-* `docs/dev/code-structure.md` -- overall package layout
-* `internal/cluster/openstack_bootstrap_provider.go` -- step implementations
-* `internal/cluster/bootstrap_service.go` -- orchestration and state management
+- [Cluster Init Details](cluster-init-details.md) — how the config bootstrap reads from is created.
+- [Renderer Contract](rendering-contract.md) — how the GitOps repository bootstrap deploys into is generated.
+- `internal/cluster/magnum_bootstrap_provider.go` — contrast with a provider that has no OpenTofu/Kubespray step at all (see [Adding New Infrastructure Providers](adding-providers.md)).

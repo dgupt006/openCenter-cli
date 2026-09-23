@@ -5,475 +5,214 @@ sidebar_label: Testing Guide
 description: Write and run unit, BDD, and property-based tests for openCenter-cli.
 doc_type: how-to
 audience: "developers"
-tags: [contributing]
+tags: [contributing, testing]
 ---
 # Testing Guide
 
 **Purpose:** For developers, shows how to write and run tests for openCenter-cli.
 
-## Test Types
+## Test types
 
-openCenter-cli uses four types of tests:
+openCenter-cli uses four kinds of Go tests, all driven through `mise` tasks defined in `.mise.toml`:
 
-1. **Unit Tests** - Test individual functions and packages
-2. **BDD Tests** - Test user-facing workflows with Gherkin scenarios
-3. **Property Tests** - Test invariants with generated inputs
-4. **Integration Tests** - Test complete workflows end-to-end
+1. **Unit tests** -- `*_test.go` files next to the source they test.
+2. **Property-based tests** -- `*_property_test.go` files using [`gopter`](https://github.com/leanovate/gopter) (`go.mod`: `github.com/leanovate/gopter v0.2.11`).
+3. **BDD tests** -- Gherkin scenarios in `tests/features/*.feature`, run through [Godog](https://github.com/cucumber/godog) (`go.mod`: `github.com/cucumber/godog v0.16.0`).
+4. **Integration tests** -- `*_integration_test.go` files that exercise multi-package flows (cluster provisioning, resilience, operations).
 
-## Running Tests
-
-### Run All Unit Tests
+## Running tests
 
 ```bash
-# Run all unit tests in internal/ packages
+# Unit tests: internal/config/..., cmd/..., internal/cloud/...
 mise run test
-```
 
-Expected output: All tests pass (1-2 minutes)
+# Full package suite under the race detector
+mise run test-race
 
-### Run BDD Tests
+# Compile every package without producing binaries
+mise run test-build
 
-```bash
-# Run all BDD scenarios (excluding @wip)
+# BDD scenarios, excluding @wip
 mise run godog
-```
 
-Expected output: All scenarios pass (2-3 minutes)
-
-### Run WIP Scenarios Only
-
-```bash
-# Run only @wip tagged scenarios during development
+# Only @wip scenarios
 mise run godog-wip
-```
 
-Use `@wip` tag for scenarios you’re actively working on.
+# BDD scenarios filtered by a single tag
+mise run godog-tag <tag>          # e.g. mise run godog-tag keycloak
 
-### Run Property Tests
-
-```bash
-# Run all property-based tests
+# All property-based tests (TestProperty*) across internal/... and cmd/...
+mise run property
+# alias used in this doc set and elsewhere:
 mise run test-properties
-```
 
-### Run Specific Test Suites
-
-```bash
-# Vulnerability analysis
+# Vulnerability scan (govulncheck ./...)
 mise run govulncheck
 
-# Integration checks
+# Secret scan across full git history
+mise run gitleaks
+
+# Integration tests: cluster provisioning, resilience, operations
 mise run integration
 
-# V2 configuration tests only
-mise run test-v2
+# Documentation generator test (requires the `tools` build tag)
+mise run test-docs
+
+# Doc generation idempotency check
+mise run test-docs-idempotency
+
+# Kustomize build check for every generated default overlay
+mise run test-kustomize
+
+# Whitespace-error check on the working tree diff
+mise run test-diff
+
+# Everything: unit + race + vet + BDD + property + vulncheck
+mise run test:all
+
+# The subset developers should run before pushing
+mise run verify
 ```
 
-### Run Tests for Specific Package
+`mise run test` only covers `internal/config/...`, `cmd/...`, and `internal/cloud/...` -- it is not the full suite. Use `go test ./<package>` directly to scope to one package during development, or `mise run test-race` / `mise run test:all` to cover everything.
+
+### Running one package or one test
 
 ```bash
-# Test single package
 go test -v ./internal/config
-
-# Test with coverage
 go test -v -cover ./internal/config
-
-# Test specific function
-go test -v ./internal/config -run TestValidation
+go test -v ./internal/config -run TestValidateClusterName
 ```
 
-## Writing Unit Tests
+## Writing unit tests
 
-### Test File Structure
-
-Create test files alongside source files:
+Create test files alongside the source file:
 
 ```
-internal/config/
+internal/config/v2/
 ├── config.go
-├── config_test.go          # Unit tests
-└── config_property_test.go # Property tests
+├── config_test.go            # unit tests
+└── config_property_test.go   # property tests
 ```
 
-### Basic Unit Test
+Use table-driven tests with `testify` (`github.com/stretchr/testify`, already a direct dependency):
 
 ```go
-// internal/config/validator_test.go
-package config
+package v2
 
 import (
-    "testing"
-    "github.com/stretchr/testify/assert"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestValidateClusterName(t *testing.T) {
-    tests := []struct {
-        name    string
-        input   string
-        wantErr bool
-    }{
-        {
-            name:    "valid cluster name",
-            input:   "my-cluster",
-            wantErr: false,
-        },
-        {
-            name:    "invalid characters",
-            input:   "my_cluster!",
-            wantErr: true,
-        },
-        {
-            name:    "too long",
-            input:   "this-cluster-name-is-way-too-long-and-exceeds-limits",
-            wantErr: true,
-        },
-    }
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "valid", input: "my-cluster", wantErr: false},
+		{name: "invalid characters", input: "my_cluster!", wantErr: true},
+	}
 
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            err := ValidateClusterName(tt.input)
-            if tt.wantErr {
-                assert.Error(t, err)
-            } else {
-                assert.NoError(t, err)
-            }
-        })
-    }
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateClusterName(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 ```
 
-### Test with Fixtures
+Store fixtures under a package-local `testdata/` directory, or under the repository-root `testdata/` (used for multi-package fixtures such as `testdata/example-inc/` and `testdata/config/`).
 
-```go
-func TestLoadConfig(t *testing.T) {
-    // Load test fixture
-    data, err := os.ReadFile("testdata/valid-config.yaml")
-    assert.NoError(t, err)
+## Writing BDD tests
 
-    // Parse configuration
-    var cfg Config
-    err = yaml.Unmarshal(data, &cfg)
-    assert.NoError(t, err)
-
-    // Verify expected values
-    assert.Equal(t, "test-cluster", cfg.ClusterName)
-    assert.Equal(t, "openstack", cfg.Provider)
-}
-```
-
-### Test with Mocks
-
-```go
-type mockCloudProvider struct {
-    preflightCalled bool
-    preflightErrors []string
-}
-
-func (m *mockCloudProvider) Preflight(config map[string]any) []string {
-    m.preflightCalled = true
-    return m.preflightErrors
-}
-
-func TestPreflightCheck(t *testing.T) {
-    mock := &mockCloudProvider{
-        preflightErrors: []string{"auth failed"},
-    }
-
-    errors := RunPreflight(mock, map[string]any{})
-
-    assert.True(t, mock.preflightCalled)
-    assert.Len(t, errors, 1)
-    assert.Contains(t, errors[0], "auth failed")
-}
-```
-
-## Writing BDD Tests
-
-### Feature File Structure
-
-Create feature files in `tests/features/`:
+Feature files live in `tests/features/*.feature` (there are eight: `cli_config.feature`, `cluster_generate_deploy.feature`, `cluster_init.feature`, `cluster_selection.feature`, `config_template_rendering.feature`, `secrets.feature`, `validation.feature`, `workflow.feature`). Step definitions live in `tests/features/steps/` (`helpers.go`, `steps_test.go`).
 
 ```gherkin
-# tests/features/cluster_init.feature
 Feature: Cluster Initialization
-  As a platform engineer
-  I want to initialize cluster configurations
-  So that I can deploy Kubernetes clusters
-
-  Background:
-    Given I have a clean test environment
-
   Scenario: Initialize cluster with defaults
     When I run "opencenter cluster init demo --org my-org"
     Then the command should succeed
     And a configuration file should exist at "my-org/.demo-config.yaml"
-    And the configuration should have provider "openstack"
-
-  Scenario: Initialize cluster with custom provider
-    When I run "opencenter cluster init demo --org my-org --type aws"
-    Then the command should succeed
-    And the configuration should have provider "aws"
 
   @wip
   Scenario: Initialize cluster with invalid name
     When I run "opencenter cluster init invalid_name --org my-org"
     Then the command should fail
-    And the error should contain "invalid cluster name"
 ```
 
-### Step Definitions
+Tag scenarios you are actively working on with `@wip` -- `mise run godog` excludes them by default (`--godog.tags=~@wip`), and `mise run godog-wip` runs only them. The repository also carries many feature-specific tags (`@init`, `@deploy`, `@keycloak`, `@cert-manager`, `@backup`, `@drift`, and so on); run a single tag with `mise run godog-tag <tag>`.
 
-Implement steps in `tests/features/steps/`:
+`hack/tag_wip_failures.py` (invoked via `mise run tag-wip-failures`) automatically appends `@wip` to scenarios that are currently failing, so a red BDD run can be triaged without blocking unrelated work -- do not leave scenarios tagged this way permanently; remove the tag once the scenario is fixed.
+
+## Writing property-based tests
+
+Property tests assert an invariant holds for many generated inputs, using `gopter`:
 
 ```go
-// tests/features/steps/cluster_steps.go
-package steps
+package v2
 
 import (
-    "github.com/cucumber/godog"
-)
+	"testing"
 
-func (s *TestSuite) iRunCommand(cmd string) error {
-    s.lastCommand = cmd
-    s.lastOutput, s.lastError = s.runCommand(cmd)
-    return nil
-}
-
-func (s *TestSuite) theCommandShouldSucceed() error {
-    if s.lastError != nil {
-        return fmt.Errorf("command failed: %v\nOutput: %s",
-            s.lastError, s.lastOutput)
-    }
-    return nil
-}
-
-func (s *TestSuite) aConfigurationFileShouldExistAt(path string) error {
-    fullPath := filepath.Join(s.configDir, path)
-    if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-        return fmt.Errorf("configuration file not found: %s", fullPath)
-    }
-    return nil
-}
-
-func InitializeScenario(ctx *godog.ScenarioContext) {
-    suite := &TestSuite{}
-
-    ctx.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
-        return ctx, suite.setup()
-    })
-
-    ctx.After(func(ctx context.Context, sc *godog.Scenario, err error) (context.Context, error) {
-        return ctx, suite.teardown()
-    })
-
-    ctx.Step(`^I run "([^"]*)"$`, suite.iRunCommand)
-    ctx.Step(`^the command should succeed$`, suite.theCommandShouldSucceed)
-    ctx.Step(`^a configuration file should exist at "([^"]*)"$`,
-        suite.aConfigurationFileShouldExistAt)
-}
-```
-
-### Running Specific Scenarios
-
-```bash
-# Run scenarios with specific tag
-go test ./... -v args --godog.tags=@priority1 --godog.paths=tests/features
-
-# Run specific feature file
-go test ./... -v args --godog.paths=tests/features/cluster_init.feature
-
-# Run scenario by name (partial match)
-go test ./... -v args --godog.tags="@cluster_init"
-```
-
-## Writing Property Tests
-
-Property tests verify invariants hold for many generated inputs.
-
-### Basic Property Test
-
-```go
-// internal/config/validator_property_test.go
-package config
-
-import (
-    "testing"
-    "github.com/leanovate/gopter"
-    "github.com/leanovate/gopter/gen"
-    "github.com/leanovate/gopter/prop"
+	"github.com/leanovate/gopter"
+	"github.com/leanovate/gopter/gen"
+	"github.com/leanovate/gopter/prop"
 )
 
 func TestPropertyClusterNameValidation(t *testing.T) {
-    properties := gopter.NewProperties(nil)
+	properties := gopter.NewProperties(nil)
 
-    properties.Property("valid cluster names always pass validation",
-        prop.ForAll(
-            func(name string) bool {
-                // Generate valid cluster name
-                validName := generateValidClusterName(name)
-                err := ValidateClusterName(validName)
-                return err == nil
-            },
-            gen.AlphaString(),
-        ))
+	properties.Property("names with invalid characters always fail", prop.ForAll(
+		func(name string) bool {
+			return ValidateClusterName(name+"!") != nil
+		},
+		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
+	))
 
-    properties.Property("names with invalid characters always fail",
-        prop.ForAll(
-            func(name string) bool {
-                // Add invalid character
-                invalidName := name + "!"
-                err := ValidateClusterName(invalidName)
-                return err != nil
-            },
-            gen.AlphaString().SuchThat(func(s string) bool {
-                return len(s) > 0 && len(s) < 50
-            }),
-        ))
-
-    properties.TestingRun(t)
+	properties.TestingRun(t)
 }
 ```
 
-### Property Test for Idempotency
+Name the test function so it matches `TestProperty*` -- `mise run property` filters on `-run "TestProperty"`.
 
-```go
-func TestPropertyConfigMarshalUnmarshal(t *testing.T) {
-    properties := gopter.NewProperties(nil)
+## Test best practices
 
-    properties.Property("marshal then unmarshal preserves config",
-        prop.ForAll(
-            func(cfg *Config) bool {
-                // Marshal to YAML
-                data, err := yaml.Marshal(cfg)
-                if err != nil {
-                    return false
-                }
+**Do:** test behavior rather than implementation; use table-driven tests; cover edge cases (empty strings, nil, boundary values) and error paths; give tests descriptive names (`TestValidateClusterName_WithInvalidCharacters`); keep unit tests fast (milliseconds); store fixtures in `testdata/`; clean up temporary files/directories in `defer` or `t.Cleanup`.
 
-                // Unmarshal back
-                var cfg2 Config
-                err = yaml.Unmarshal(data, &cfg2)
-                if err != nil {
-                    return false
-                }
+**Don't:** call real external services (mock cloud providers/APIs); re-test third-party libraries; make tests depend on execution order; use real credentials in fixtures (`internal/security/credential_masker.go` and `internal/util/security/credential_masker.go` exist specifically so secrets never need to appear in test fixtures or logs); skip cleanup.
 
-                // Compare (should be equal)
-                return reflect.DeepEqual(cfg, &cfg2)
-            },
-            genConfig(),
-        ))
-
-    properties.TestingRun(t)
-}
-
-// Generator for Config struct
-func genConfig() gopter.Gen {
-    return gopter.CombineGens(
-        gen.AlphaString(),
-        gen.OneConstOf("openstack", "aws", "vmware"),
-        gen.IntRange(1, 10),
-    ).Map(func(values []interface{}) *Config {
-        return &Config{
-            ClusterName: values[0].(string),
-            Provider:    values[1].(string),
-            MasterCount: values[2].(int),
-        }
-    })
-}
-```
-
-## Test Coverage
-
-### Generate Coverage Report
-
-```bash
-# Run tests with coverage
-go test -v -coverprofile=coverage.out ./internal/...
-
-# View coverage in terminal
-go tool cover -func=coverage.out
-
-# Generate HTML report
-go tool cover -html=coverage.out -o coverage.html
-```
-
-### Coverage Targets
-
-Aim for:
-
-* **Critical paths**: 90%+ coverage (validation, security, secrets)
-* **Business logic**: 80%+ coverage (config, gitops, providers)
-* **Utilities**: 70%+ coverage (helpers, formatters)
-
-## Test Best Practices
-
-### Do
-
-* **Test behavior, not implementation** - Test what the code does, not how
-* **Use table-driven tests** - Test multiple cases efficiently
-* **Test edge cases** - Empty strings, nil values, boundary conditions
-* **Test error paths** - Verify errors are returned correctly
-* **Use descriptive test names** - `TestValidateClusterName_WithInvalidCharacters`
-* **Keep tests fast** - Unit tests should run in milliseconds
-* **Use fixtures** - Store test data in `testdata/` directory
-* **Clean up after tests** - Remove temporary files and directories
-
-### Don’t
-
-* **Don’t test external services** - Mock cloud providers, APIs
-* **Don’t test third-party libraries** - Trust they work
-* **Don’t make tests depend on each other** - Each test should be independent
-* **Don’t use real credentials** - Use test fixtures or mocks
-* **Don’t skip cleanup** - Always clean up in `defer` or `After` hooks
-* **Don’t test private functions directly** - Test through public API
-
-## Debugging Tests
-
-### Run Single Test with Verbose Output
+## Debugging tests
 
 ```bash
 go test -v ./internal/config -run TestValidateClusterName
-```
 
-### Run with Debug Logging
-
-```bash
+# Verbose debug logging (see mise.toml env section)
 OPENCENTER_DEBUG=true go test -v ./internal/config
-```
 
-### Use Delve Debugger
-
-```bash
-# Install delve
+# Delve
 go install github.com/go-delve/delve/cmd/dlv@latest
-
-# Debug test
 dlv test ./internal/config -- -test.run TestValidateClusterName
 ```
 
-### Print Debug Information
+## What CI actually runs
 
-```go
-func TestSomething(t *testing.T) {
-    result := DoSomething()
+CI coverage is defined entirely by `.github/workflows/*.yml`; see [GitHub Actions Workflows](../reference/github-actions-workflows.md) for the complete, verified breakdown of triggers, jobs, and steps. In short:
 
-    // Print for debugging
-    t.Logf("Result: %+v", result)
+* `test.yml` runs on pull requests and pushes to `main`: a `go-test` job (`mise run test`, `mise run test-race`, `go vet ./...`) and an independent `property-tests` job.
+* `pre-commit.yaml` runs the pre-commit hook set for changed files on every pull request.
+* `vulncheck.yml` runs `govulncheck ./...` on pull requests, on a weekly schedule, and on manual dispatch.
+* `docs-p0.yml` runs for pull requests that touch Markdown files.
+* `deploy-kind.yml` is a manually dispatched, disposable Kind + Gitea end-to-end workflow -- it is not a per-commit gate.
 
-    assert.Equal(t, expected, result)
-}
-```
-
-## Continuous Integration
-
-The repository's current CI coverage is defined by the workflows under `.github/workflows/`:
-
-* `test.yml` runs on pull requests and pushes to `main`. Its `go-test` job runs the internal and command package suite with the race detector and runs `go vet ./...`; its independent `property-tests` job runs tests selected by `TestProperty`.
-* `pre-commit.yaml` runs the manual-stage pre-commit hooks for changed files on every pull request using Python 3.10.
-* `vulncheck.yml` runs `govulncheck ./...` on pull requests, on a Monday 06:00 UTC schedule, and by manual dispatch.
-* `docs-p0.yml` runs for pull requests changing Markdown, but its referenced `scripts/docs/p0-docs-check.sh` is absent in the current repository. Do not claim the Docs P0 check passes until that limitation is resolved.
-* `deploy-kind.yml` is a manually dispatched disposable Kind/Gitea workflow, not a per-commit test job.
-
-The CI workflows do not run the BDD suite, the full integration task, documentation generator checks, or the full `mise run test:all` task. Run those locally when the change requires them:
+CI does **not** run the BDD suite, the `integration` task, the documentation-generator tests, or `mise run test:all`. Run those locally before opening a PR when your change touches the relevant area:
 
 ```bash
 mise run godog
@@ -483,17 +222,12 @@ mise run test-docs-idempotency
 mise run test:all
 ```
 
-For the complete workflow matrix, runner contract, permissions, tool pins, and artifact behavior, see [GitHub Actions Workflows](../reference/github-actions-workflows.md).
+## Coverage
 
----
+```bash
+go test -v -coverprofile=coverage.out ./internal/...
+go tool cover -func=coverage.out
+go tool cover -html=coverage.out -o coverage.html
+```
 
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Test tasks: `.mise.toml`
-* CI workflows: `.github/workflows/test.yml`, `.github/workflows/pre-commit.yaml`, `.github/workflows/vulncheck.yml`, `.github/workflows/docs-p0.yml`
-* BDD features: `tests/features/*.feature`
-* BDD step definitions: `tests/features/steps/`
-* Unit and property tests: `internal/**/*_test.go`, `cmd/**/*_test.go`
-* Test utilities: `internal/testutil/`
+There is no enforced coverage gate in CI; treat validation, security, and secrets-handling code as needing the most thorough coverage since regressions there are the highest-impact.

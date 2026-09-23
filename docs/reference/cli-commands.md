@@ -11,7 +11,7 @@ tags: [cli, commands, flags, reference]
 
 **Purpose:** Complete reference of the shipped `opencenter` command tree, generated from the live Cobra command graph.
 
-Run `go run -tags tools ./cmd/docs` to refresh the per-command pages under `docs/reference/opencenter/`.
+Run `mise run docs-gen` (`go run cmd/docs/generate.go`) to refresh the per-command pages under `docs/reference/opencenter/`.
 
 ## Global Flags
 
@@ -175,8 +175,10 @@ credentials by default; use `--rotate-credentials` to replace them. Use
 | `opencenter secrets keys backup` |
 | `opencenter secrets keys check` |
 | `opencenter secrets keys generate` |
+| `opencenter secrets keys reconcile` |
 | `opencenter secrets keys revoke` |
 | `opencenter secrets keys rotate` |
+| `opencenter secrets keys set-primary` |
 | `opencenter secrets keys validate` |
 
 ## Plugins Commands
@@ -187,6 +189,6 @@ credentials by default; use `--rotate-credentials` to replace them. Use
 
 ## GA Notes
 
-* Canonical infrastructure provider names are `openstack`, `vmware`, `kind`, and `baremetal`.
+* Canonical infrastructure provider names are `openstack`, `vmware`, `kind`, `baremetal`, and `magnum`. See [Providers Reference](providers.md) for the exact support boundary per provider.
 * `vsphere` remains accepted as a compatibility alias for existing configuration files, but documentation now uses `vmware`.
-* AWS-backed integrations such as Route53 and S3 credential flows remain supported where services use them, but AWS is not a GA infrastructure provider.
+* AWS-backed integrations such as Route53 and S3 credential flows remain supported where services use them, but `aws`, `gcp`, and `azure` are not GA infrastructure providers — the CLI rejects them at `cluster init`/`generate`/`deploy` time.

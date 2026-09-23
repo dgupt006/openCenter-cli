@@ -2,17 +2,17 @@
 id: service-olm
 title: "Operator Lifecycle Manager"
 sidebar_label: OLM
-description: Operator Lifecycle Manager for installing and managing Kubernetes operators.
+description: Operator Lifecycle Manager configuration and its role as a keycloak dependency.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [operators, lifecycle, olm]
+tags: [operators, lifecycle, olm, services]
 ---
 
-> **Purpose:** For platform engineers, documents the Operator Lifecycle Manager for automated operator installation, upgrades, and dependency resolution.
+> **Purpose:** For platform engineers, documents the OLM service's configuration surface and why keycloak requires it.
 
 ## Overview
 
-The Operator Lifecycle Manager (OLM) provides a declarative way to install, manage, and upgrade Kubernetes operators and their dependencies. It handles operator discovery from catalog sources, resolves inter-operator dependencies, and manages operator upgrades through subscription channels. OLM is a prerequisite for services that deploy operators from OperatorHub catalogs (e.g., Strimzi for Kafka).
+OLM (Operator Lifecycle Manager) installs and manages Kubernetes operators from catalog sources. It has no service-specific configuration beyond the shared `BaseConfig` fields (`internal/config/services/default_services.go` registers it as `DefaultServiceConfig`).
 
 ## Configuration
 
@@ -20,26 +20,28 @@ The Operator Lifecycle Manager (OLM) provides a declarative way to install, mana
 opencenter:
   services:
     olm:
-      enabled: true
+      enabled: true       # default: true
+      namespace: olm        # default: olm
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable Operator Lifecycle Manager |
-
-### Secrets
-
-None.
+| `enabled` | bool | `true` | Whether OLM is deployed |
+| `namespace` | string | `olm` | Namespace for OLM resources |
 
 ## Dependencies
 
-None.
+None of its own. [keycloak](keycloak.md) requires `olm` to be enabled — see `internal/config/services/dependency_validator.go`, enforced by `opencenter cluster service enable|disable`.
 
-## CLI Commands
+## Rendering
+
+`olm` has a dedicated descriptor (`internal/services/descriptors/data/service-olm.yaml`, `service: olm`) covering its sources, Kustomization, and a bundle-unpack `NetworkPolicy`, and aggregates into `services-fluxcd-aggregate` and `services-sources-aggregate`.
+
+## CLI commands
 
 ```bash
 opencenter cluster service enable olm
 opencenter cluster service disable olm
-opencenter cluster service status olm
+opencenter cluster service status
 opencenter cluster service options olm
 ```

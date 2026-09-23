@@ -121,13 +121,13 @@ The file uses standard `sha256sum` format: `<hex-digest>  <filename>` (two space
 Confirm openCenter discovers and verifies the plugin:
 
 ```bash
-opencenter plugin list
+opencenter plugins list
 ```
 
-Expected output includes:
+Expected output includes (tab-separated: command name, resolved path, status, message):
 
 ```
-opencenter-myplugin    verified    checksum verified
+myplugin    /home/user/.config/opencenter/plugins/opencenter-myplugin    verified    checksum verified
 ```
 
 Run the plugin through the CLI:
@@ -215,5 +215,6 @@ Built-in commands always take precedence. Rename the plugin to avoid the collisi
 ## Evidence
 
 * Plugin discovery and checksum verification: `internal/plugins/loader.go`
-* Plugins directory resolution: `internal/config/cli_config_helpers.go:GetPluginsDir()`
-* Checksum format: standard `sha256sum` output, parsed in `loadPluginChecksums()`
+* Plugins directory resolution: `internal/config/cli_settings_helpers.go:174` (`GetPluginsDir()`)
+* Checksum format: standard `sha256sum` output, parsed in `loadPluginChecksums()` (`internal/plugins/loader.go:168`)
+* `plugins list` command: `cmd/plugins.go` (`opencenter plugins list`, tab-separated `name\tpath\tstatus\tmessage` output)

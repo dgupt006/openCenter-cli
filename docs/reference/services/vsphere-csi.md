@@ -2,17 +2,17 @@
 id: service-vsphere-csi
 title: "vSphere CSI Driver"
 sidebar_label: vSphere CSI
-description: VMware vSphere Container Storage Interface driver for dynamic volume provisioning.
+description: VMware vSphere CSI driver configuration, storage classes, secrets, and defaults.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [storage, vsphere, vmware, csi, persistent-volumes]
+tags: [storage, vsphere, vmware, csi, services]
 ---
 
-> **Purpose:** For platform engineers and operators, documents the vSphere CSI driver configuration, covering storage classes, secrets, and verification for VMware environments.
+> **Purpose:** For platform engineers and operators, documents the vSphere CSI driver's configuration surface for VMware environments.
 
 ## Overview
 
-The vSphere CSI driver enables dynamic provisioning of persistent volumes backed by VMware vSphere datastores. It supports volume snapshots, online volume expansion, storage policies, and topology-aware scheduling. Available only for clusters using the VMware/vSphere provider.
+`vsphere-csi` provides dynamic volume provisioning backed by VMware vSphere datastores.
 
 ## Configuration
 
@@ -20,91 +20,56 @@ The vSphere CSI driver enables dynamic provisioning of persistent volumes backed
 opencenter:
   services:
     vsphere-csi:
-      enabled: false                         # default: false
+      enabled: false                        # default: false
+      namespace: vmware-system-csi           # default: vmware-system-csi
       storage_classes:
         - name: vsphere-default
           datastore_url: "ds:///vmfs/volumes/datastore1/"
-          reclaim_policy: Delete             # Retain or Delete
-          volume_binding_mode: WaitForFirstConsumer  # Immediate or WaitForFirstConsumer
-          allow_expansion: true
-        - name: vsphere-retain
-          datastore_url: "ds:///vmfs/volumes/datastore1/"
-          reclaim_policy: Retain
-          volume_binding_mode: Immediate
-          allow_expansion: true
+          reclaim_policy: Retain              # Retain | Delete, default: Retain
+          volume_binding_mode: Immediate       # Immediate | WaitForFirstConsumer, default: Immediate
+          allow_expansion: true                # default: true
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable vSphere CSI driver |
-| `storage_classes` | list | `[]` | Storage class definitions |
-| `storage_classes[].name` | string | — | StorageClass name |
-| `storage_classes[].datastore_url` | string | — | vSphere datastore URL |
-| `storage_classes[].reclaim_policy` | string | — | `Retain` or `Delete` |
-| `storage_classes[].volume_binding_mode` | string | — | `Immediate` or `WaitForFirstConsumer` |
+| `enabled` | bool | `false` | Whether the vSphere CSI driver is deployed |
+| `namespace` | string | `vmware-system-csi` | Namespace for CSI resources |
+| `storage_classes` | list of `VSphereStorageClass` | — | Storage class definitions |
+| `storage_classes[].name` | string | required | StorageClass name |
+| `storage_classes[].datastore_url` | string | required | vSphere datastore URL |
+| `storage_classes[].reclaim_policy` | string | `Retain` | `Retain` or `Delete` |
+| `storage_classes[].volume_binding_mode` | string | `Immediate` | `Immediate` or `WaitForFirstConsumer` |
 | `storage_classes[].allow_expansion` | bool | `true` | Allow online volume expansion |
 
 ## Secrets
 
-Configured under `secrets.vsphere_csi`:
+`schema/opencenter-v2.schema.json` defines `secrets.vsphere_csi`:
 
 ```yaml
 secrets:
   vsphere_csi:
-    vcenter_host: "vcenter.example.com"
-    username: "administrator@vsphere.local"
-    password: "ENC[AES256_GCM,data:...,type:str]"
-    datacenters: "DC1"
-    insecure_flag: false                    # default: false
-    port: 443                               # default: 443
-    datastoreurl: "ds:///vmfs/volumes/datastore1/"
+    vcenter_host:
+    username:
+    password:
+    datacenters:
+    insecure_flag:
+    port:
+    datastoreurl:
 ```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `vcenter_host` | string | — | vCenter Server hostname or IP |
-| `username` | string | — | vCenter authentication username |
-| `password` | string | — | vCenter authentication password (SOPS encrypted) |
-| `datacenters` | string | — | Comma-separated datacenter names |
-| `insecure_flag` | bool | `false` | Skip TLS certificate verification |
-| `port` | int | `443` | vCenter API port |
-| `datastoreurl` | string | — | Default datastore URL |
 
 ## Dependencies
 
-None. Requires the VMware/vSphere infrastructure provider.
+None enforced by `opencenter cluster service enable|disable`.
 
-## Verification
+## Rendering
 
-```bash
-# Check CSI controller pod
-kubectl get pods -n vmware-system-csi
+`vsphere-csi` has no dedicated YAML descriptor; if enabled, it is rendered through the built-in render catalog.
 
-# Verify CSI driver registration
-kubectl get csidrivers csi.vsphere.vmware.com
-
-# List storage classes
-kubectl get storageclasses
-
-# Check CSI node status
-kubectl get csinodes
-
-# Test volume provisioning
-kubectl get pvc --all-namespaces
-```
-
-## CLI Commands
+## CLI commands
 
 ```bash
-# Enable vSphere CSI
 opencenter cluster service enable vsphere-csi
-
-# Disable vSphere CSI
 opencenter cluster service disable vsphere-csi
-
-# View configuration options
-opencenter cluster service options vsphere-csi
-
-# Check service status
 opencenter cluster service status
+opencenter cluster service options vsphere-csi
 ```

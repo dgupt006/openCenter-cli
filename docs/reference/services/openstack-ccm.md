@@ -2,17 +2,17 @@
 id: service-openstack-ccm
 title: "OpenStack Cloud Controller Manager"
 sidebar_label: OpenStack CCM
-description: Cloud Controller Manager for OpenStack-provisioned clusters.
+description: OpenStack Cloud Controller Manager configuration and defaults.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [openstack, cloud-controller, networking]
+tags: [openstack, cloud-controller, networking, services]
 ---
 
-> **Purpose:** For platform engineers deploying on OpenStack, documents the Cloud Controller Manager that integrates Kubernetes with OpenStack infrastructure.
+> **Purpose:** For platform engineers on OpenStack, documents the Cloud Controller Manager service's configuration surface.
 
 ## Overview
 
-The OpenStack Cloud Controller Manager (CCM) integrates Kubernetes with the OpenStack infrastructure layer, enabling automatic load balancer provisioning via Octavia, floating IP management, and node metadata enrichment. It uses the same OpenStack credentials configured in the infrastructure section—no additional service-specific secrets are required. This service is available only for clusters using the OpenStack provider.
+`openstack-ccm` integrates Kubernetes with OpenStack infrastructure (load balancers, node metadata). It has no service-specific configuration beyond the shared `BaseConfig` fields (`internal/config/services/default_services.go` registers it as `DefaultServiceConfig`); it uses the cluster's OpenStack infrastructure credentials rather than a service-specific secret.
 
 ## Configuration
 
@@ -20,37 +20,28 @@ The OpenStack Cloud Controller Manager (CCM) integrates Kubernetes with the Open
 opencenter:
   services:
     openstack-ccm:
-      enabled: true
+      enabled: true                 # default: true
+      namespace: openstack-ccm       # default: openstack-ccm
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable OpenStack CCM (OpenStack provider only) |
-
-The CCM uses credentials from `opencenter.infrastructure.cloud.openstack.*` (auth_url, region, application credentials).
-
-### Secrets
-
-None (uses infrastructure-level OpenStack credentials).
+| `enabled` | bool | `true` | Whether OpenStack CCM is deployed |
+| `namespace` | string | `openstack-ccm` | Namespace for CCM resources |
 
 ## Dependencies
 
-None.
+None enforced by `opencenter cluster service enable|disable`.
 
-## Provider Availability
+## Rendering
 
-| Provider | Available |
-|----------|-----------|
-| OpenStack | ✓ |
-| VMware | ✗ |
-| Baremetal | ✗ |
-| Kind | ✗ |
+`openstack-ccm` has no dedicated YAML descriptor; it is rendered through the built-in render catalog.
 
-## CLI Commands
+## CLI commands
 
 ```bash
 opencenter cluster service enable openstack-ccm
 opencenter cluster service disable openstack-ccm
-opencenter cluster service status openstack-ccm
+opencenter cluster service status
 opencenter cluster service options openstack-ccm
 ```

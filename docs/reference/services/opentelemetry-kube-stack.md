@@ -2,17 +2,17 @@
 id: service-opentelemetry-kube-stack
 title: "OpenTelemetry Kube Stack"
 sidebar_label: OpenTelemetry
-description: OpenTelemetry collectors for trace, metric, and log pipelines.
+description: OpenTelemetry collector configuration fields, exporters, and defaults.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [observability, opentelemetry, tracing]
+tags: [observability, opentelemetry, tracing, services]
 ---
 
-> **Purpose:** For platform engineers, documents the OpenTelemetry collector stack configuration including deployment modes, exporters, and processors.
+> **Purpose:** For platform engineers, documents the OpenTelemetry collector stack's configuration surface.
 
 ## Overview
 
-The OpenTelemetry Kube Stack deploys OpenTelemetry collectors that receive, process, and export telemetry data (traces, metrics, logs) from cluster workloads. Collectors can run as Deployments, DaemonSets, or StatefulSets depending on the collection pattern required. Multiple exporters can be configured to send data to different backends simultaneously.
+`opentelemetry-kube-stack` deploys OpenTelemetry collectors.
 
 ## Configuration
 
@@ -20,50 +20,45 @@ The OpenTelemetry Kube Stack deploys OpenTelemetry collectors that receive, proc
 opencenter:
   services:
     opentelemetry-kube-stack:
-      enabled: true
-      collector_mode: deployment
-      collector_replicas: 1
+      enabled: false                 # default: false
+      namespace: observability        # default: observability
+      collector_mode: deployment       # default: deployment; deployment | daemonset | statefulset
+      collector_replicas: 1             # default: 1
       exporters:
         - name: tempo
-          type: otlp
+          type: otlp                    # otlp | prometheus | jaeger
           endpoint: tempo.observability.svc:4317
           headers: {}
-        - name: prometheus
-          type: prometheus
-          endpoint: http://prometheus.monitoring.svc:9090/api/v1/write
       processors:
         - batch
-        - memory_limiter
-        - resource
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable OpenTelemetry collectors |
-| `collector_mode` | string | `deployment` | Mode: `deployment`, `daemonset`, or `statefulset` |
+| `enabled` | bool | `false` | Whether the collector stack is deployed |
+| `namespace` | string | `observability` | Namespace for collector resources |
+| `collector_mode` | string | `deployment` | `deployment` \| `daemonset` \| `statefulset` |
 | `collector_replicas` | int | `1` | Number of collector replicas |
-| `exporters` | list | — | List of telemetry export destinations |
-| `exporters[].name` | string | — | Exporter identifier |
-| `exporters[].type` | string | — | Export protocol: `otlp`, `prometheus`, or `jaeger` |
-| `exporters[].endpoint` | string | — | Destination endpoint URL |
-| `exporters[].headers` | map | — | Additional HTTP headers |
-| `processors` | list of strings | — | Processing pipeline stages |
-
-### Secrets
-
-None.
+| `exporters` | list of `OTelExporter` | — | Export destinations |
+| `exporters[].name` | string | required | Exporter identifier |
+| `exporters[].type` | string | required | `otlp` \| `prometheus` \| `jaeger` |
+| `exporters[].endpoint` | string | required | Destination endpoint URL |
+| `exporters[].headers` | map of strings | — | Additional HTTP headers |
+| `processors` | list of strings | — | Processor pipeline stage names |
 
 ## Dependencies
 
-| Service | Required | Notes |
-|---------|----------|-------|
-| tempo | Yes | Trace backend for OTLP export |
+None enforced by `opencenter cluster service enable|disable`.
 
-## CLI Commands
+## Rendering
+
+`opentelemetry-kube-stack` has no dedicated YAML descriptor; if enabled, it is rendered through the built-in render catalog. Enabling it also causes the generated `services/sources/kustomization.yaml.tpl` to include the shared `opencenter-observability` source.
+
+## CLI commands
 
 ```bash
 opencenter cluster service enable opentelemetry-kube-stack
 opencenter cluster service disable opentelemetry-kube-stack
-opencenter cluster service status opentelemetry-kube-stack
+opencenter cluster service status
 opencenter cluster service options opentelemetry-kube-stack
 ```

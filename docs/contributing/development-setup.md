@@ -2,75 +2,51 @@
 id: development-setup
 title: "Development Environment Setup"
 sidebar_label: Development Environment Setup
-description: Set up a complete development environment for openCenter-cli, including toolchain, editor, and local cluster.
+description: Set up a complete development environment for openCenter-cli, including toolchain, editor, and a local Kind cluster.
 doc_type: how-to
 audience: "developers"
-tags: [contributing]
+tags: [contributing, setup]
 ---
 # Development Environment Setup
 
 **Purpose:** For developers, shows how to set up a complete development environment for openCenter-cli from scratch.
 
-## What You’ll Build
+## What you'll build
 
-By the end of this tutorial, you’ll have:
-
-* Complete development environment with all tools installed
-* Working openCenter-cli binary built from source
-* Tests passing locally
-* Editor configured for Go development
-
-**Time:** 15-20 minutes
+* A working `opencenter` binary built from source, with version metadata baked in.
+* A pinned toolchain managed by [mise](https://mise.jdx.dev/).
+* Passing unit and BDD test runs.
+* Optionally, a disposable local Kind cluster to exercise the full `init` -> `validate` -> `generate` -> `deploy` flow.
 
 ## Prerequisites
 
-Before starting, ensure you have:
+* macOS, Linux, or WSL2.
+* Git.
+* Docker or Podman (only needed if you will run a local Kind cluster).
+* A text editor or IDE with Go support.
 
-* macOS, Linux, or WSL2 (Windows Subsystem for Linux)
-* Git installed and configured
-* GitHub account with SSH key configured
-* Terminal access
-* Text editor or IDE (VS Code, GoLand, vim, etc.)
+## Step 1: Install mise
 
-## Step 1: Install Mise
-
-Mise manages tool versions for the project (Go, kubectl, kind, helm).
-
-**macOS (Homebrew):**
+`.mise.toml` pins every tool this project needs. Install mise itself first:
 
 ```bash
+# macOS
 brew install mise
-```
 
-**Linux:**
-
-```bash
+# Linux
 curl https://mise.run | sh
-```
 
-**Verify installation:**
-
-```bash
 mise --version
 ```
 
-Expected output: `mise 2024.x.x` or similar
-
-## Step 2: Clone Repository
-
-Clone the openCenter-cli repository:
+## Step 2: Clone the repository
 
 ```bash
-# Create workspace directory
-mkdir -p ~/workspace
-cd ~/workspace
-
-# Clone repository
 git clone git@github.com:opencenter-cloud/openCenter-cli.git
 cd openCenter-cli
 ```
 
-If you’re contributing, fork first and clone your fork:
+If you are contributing from a fork, clone your fork and add the upstream remote:
 
 ```bash
 git clone git@github.com:YOUR-USERNAME/openCenter-cli.git
@@ -78,362 +54,119 @@ cd openCenter-cli
 git remote add upstream git@github.com:opencenter-cloud/openCenter-cli.git
 ```
 
-## Step 3: Install Development Tools
-
-Mise reads `.mise.toml` and installs required tools:
+## Step 3: Install pinned tools
 
 ```bash
-# Install all tools (Go, kubectl, kind, helm)
 mise install
 ```
 
-This installs:
+This installs, per `.mise.toml`:
 
-* **Go 1.26.3** - Primary language
-* **kubectl** - Kubernetes CLI
-* **kind** - Local Kubernetes clusters
-* **helm** - Kubernetes package manager
+| Tool | Pinned version |
+| --- | --- |
+| `golang` | 1.26.6 |
+| `golangci-lint` | 2.11.4 |
+| `kubectl` | latest |
+| `kind` | latest |
+| `helm` | latest |
+| `sops` | 3.13.3 |
+| `golang.org/x/vuln/cmd/govulncheck` (via `go:`) | latest |
+| `gitleaks/gitleaks` (via `aqua:`) | latest |
 
-**Verify tools:**
+Verify with `mise list`. The repository also declares two mise-scoped environment defaults relevant to local Kind work: `KIND_EXPERIMENTAL_PROVIDER=podman` and `CONTAINER_RUNTIME=podman`. Override these (e.g. `CONTAINER_RUNTIME=docker`) if you use Docker instead of Podman.
 
-```bash
-mise list
-```
-
-Expected output shows installed versions:
-
-```
-go      1.26.3
-kubectl latest
-kind    latest
-helm    latest
-```
-
-## Step 4: Install Go Dependencies
-
-Download all Go module dependencies:
+## Step 4: Fetch Go module dependencies
 
 ```bash
-# Download dependencies
 go mod download
-
-# Verify dependencies
 go mod verify
 ```
 
-Expected output: `all modules verified`
-
 ## Step 5: Build the CLI
 
-Build the opencenter binary:
-
 ```bash
-# Build with version information
-mise run build
+mise run build          # builds bin/opencenter and bin/opencenter-local
+# or individually:
+mise run build-cli       # bin/opencenter only
+mise run build-local-plugin  # bin/opencenter-local only
 ```
 
-Expected output:
-
-```
-Built opencenter 0.0.1 (abc1234)
-```
-
-**Verify binary:**
+`build-cli` embeds version metadata via `-ldflags`: `main.version` (from the nearest exact git tag, else `0.0.1`), `main.gitCommit`, `main.gitBranch`, `main.gitTag`, `main.buildDate`.
 
 ```bash
 ./bin/opencenter version
 ```
 
-Expected output shows version, commit, branch, and build date.
-
-## Step 6: Run Tests
-
-Verify your environment by running tests:
+## Step 6: Run tests
 
 ```bash
-# Run unit tests
-mise run test
+mise run test    # internal/config/..., cmd/..., internal/cloud/...
+mise run godog   # BDD scenarios, excluding @wip
 ```
 
-Expected output: All tests pass (may take 1-2 minutes)
+See [Testing Guide](testing-guide.md) for the full test matrix (`test-race`, `property`, `integration`, `govulncheck`, `gitleaks`, `test:all`, `verify`).
+
+If tests fail, check that:
+
+* `go version` matches the pinned `1.26.6` (`mise which go` shows the mise-managed binary).
+* Dependencies are downloaded (`go mod download`).
+* No stray local config from a previous run is interfering (`rm -rf testdata/config` is safe -- it is a generated test artifact, not checked-in fixture data).
+
+## Step 7: Editor configuration
+
+Any editor with Go tooling support works. Configure it to run `gofmt` on save and `golangci-lint run ./...` (the exact command `mise run lint` runs) as the linter. There is no repository-specific editor config beyond this -- `opencenter settings ide` generates JSON-Schema-aware editor configuration for **cluster config files** (not for editing the Go source itself); see [`opencenter settings ide`](../reference/opencenter/opencenter_settings_ide.md).
+
+## Step 8: Shell integration (optional)
 
 ```bash
-# Run BDD tests
-mise run godog
-```
-
-Expected output: All scenarios pass (may take 2-3 minutes)
-
-If tests fail, check:
-
-* Go version matches `.mise.toml` (1.26.3)
-* All dependencies downloaded (`go mod download`)
-* No local configuration conflicts (`rm -rf testdata/config`)
-
-## Step 7: Configure Editor
-
-### VS Code
-
-Install recommended extensions:
-
-* **Go** (golang.go) - Go language support
-* **YAML** (redhat.vscode-yaml) - YAML validation
-* **Cucumber** (alexkrechik.cucumberautocomplete) - Gherkin syntax
-
-**Workspace settings** (`.vscode/settings.json`):
-
-```json
-{
-  "go.useLanguageServer": true,
-  "go.lintTool": "golangci-lint",
-  "go.lintOnSave": "workspace",
-  "go.formatTool": "gofmt",
-  "go.formatOnSave": true,
-  "go.testFlags": ["-v"],
-  "go.testTimeout": "5m"
-}
-```
-
-### GoLand / IntelliJ IDEA
-
-1. Open project directory
-2. GoLand auto-detects Go module
-3. Enable **File Watchers** for gofmt:
-   * Settings → Tools → File Watchers
-   * Add → go fmt
-   * Scope: Project Files
-
-### Vim / Neovim
-
-Install vim-go plugin:
-
-```vim
-" Add to .vimrc or init.vim
-Plug 'fatih/vim-go', { 'do': ':GoUpdateBinaries' }
-
-" Configure
-let g:go_fmt_command = "gofmt"
-let g:go_auto_type_info = 1
-let g:go_def_mapping_enabled = 1
-```
-
-## Step 8: Set Up Shell Integration (Optional)
-
-Enable shell completion and prompt integration:
-
-```bash
-# Install shell integration
 mise run install-shell-integration
 ```
 
-This adds:
+This runs `hack/install-shell-integration.sh`, which installs `shell-integration.sh` / `shell-integration.fish` / `starship-opencenter.toml` into `${OPENCENTER_CONFIG_DIR:-$HOME/.config/opencenter}/shell/`, prints (and optionally appends, with confirmation) a `source` line for bash/zsh into your shell rc file, and for fish copies the integration file directly into `~/.config/fish/conf.d/opencenter.fish`. It adds the `opencenter_active` / `opencenter_prompt` / `opencenter_active_short` shell functions and the `oc-active`, `oc-status`, `oc-select`, `oc-list` aliases, and prints Starship setup instructions if `starship` is on your `PATH`.
 
-* Command completion (bash/zsh/fish)
-* Active cluster in prompt
-* Cluster switching shortcuts
-
-**Reload shell:**
+## Step 9: Create a disposable Kind cluster (optional)
 
 ```bash
-# Bash
-source ~/.bashrc
-
-# Zsh
-source ~/.zshrc
-
-# Fish
-source ~/.config/fish/config.fish
-```
-
-**Test completion:**
-
-```bash
-opencenter cluster <TAB>
-```
-
-Expected: Shows available subcommands
-
-## Step 9: Create Test Cluster (Optional)
-
-Verify end-to-end functionality with a local Kind cluster:
-
-```bash
-# Initialize test cluster configuration
 ./bin/opencenter cluster init test-dev --org my-org --type kind --kind-disable-default-cni
-
-# Validate configuration
 ./bin/opencenter cluster validate test-dev
-
-# Generate GitOps output
 ./bin/opencenter cluster generate test-dev
-
-# Create the named Kind cluster (requires Docker or Podman)
 ./bin/opencenter cluster deploy test-dev
 ```
 
-Expected: Kind cluster created for `test-dev` using the rendered `kind-config.yaml`
-
-**Clean up:**
+Clean up:
 
 ```bash
 ./bin/opencenter cluster destroy test-dev --force
 ```
 
-## Check Your Work
+For the fully automated version of this flow (including a local Gitea instance for GitOps push), see `.github/workflows/deploy-kind.yml`, which is also runnable as a reference for the exact command sequence, or use `mise run gitea-up` / `mise run gitea-cleanup` directly. See [Kind Cluster Verification](kind-cluster-verification.md).
 
-Verify your development environment:
+## Check your work
 
 ```bash
-# 1. Mise installed and tools available
-mise list
-
-# 2. Binary builds successfully
-mise run build
-./bin/opencenter version
-
-# 3. Tests pass
+mise list                 # tools installed
+mise run build && ./bin/opencenter version
 mise run test
 mise run godog
-
-# 4. Code formatting works
 mise run fmt
-
-# 5. Dependencies are tidy
 mise run tidy
 ```
 
-All commands should complete without errors.
-
 ## Troubleshooting
 
-### Mise not found
+**`mise: command not found`** -- add mise's install location to `PATH` (typically `$HOME/.local/bin`) and reload your shell.
 
-**Problem:** `mise: command not found`
+**Go version mismatch** -- run `mise install go` and `mise which go` to confirm the mise-managed `1.26.6` toolchain is what `go` resolves to in your shell.
 
-**Solution:**
+**Tests fail with a config-directory error** -- remove any stale local test config (`rm -rf testdata/config`) and re-run.
 
-```bash
-# Add to shell profile (~/.bashrc, ~/.zshrc, etc.)
-export PATH="$HOME/.local/bin:$PATH"
+**Build fails with a missing package** -- `go mod download && go mod verify`, then rebuild.
 
-# Reload shell
-source ~/.bashrc  # or ~/.zshrc
-```
+**Kind cluster creation fails** -- confirm your container runtime is running (`docker ps` or `podman ps`), and that `CONTAINER_RUNTIME` / `KIND_EXPERIMENTAL_PROVIDER` match the runtime you actually have installed.
 
-### Go version mismatch
+## Next steps
 
-**Problem:** `go: version "1.26.3" does not match go.mod`
-
-**Solution:**
-
-```bash
-# Let mise manage Go version
-mise install go
-
-# Verify
-mise which go
-```
-
-### Tests fail with "config directory not found"
-
-**Problem:** Tests fail with configuration errors
-
-**Solution:**
-
-```bash
-# Clean test artifacts
-rm -rf testdata/config
-
-# Re-run tests
-mise run test
-```
-
-### Build fails with "package not found"
-
-**Problem:** `package github.com/... not found`
-
-**Solution:**
-
-```bash
-# Download dependencies
-go mod download
-
-# Verify
-go mod verify
-
-# Rebuild
-mise run build
-```
-
-### Kind cluster creation fails
-
-**Problem:** `kind create cluster` fails
-
-**Solution:**
-
-```bash
-# Check Docker/Podman is running
-docker ps  # or: podman ps
-
-# If using Podman, set environment variable
-export KIND_EXPERIMENTAL_PROVIDER=podman
-
-# Retry
-./bin/opencenter cluster deploy test-dev
-```
-
-## Next Steps
-
-Now that your environment is set up:
-
-1. **Read the code structure** - [Code Structure](code-structure.md)
-2. **Learn the build system** - [Build System](build-system.md)
-3. **Write your first test** - [Testing Guide](testing-guide.md)
-4. **Make your first contribution** - [Contributing](contributing.md)
-
-## Common Development Tasks
-
-**Build and test:**
-
-```bash
-mise run build && mise run test && mise run godog
-```
-
-**Format and tidy:**
-
-```bash
-mise run fmt && mise run tidy
-```
-
-**Schema changes:**
-
-```bash
-mise run schema-verify
-```
-
-**Clean build artifacts:**
-
-```bash
-mise run clean
-```
-
-**See all available tasks:**
-
-```bash
-mise tasks
-```
-
----
-
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Tool versions: `.mise.toml:1-5` (tools section)
-* Build process: `.mise.toml:23-47` (build task)
-* Test execution: `.mise.toml:64-67` (test tasks)
-* Development guide: `.kiro/steering/tech.md:1-149`
-* Project structure: `.kiro/steering/structure.md:1-128`
-* Go dependencies: `go.mod:1-77`
-* Shell integration: `.mise.toml` (`install-shell-integration` task)
-* Kind cluster workflow: `cmd/cluster_init.go`, `cmd/cluster_setup.go`, `cmd/cluster_bootstrap.go`, `cmd/cluster_destroy.go`
+1. [Codebase Organization](code-structure.md)
+2. [Build System (Mise)](build-system.md)
+3. [Testing Guide](testing-guide.md)
+4. [Contributing to openCenter-cli](contributing.md)

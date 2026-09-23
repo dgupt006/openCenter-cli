@@ -1,6 +1,6 @@
 # openCenter CLI
 
-> openCenter CLI turns a declarative Kubernetes cluster configuration into validated GitOps assets and provider-specific lifecycle operations. It supports OpenStack, VMware, Baremetal, and Kind as the current infrastructure providers, with SOPS/Age secrets handling, Flux-oriented repository generation, import tooling, drift/backup operations, and resumable bootstrap.
+> openCenter CLI turns a declarative Kubernetes cluster configuration into validated GitOps assets and provider-specific lifecycle operations. It supports OpenStack, VMware, Baremetal, Magnum (managed OpenStack Kubernetes), and Kind as the current infrastructure providers, with SOPS/Age secrets handling, Flux-oriented repository generation, import tooling, drift/backup operations, and resumable bootstrap.
 
 This file is a concise navigation guide for code-oriented readers and language models. It is curated documentation, not an automatically generated artifact. Exact command flags belong to the command reference and generated per-command pages.
 
@@ -121,7 +121,7 @@ Other built-in groups are `settings`, `plugins list`, `version`, and `shell-init
 - `cluster provider openstack plan/apply` uses a selected `clouds.yaml` profile for read-only discovery and validated typed provider persistence; it has no remote mutation capability. `cluster service storage plan/apply` provisions one supported service at a time, reuses or rotates credentials, persists typed service wiring, and retains recovery state for partial failures. `--dry-run` suppresses storage mutations and local persistence. See the [OpenStack provider and storage operations map](docs/CODEMAPS/openstack-provider-storage-operations.md).
 - Rendering uses descriptor coverage, an immutable built-in `RenderCatalog`, owned action validation, atomic workspace writes, and promotion that preserves `custom/`.
 - `internal/secretartifacts` maps logical secret owners to deterministic physical artifacts. `internal/secrets` performs locked transactional manifest sync with encryption, journaling/rollback, ownership hashes, and state. SOPS overlay value encryption is a separate `internal/sops` concern.
-- OpenStack, VMware, Baremetal, and Kind are the current infrastructure provider paths. AWS, GCP, and Azure are rejected planned/unavailable providers.
+- OpenStack, VMware, Baremetal, Magnum, and Kind are the current infrastructure provider paths. AWS, GCP, and Azure are rejected planned/unavailable providers.
 
 ## Concepts and design
 
@@ -139,7 +139,7 @@ Other built-in groups are `settings`, `plugins list`, `version`, and `shell-init
 - [Manage secrets](docs/operations/manage-secrets.md) — operator procedure for secret workflows.
 - [Backup and restore](docs/operations/backup-and-restore.md) — operator procedure for backups.
 - [Troubleshoot deployment](docs/operations/troubleshoot-deployment.md) — deployment diagnostics.
-- [Provider overview](docs/providers/README.md) — provider-oriented navigation.
+- [Provider overview](docs/reference/providers.md) — provider-oriented navigation and support boundary.
 - [VMware guide](docs/providers/vmware.md) — VMware deployment details.
 - [Create a Kind cluster](docs/operations/create-kind-cluster.md) — local Kind workflow.
 - [Import and migration](docs/operations/migrate-clusters.md) — migration procedure.
@@ -155,4 +155,4 @@ Other built-in groups are `settings`, `plugins list`, `version`, and `shell-init
 - [Build system](docs/contributing/build-system.md) — repository build and tooling.
 - [Release process](docs/contributing/release-process.md) — release workflow.
 
-The per-command reference is refreshed with `go run -tags tools ./cmd/docs`; it is intentionally built from the built-in Cobra tree. No generator automatically maintains this `llms.txt` file.
+The per-command reference is refreshed with `mise run docs-gen` (`go run cmd/docs/generate.go`); it is intentionally built from the built-in Cobra tree. No generator automatically maintains this `llms.txt` file.

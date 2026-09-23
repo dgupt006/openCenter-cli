@@ -2,36 +2,42 @@
 id: configuration-lifecycle
 title: "Configuration Lifecycle"
 sidebar_label: Configuration Lifecycle
-description: How cluster configuration evolves from initialization through deployment and updates.
+description: How cluster configuration evolves from initialization through validation, GitOps generation, deployment, and updates.
 doc_type: explanation
 audience: "platform teams, operators"
 tags: [configuration, lifecycle, gitops, validation]
 ---
 # Configuration Lifecycle
 
-**Purpose:** For platform teams, explains configuration management from initialization through updates, covering configuration flow through drift management.
-
-Understanding the configuration lifecycle helps you manage clusters effectively and maintain consistency. This explanation covers how configuration evolves from creation to production.
+**Purpose:** For platform teams, explains how a cluster's configuration moves from `cluster init` through validation, GitOps generation, deployment, and ongoing updates.
 
 ## Configuration as Code
 
-openCenter treats configuration as code with these principles:
+openCenter treats the cluster configuration YAML as the single declarative input for a cluster:
 
-1. **Single Source of Truth:** One YAML file defines entire cluster
-2. **Version Controlled:** Configuration stored in Git
-3. **Declarative:** Describe desired state, not steps
-4. **Validated:** Multi-layered validation before deployment
-5. **Auditable:** All changes tracked in Git history
+1. One YAML file per cluster describes the desired state.
+2. The file is meant to be version-controlled (the CLI does not require this, but the layout supports it).
+3. `internal/config/v2` loads, normalizes, and validates the file before any command uses it.
+4. Generation and deployment are driven entirely by the validated model — there is no separate imperative script.
 
-**Why configuration as code:** Reproducible deployments, audit trail, rollback capability, collaboration via pull requests.
+## Where Configuration Lives
 
-**Evidence:** `.kiro/steering/product.md:30-35`, Session 2 B0 section 2
+`internal/core/paths` resolves cluster-scoped paths from a set of separate zone roots rather than one shared directory. This keeps secrets and local state out of the Git-tracked GitOps tree (see [Security Model](security-model.md)). The zones, resolved under `~/.config/opencenter/clusters/` by default:
+
+| Zone | Root env var | Default root | Contains |
+| --- | --- | --- | --- |
+| Blueprints | `OPENCENTER_BLUEPRINTS_DIR` | `<clusters-dir>/blueprints` | `<organization>/<cluster>/<cluster>-config.yaml` — the cluster config input |
+| GitOps | `OPENCENTER_GITOPS_DIR` | `<clusters-dir>/gitops` | `<organization>/` — the Git-tracked repository (`applications/overlays/<cluster>/`, `infrastructure/clusters/<cluster>/`) |
+| Cluster state | `OPENCENTER_CLUSTER_STATE_DIR` | `<clusters-dir>/state` | `<organization>/<cluster>/` — kubeconfig, Ansible inventory, venv, `.bin/` |
+| Secrets | `OPENCENTER_SECRETS_DIR` | `<clusters-dir>/secrets` | `<organization>/<cluster>/age/`, `<organization>/<cluster>/ssh/` |
+
+Each root also has a matching `paths.*Dir` field in the CLI settings file (`opencenter settings set paths.blueprintsDir ...`). `internal/core/paths.ClusterPaths.Validate()` rejects any resolved secrets, state, or config path that is equal to or nested inside the GitOps zone — this is enforced on every path resolution, not just at `init` time.
+
+**Evidence:** `internal/core/paths/types.go`, `internal/core/paths/secure.go`, `internal/core/paths/resolver.go`, `internal/config/cli_settings_helpers.go`
 
 ## Configuration Stages
 
 ### Stage 1: Initialization
-
-**Purpose:** Create initial configuration with sensible defaults.
 
 **Command:**
 
@@ -39,98 +45,32 @@ openCenter treats configuration as code with these principles:
 opencenter cluster init my-cluster --org my-org --type openstack
 ```
 
-**Process:**
+**Process** (`internal/cluster.InitService.Initialize`):
 
-```
-1. CLI: Load built-in defaults (internal/config/defaults.go)
-2. CLI: Load CLI defaults (~/.config/opencenter/config.yaml)
-3. CLI: Apply command-line flags (--org, --type)
-4. CLI: Generate configuration file
-5. CLI: Write to ~/.config/opencenter/clusters/my-org/.my-cluster-config.yaml
-```
+1. Validate the cluster name and organization name.
+2. Resolve cluster paths through `PathResolver` and create the blueprints, GitOps, state, and secrets directories with the modes described in [Security Model](security-model.md).
+3. Build a default `v2.Config` from `internal/config/v2.NewV2Default`, which seeds provider-aware service defaults and identity settings.
+4. Apply any `--param`/flag overrides supplied to `init`.
+5. Generate Age and SSH key material into the secrets zone.
+6. Save the config file (mode `0600`) into the blueprints zone as `<cluster>-config.yaml`.
 
-**Generated Configuration:**
+**Why this design:** Defaults come from one typed Go source (`internal/config/v2/defaults.go`), so every new cluster starts from a validated, provider-aware baseline instead of a hand-copied template.
 
-```yaml
-schema_version: "2.0"
-
-opencenter:
-  meta:
-    name: my-cluster
-    env: production
-    region: sjc3
-    organization: my-org
-
-  infrastructure:
-    provider: openstack
-    openstack:
-      region: sjc3
-      availability_zone: az1
-      # ... (100+ default fields)
-
-  cluster:
-    kubernetes:
-      version: "1.33.5"
-    master_count: 3
-    worker_count: 2
-    # ... (50+ default fields)
-
-  services:
-    cert-manager:
-      enabled: true
-    keycloak:
-      enabled: true
-    # ... (20+ services)
-```
-
-**Why this design:** Defaults provide production-ready configuration. Users only customize what’s needed. Reduces configuration complexity.
-
-**Evidence:** `cmd/cluster_init.go`, `internal/config/defaults.go:48-451`, Session 2 B0 section 2
+**Evidence:** `cmd/cluster_init.go`, `internal/cluster/init_service.go`, `internal/config/v2/defaults.go`
 
 ### Stage 2: Customization
 
-**Purpose:** Customize configuration for specific requirements.
-
 **Methods:**
 
-1. **Direct Editing:** Edit configuration file with text editor
-2. **Interactive Mode:** `opencenter cluster edit my-cluster`
-3. **CLI Flags:** `opencenter cluster set my-cluster cluster.worker_count=5`
+1. **Direct editing:** edit the config file with a text editor.
+2. **Interactive mode:** `opencenter cluster edit <cluster>` (`cmd/cluster_edit.go`).
+3. **CLI flags:** `opencenter cluster set <cluster> <path>=<value>...` (`cmd/cluster_set.go`).
 
-**Common Customizations:**
+`cluster set` and `init` share the same flag-merging pipeline in `internal/config/flags`, which merges configuration sources in a fixed precedence order — lowest to highest: built-in defaults, the existing file, template-derived values, then CLI-supplied values (`internal/config/flags/configuration_merger.go`). CLI flags always win over what is already on disk.
 
-```yaml
-# Node counts
-opencenter:
-  cluster:
-    master_count: 3  # High availability
-    worker_count: 5  # Increased capacity
-
-# Networking
-opencenter:
-  cluster:
-    networking:
-      pod_subnet: "10.42.0.0/16"
-      service_subnet: "10.43.0.0/16"
-      cni_plugin: cilium  # Changed from Calico
-
-# Services
-opencenter:
-  services:
-    loki:
-      enabled: false  # Disabled for cost optimization
-    harbor:
-      enabled: true  # Enabled for container registry
-      hostname: harbor.example.com
-```
-
-**Why this design:** Flexibility for different use cases. Interactive mode for guided editing. CLI flags for automation.
-
-**Evidence:** `cmd/cluster_edit.go`, `cmd/cluster_set.go`, Session 2 B0 section 3
+**Evidence:** `cmd/cluster_edit.go`, `cmd/cluster_set.go`, `internal/config/flags/configuration_merger.go`
 
 ### Stage 3: Validation
-
-**Purpose:** Verify configuration correctness before deployment.
 
 **Command:**
 
@@ -138,42 +78,22 @@ opencenter:
 opencenter cluster validate my-cluster
 ```
 
-**Validation Layers:**
+`internal/cluster.ValidateService` loads the configuration through the same six-stage pipeline every other command uses (`internal/config/v2/loader.go`):
 
 ```
-1. Schema Validation (JSON schema compliance)
-    ↓
-2. Business Rules (cross-field dependencies)
-    ↓
-3. Provider Validation (provider-specific constraints)
-    ↓
-4. Connectivity Validation (API reachability, optional)
+1. Parse YAML
+2. Normalize (canonicalize provider names, resolve aliases)
+3. Resolve references (${ref:}, ${env:}, ${file:})
+4. Apply defaults (hydrate empty fields from the provider/region registry)
+5. Validate (schema, business rules, provider, deployment, service checks)
+6. Freeze (mark the result immutable)
 ```
 
-**Example Validation:**
+A failure at any stage returns immediately with a stage-tagged error (for example `stage 5 (validate): ...`), so the reported error already indicates which phase produced it.
 
-```yaml
-# Configuration
-opencenter:
-  cluster:
-    networking:
-      use_octavia: false
-      vrrp_enabled: true
-      # vrrp_ip: missing
+**Evidence:** `internal/config/v2/loader.go`, `internal/config/v2/validator.go`, `cmd/cluster_validate.go`
 
-# Validation Error
-Error: When use_octavia=false and vrrp_enabled=true, vrrp_ip must be set
-Location: opencenter.cluster.networking.vrrp_ip
-Severity: error
-```
-
-**Why this design:** Fail fast (catch errors early). Progressive validation (fast checks first). Specific error messages (easy to fix).
-
-**Evidence:** `internal/config/validator.go`, `tests/features/workflow.feature:38-43`, Session 1 A3
-
-### Stage 4: Setup (GitOps Repository Generation)
-
-**Purpose:** Generate complete GitOps repository structure.
+### Stage 4: Generate (GitOps Repository Rendering)
 
 **Command:**
 
@@ -181,44 +101,24 @@ Severity: error
 opencenter cluster generate my-cluster
 ```
 
-**Process:**
+`internal/cluster.SetupService.Setup` loads and validates configuration, then calls `internal/gitops` directly:
 
 ```
-1. Template Engine: Load embedded templates
-2. Template Engine: Inject configuration values
-3. Template Engine: Render to GitOps repository
-4. SOPS Manager: Encrypt secrets
-5. Git: Initialize repository (optional)
+1. gitops.CopyBase               — copy the base repository structure
+2. gitops.RenderClusterAppsWithEncryption
+                                  — render application descriptors/catalog actions,
+                                    encrypt overlay values before promotion
+3. gitops.RenderInfrastructureCluster
+                                  — render provider-selected infrastructure assets
+4. gitops.RenderClusterFluxBridge — render the per-cluster Flux bridge
+5. tofu.Provision                — non-Kind providers only
 ```
 
-**Generated Structure:**
+Generated files under an overlay's `services/`, `managed-services/`, and `customer-managed/` paths are tracked by SHA-256 in `.opencenter-generated.json` at the overlay root (`internal/gitops/ownership.go`). Anything openCenter did not generate is left alone; put hand-authored manifests in a service's `custom/` directory, which promotion never touches. Use `opencenter cluster migrate-layout --custom --org <organization> --cluster <cluster> --apply` to move pre-existing hand-authored files into `custom/` before regenerating.
 
-```
-<git_dir>/
-├── .gitignore
-├── .sops.yaml
-├── README.md
-│
-├── applications/
-│   └── overlays/my-cluster/
-│       ├── flux-system/          # FluxCD bootstrap
-│       ├── services/              # Platform services
-│       └── managed-services/      # Customer applications
-│
-└── infrastructure/
-    └── clusters/my-cluster/
-        ├── main.tf                # Terraform/OpenTofu
-        ├── inventory/             # Kubespray Ansible
-        └── kubeconfig.yaml        # Generated after deployment
-```
-
-**Why this design:** Standardized structure (consistency). Templates ensure correctness. Secrets encrypted before commit. Generated files under the overlay's `services/`, `managed-services/`, and `customer-managed/` paths are tracked in `.opencenter-generated.json` at the overlay root. Put user-owned additions in a service's `custom/` directory; openCenter preserves that directory. Use `opencenter cluster migrate-layout --custom --org <organization> --cluster <cluster> --apply` to move pre-existing hand-authored files before regenerating.
-
-**Evidence:** `internal/gitops/`, `tests/features/workflow.feature:58-65`, Session 2 B0 section 15
+**Evidence:** `internal/cluster/setup_service.go`, `internal/gitops/ownership.go`, `cmd/cluster_migrate_layout.go`. See [GitOps Workflow](gitops-workflow.md) for the full rendering contract.
 
 ### Stage 5: Deployment
-
-**Purpose:** Provision infrastructure and deploy Kubernetes.
 
 **Command:**
 
@@ -226,71 +126,33 @@ opencenter cluster generate my-cluster
 opencenter cluster deploy my-cluster
 ```
 
-**Process:**
+`internal/cluster.BootstrapService` selects a provider-specific step sequence and persists progress in `bootstrap-state.json`, so a failed run can resume with `--step` or `--from-step` instead of starting over. OpenStack, VMware, and bare metal share an infrastructure bootstrap implementation (OpenTofu provisioning, then Kubernetes/Ansible-driven cluster bring-up and Flux install); Kind and Magnum have their own dedicated bootstrap providers. See [Cluster Lifecycle](../CODEMAPS/cluster-lifecycle.md) for the provider table.
 
-```
-1. Terraform: Provision infrastructure (VMs, networks, storage)
-    ↓
-2. Kubespray: Deploy Kubernetes (control plane, workers, CNI)
-    ↓
-3. FluxCD: Bootstrap GitOps (install controllers, create sources)
-    ↓
-4. FluxCD: Reconcile services (deploy platform services)
-    ↓
-5. CLI: Cluster ready
-```
-
-**Duration:** 20-40 minutes (depends on provider and cluster size)
-
-**Why this design:** Automated end-to-end deployment. No manual steps. Idempotent (safe to re-run).
-
-**Evidence:** `cmd/cluster_bootstrap.go`, Session 2 B0 section 2
+**Evidence:** `cmd/cluster_deploy.go`, `internal/cluster/bootstrap_service.go`, `internal/cluster/bootstrap_provider_infra.go`
 
 ### Stage 6: Operation
 
-**Purpose:** Manage running cluster.
+Once deployed, day-2 commands read or mutate the same validated configuration:
 
-**Operations:**
-
-* **Monitor:** Check cluster health and service status
-* **Update:** Apply configuration changes
-* **Scale:** Add/remove worker nodes
-* **Backup:** Backup cluster data (Velero)
-* **Troubleshoot:** Diagnose and fix issues
-
-**Evidence:** Session 2 B0 section 2
+* `cluster status` — cluster and service health.
+* `cluster service enable/disable/status` — toggle and inspect platform services.
+* `cluster pool add/scale/remove` — manage worker pools.
+* `cluster drift detect/reconcile` — compare configuration against live provider state (OpenStack, VMware only — see [Drift Detection](drift-detection.md)).
+* `cluster backup create/restore/list` — archive and restore cluster/config state.
 
 ### Stage 7: Updates
 
-**Purpose:** Apply configuration changes to running cluster.
-
-**Workflow:**
-
 ```
-1. User: Edit configuration file
-2. User: opencenter cluster validate my-cluster
-3. User: opencenter cluster generate my-cluster
-4. User: git commit -m "Update configuration"
-5. User: git push
-6. FluxCD: Detects change (within 15m)
-7. FluxCD: Reconciles new state
-8. Services: Updated in cluster
+1. Edit the configuration file (directly, `cluster edit`, or `cluster set`)
+2. opencenter cluster validate my-cluster
+3. opencenter cluster generate my-cluster
+4. git commit && git push   (inside the GitOps zone)
+5. FluxCD detects the change and reconciles
 ```
 
-**Update Types:**
-
-* **Service Configuration:** Enable/disable services, change settings
-* **Node Scaling:** Add/remove worker nodes
-* **Networking:** Change CNI plugin, load balancer settings
-* **Security:** Update RBAC policies, network policies
-
-**Why this design:** GitOps workflow (Git as source of truth). Automated reconciliation (no manual kubectl). Auditable (Git history).
-
-**Evidence:** Ecosystem.md GitOps workflow, Session 2 B0 section 2
+Most service and topology changes are in-place: regenerate, commit, and let Flux reconcile. Changing the infrastructure provider is not an in-place update — it requires a new cluster.
 
 ### Stage 8: Decommission
-
-**Purpose:** Safely delete cluster and clean up resources.
 
 **Command:**
 
@@ -298,507 +160,27 @@ opencenter cluster deploy my-cluster
 opencenter cluster destroy my-cluster
 ```
 
-**Process:**
+`internal/cluster.DestroyService` runs a provider-specific `lifecycleDestroyProvider` (an OpenTofu destroy path for OpenStack/VMware/bare metal, direct Kind teardown for Kind, Magnum cluster deletion for Magnum). Destroy does not take an automatic backup — run `cluster backup create` first if you need one; see [Backup and Restore](../operations/backup-and-restore.md).
 
-```
-1. Backup: Backup cluster data (optional)
-2. Terraform: Destroy infrastructure (VMs, networks, storage)
-3. CLI: Delete configuration file (optional)
-4. Git: Archive repository (optional)
-```
-
-**Why this design:** Clean resource deletion. No orphaned resources. Optional backup for recovery.
-
-**Evidence:** `cmd/cluster_destroy.go`, Session 2 B0 section 2
-
-## Configuration Precedence
-
-### Precedence Order (Highest to Lowest)
-
-1. **Command-line flags:** `opencenter cluster set my-cluster cluster.worker_count=5`
-2. **Configuration file:** `~/.config/opencenter/clusters/my-org/.my-cluster-config.yaml`
-3. **CLI defaults:** `~/.config/opencenter/config.yaml`
-4. **Built-in defaults:** `internal/config/defaults.go`
-
-**Example:**
-
-```bash
-# Built-in default: worker_count = 2
-# CLI default: worker_count = 3
-# Configuration file: worker_count = 4
-# Cluster set command: opencenter cluster set my-cluster cluster.worker_count=5
-
-# Result: worker_count = 5 (command-line flag wins)
-```
-
-**Why this design:** Flexibility for different use cases. Override at multiple levels. Sensible defaults reduce configuration.
-
-**Evidence:** `internal/config/manager.go`, Session 2 B0 section 3
-
-## Configuration Storage
-
-### File Locations
-
-**Cluster Configuration:**
-
-```
-~/.config/opencenter/clusters/<organization>/<cluster>/.<cluster>-config.yaml
-```
-
-**CLI Defaults:**
-
-```
-~/.config/opencenter/config.yaml
-```
-
-**Secrets:**
-
-```
-~/.config/opencenter/clusters/<organization>/secrets/age/<cluster>-key.txt
-~/.config/opencenter/clusters/<organization>/secrets/ssh/<cluster>-key
-```
-
-**GitOps Repository:**
-
-```
-<git_dir>/  # User-specified location
-```
-
-**Why this design:** Organization-based structure (multi-tenancy). Secrets separate from configuration. GitOps repository user-controlled.
-
-**Evidence:** `.kiro/steering/structure.md:118-128`, Session 2 B0 section 14
-
-## Configuration Validation
-
-### Validation Layers
-
-**Layer 1: Schema Validation**
-
-**Purpose:** Verify structure, types, and formats.
-
-**Example:**
-
-```yaml
-# Invalid: worker_count is string, should be integer
-opencenter:
-  cluster:
-    worker_count: "five"
-
-# Validation Error
-Error: Invalid type for opencenter.cluster.worker_count
-Expected: integer
-Actual: string
-```
-
-**Why this layer:** Fast (instant). Catches 80% of errors. Clear error messages.
-
-**Evidence:** `internal/config/validator.go`, Session 1 A3
-
-**Layer 2: Business Rules**
-
-**Purpose:** Verify cross-field dependencies and logical consistency.
-
-**Example:**
-
-```yaml
-# Invalid: VRRP enabled but no VRRP IP
-opencenter:
-  cluster:
-    networking:
-      use_octavia: false
-      vrrp_enabled: true
-      # vrrp_ip: missing
-
-# Validation Error
-Error: When use_octavia=false and vrrp_enabled=true, vrrp_ip must be set
-```
-
-**Why this layer:** Catches logical errors. Prevents deployment failures. Specific error messages.
-
-**Evidence:** `internal/config/validator.go`, `tests/features/workflow.feature:38-43`
-
-**Layer 3: Provider Validation**
-
-**Purpose:** Verify provider-specific constraints.
-
-**Example:**
-
-```yaml
-# Invalid: Image ID doesn't exist in OpenStack
-opencenter:
-  infrastructure:
-    openstack:
-      image_id: "invalid-image-id"
-
-# Validation Error
-Error: Image ID not found in OpenStack region sjc3
-Image ID: invalid-image-id
-Available images: [list of valid images]
-```
-
-**Why this layer:** Catches provider-specific errors. Prevents deployment failures. Provides helpful suggestions.
-
-**Evidence:** `internal/config/*_validator.go`, Session 1 A3
-
-**Layer 4: Connectivity Validation (Optional)**
-
-**Purpose:** Verify API reachability and credentials.
-
-**Example:**
-
-```bash
-# Enable connectivity validation
-opencenter cluster validate my-cluster --validation online
-```
-
-**Checks:**
-
-* OpenStack API reachable
-* Credentials valid
-* Quotas sufficient
-* Networks available
-
-**Why optional:** Requires credentials and network access. Slower than other layers. But catches deployment-time failures.
-
-**Evidence:** `internal/config/validator.go`, Session 1 A3
-
-## Configuration Updates
-
-### Update Strategies
-
-**Strategy 1: In-Place Update**
-
-**Use Case:** Service configuration changes (enable/disable services, change settings)
-
-**Workflow:**
-
-```
-1. Edit configuration file
-2. Validate configuration
-3. Render GitOps repository
-4. Commit and push
-5. FluxCD reconciles (5-15 minutes)
-```
-
-**Example:**
-
-```yaml
-# Before
-opencenter:
-  services:
-    loki:
-      enabled: true
-
-# After
-opencenter:
-  services:
-    loki:
-      enabled: false
-```
-
-**Why this strategy:** No cluster rebuild. Fast updates. GitOps workflow.
-
-**Strategy 2: Node Scaling**
-
-**Use Case:** Add/remove worker nodes
-
-**Workflow:**
-
-```
-1. Edit configuration file (change worker_count)
-2. Validate configuration
-3. Render GitOps repository
-4. Run Terraform apply (provision new nodes)
-5. Run Kubespray (join new nodes to cluster)
-```
-
-**Example:**
-
-```yaml
-# Before
-opencenter:
-  cluster:
-    worker_count: 2
-
-# After
-opencenter:
-  cluster:
-    worker_count: 5
-```
-
-**Why this strategy:** Horizontal scaling. No downtime. Automated provisioning.
-
-**Strategy 3: Cluster Rebuild**
-
-**Use Case:** Provider change, major Kubernetes version upgrade
-
-**Workflow:**
-
-```
-1. Backup cluster data (Velero)
-2. Create new configuration file
-3. Deploy new cluster
-4. Restore data to new cluster
-5. Validate applications
-6. Cutover traffic
-7. Decommission old cluster
-```
-
-**Why this strategy:** Clean slate. No migration complexity. But requires downtime.
+**Evidence:** `cmd/cluster_destroy.go`, `internal/cluster/destroy_service.go`
 
 ## Configuration Drift
 
-### Drift Detection
-
-**Definition:** Difference between configuration file and actual infrastructure/cluster state.
-
-**Types:**
-
-1. **Infrastructure Drift:** VMs deleted, networks changed, storage modified
-2. **Configuration Drift:** Manual kubectl changes, direct API modifications
-3. **Service Drift:** Service versions changed, settings modified
-
-**Detection:**
-
-```bash
-# Detect infrastructure drift
-opencenter cluster drift my-cluster
-
-# Detect configuration drift (FluxCD)
-kubectl get kustomizations -A
-```
-
-**Why drift happens:** Manual changes, external automation, infrastructure failures.
-
-**Evidence:** `cmd/cluster_drift.go`, Session 1 A8
-
-### Drift Prevention
-
-**Strategy 1: GitOps Discipline**
-
-**Practice:** All changes through Git, no manual kubectl.
-
-**Enforcement:**
-
-* RBAC (limit direct cluster access)
-* Audit logging (track manual changes)
-* FluxCD reconciliation (revert manual changes)
-
-**Strategy 2: Immutable Infrastructure**
-
-**Practice:** Replace infrastructure instead of modifying.
-
-**Example:** Deploy new nodes instead of upgrading existing nodes.
-
-**Strategy 3: Automated Reconciliation**
-
-**Practice:** FluxCD continuously reconciles Git → Cluster.
-
-**Interval:** 5-15 minutes (configurable)
-
-**Why this strategy:** Self-healing. Prevents configuration drift. Enforces GitOps discipline.
-
-**Evidence:** Ecosystem.md drift detection
-
-### Drift Remediation
-
-**Process:**
-
-```
-1. Detect drift (opencenter cluster drift)
-2. Analyze changes (what changed, why)
-3. Decide action:
-   a. Accept drift (update configuration file)
-   b. Revert drift (re-apply configuration)
-4. Document decision (Git commit message)
-```
-
-**Example:**
-
-```bash
-# Drift detected: worker_count changed from 5 to 3
-
-# Option A: Accept drift (update configuration)
-vim ~/.config/opencenter/clusters/my-org/.my-cluster-config.yaml
-# Change worker_count to 3
-git commit -m "Accept worker_count drift (cost optimization)"
-
-# Option B: Revert drift (re-apply configuration)
-opencenter cluster generate my-cluster
-terraform apply
-# Provisions 2 new workers to reach 5 total
-```
-
-## Configuration Versioning
-
-### Git-Based Versioning
-
-**Practice:** Store configuration in Git with semantic versioning.
-
-**Workflow:**
-
-```bash
-# Initial configuration
-git add .my-cluster-config.yaml
-git commit -m "Initial cluster configuration"
-git tag v1.0.0
-
-# Update configuration
-vim .my-cluster-config.yaml
-git commit -m "Enable Harbor registry"
-git tag v1.1.0
-
-# Rollback to previous version
-git checkout v1.0.0
-opencenter cluster generate my-cluster
-```
-
-**Why this practice:** Audit trail (Git history). Rollback capability (Git checkout). Collaboration (pull requests).
-
-### Configuration Snapshots
-
-**Practice:** Backup configuration before major changes.
-
-**Workflow:**
-
-```bash
-# Before major change
-cp .my-cluster-config.yaml .my-cluster-config.yaml.backup-$(date +%Y%m%d)
-
-# Make changes
-vim .my-cluster-config.yaml
-
-# If rollback needed
-cp .my-cluster-config.yaml.backup-20260217 .my-cluster-config.yaml
-```
-
-**Why this practice:** Quick rollback. No Git required. Local backup.
-
-## Best Practices
-
-### 1. Validate Before Deploy
-
-**Practice:** Always validate configuration before deployment.
-
-**Workflow:**
-
-```bash
-# Edit configuration
-vim .my-cluster-config.yaml
-
-# Validate
-opencenter cluster validate my-cluster
-
-# Only deploy if validation passes
-opencenter cluster generate my-cluster
-```
-
-**Rationale:** Catch errors early. Prevent deployment failures. Faster feedback loop.
-
-### 2. Use Small, Incremental Changes
-
-**Practice:** One logical change per commit.
-
-**Example:**
-
-```
-Good: "Enable Harbor registry"
-Bad: "Enable Harbor, update Kubernetes version, add 3 workers"
-```
-
-**Rationale:** Easier to review. Easier to rollback. Clearer history.
-
-### 3. Test in Dev First
-
-**Practice:** Test configuration changes in dev before production.
-
-**Workflow:**
-
-```
-1. Apply change to dev cluster
-2. Validate functionality
-3. Monitor for issues
-4. Apply to production
-```
-
-**Rationale:** Catch issues in dev, not prod. Validate changes before production.
-
-### 4. Document Configuration Decisions
-
-**Practice:** Document why configuration choices were made.
-
-**Example:**
-
-```yaml
-# Configuration
-opencenter:
-  services:
-    loki:
-      enabled: false  # Disabled for cost optimization (logs to S3 instead)
-```
-
-**Rationale:** Context for future maintainers. Audit trail for decisions.
-
-### 5. Backup Before Major Changes
-
-**Practice:** Backup cluster data before major configuration changes.
-
-**Workflow:**
-
-```bash
-# Backup cluster
-velero backup create pre-upgrade-backup --include-namespaces app1,app2
-
-# Make changes
-vim .my-cluster-config.yaml
-opencenter cluster generate my-cluster
-
-# If rollback needed
-velero restore create --from-backup pre-upgrade-backup
-```
-
-**Rationale:** Safety net for major changes. Quick recovery if issues.
-
-## Common Misconceptions
-
-### "Configuration changes require cluster rebuild"
-
-**Reality:** Most configuration changes can be applied in-place (service configuration, node scaling). Only provider changes require rebuild.
-
-### "Validation guarantees successful deployment"
-
-**Reality:** Validation catches most errors, but not all. Runtime issues (quota exhaustion, network failures) can still occur.
-
-### "Manual changes are permanent"
-
-**Reality:** FluxCD reverts manual changes on next reconciliation. All changes must go through Git.
-
-### "Configuration file contains all cluster state"
-
-**Reality:** Configuration file defines desired state. Actual state is in cluster. Drift can occur.
-
-### "GitOps means no manual intervention"
-
-**Reality:** Manual intervention is sometimes necessary (debugging, emergencies). But changes should be committed to Git afterward.
+Drift detection compares the validated configuration against a provider's live API state. It is a distinct concept from FluxCD's own continuous reconciliation of the GitOps repository against the cluster — see [Drift Detection](drift-detection.md) for what is actually compared and which providers are supported, and [GitOps Workflow](gitops-workflow.md) for how FluxCD reconciles Kustomizations and HelmReleases.
 
 ## Further Reading
 
-* [Architecture](architecture.md) - System design and components
-* [GitOps Workflow](gitops-workflow.md) - Repository structure and reconciliation
-* [Validate Configuration](../operations/validate-configuration.md) - Validation procedures
-* [Troubleshoot Deployment](../operations/troubleshoot-deployment.md) - Fix deployment issues
-* [Configuration Schema](../reference/configuration-schema.md) - Complete field reference
-
----
+* [Architecture](../architecture.md) — system design and components
+* [GitOps Workflow](gitops-workflow.md) — repository structure and reconciliation
+* [Drift Detection](drift-detection.md) — supported providers and comparison scope
+* [Security Model](security-model.md) — path zone separation and key lifecycle
+* [Validate Configuration](../operations/validate-configuration.md) — validation procedures
+* [Configuration Schema](../reference/configuration-schema.md) — complete field reference
 
 ## Evidence
 
-This explanation is based on:
-
-* Configuration lifecycle: Session 2 B0 section 2
-* Configuration structure: Session 2 B0 section 3
-* Validation layers: `internal/config/validator.go`, Session 1 A3
-* GitOps workflow: Ecosystem.md GitOps flow
-* Drift detection: `cmd/cluster_drift.go`, Session 1 A8
-* Configuration precedence: `internal/config/manager.go`
-* File locations: `.kiro/steering/structure.md:118-128`
+* Loading pipeline: `internal/config/v2/loader.go`, `internal/config/v2/validator.go`
+* Path zones: `internal/core/paths/types.go`, `internal/core/paths/secure.go`, `internal/core/paths/resolver.go`
+* Lifecycle services: `internal/cluster/init_service.go`, `configure_service.go`, `validate_service.go`, `setup_service.go`, `bootstrap_service.go`, `destroy_service.go`
+* Generated-file ownership: `internal/gitops/ownership.go`
+* Configuration precedence: `internal/config/flags/configuration_merger.go`

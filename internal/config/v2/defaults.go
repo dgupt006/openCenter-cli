@@ -587,6 +587,13 @@ func applyProviderCloudDefaults(cfg *Config, availabilityZone string) {
 			{ID: "worker-2", Name: "3dk8w03", AccessIPv4: "10.249.68.16"},
 		}
 		cfg.OpenCenter.Infrastructure.Bastion.Enabled = false
+	case "magnum":
+		// Magnum owns node images and networking through its cluster template.
+		// Keep only a prompt-ready cloud block here; credentials and the
+		// template are intentionally supplied by guided configuration.
+		cfg.OpenCenter.Infrastructure.Cloud.Magnum = &MagnumCloudConfig{
+			Region: cfg.OpenCenter.Meta.Region,
+		}
 	default:
 		cfg.OpenCenter.Infrastructure.Cloud = CloudConfig{}
 	}
@@ -615,6 +622,13 @@ func applyProviderBehaviorDefaults(cfg *Config) {
 		}
 		cfg.OpenCenter.Infrastructure.Bastion.Enabled = false
 		cfg.OpenCenter.Cluster.Kubernetes.KubeVIPEnabled = false
+		// Kind uses its built-in default CNI (kindnet) out of the box
+		// (DisableDefaultCNI is false above), so Calico is disabled by default to
+		// avoid running two CNIs. Managed CNI is opt-in: passing
+		// --kind-disable-default-cni at init re-enables Calico (see init_service).
+		if cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico != nil {
+			cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled = false
+		}
 		cfg.OpenCenter.Infrastructure.Networking.VRRPEnabled = false
 		cfg.OpenCenter.Infrastructure.Networking.VRRPIP = ""
 		cfg.OpenCenter.Infrastructure.Networking.DNSZoneName = "cluster.local"

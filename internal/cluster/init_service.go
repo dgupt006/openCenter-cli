@@ -468,6 +468,15 @@ func (s *InitService) applyOverrides(cfg *v2.Config, configMap map[string]any, o
 		}
 		cfg.OpenCenter.Infrastructure.Kind.DisableDefaultCNI = *opts.KindDisableDefaultCNI
 		setNestedConfigValue(configMap, *opts.KindDisableDefaultCNI, "opencenter", "infrastructure", "kind", "disable_default_cni")
+
+		// Kind defaults to kindnet with Calico disabled. When the operator opts
+		// into managed CNI by disabling the default CNI, enable Calico so the
+		// cluster still has a CNI. Leaving the default CNI in place keeps Calico
+		// disabled (kindnet provides networking).
+		if cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico != nil {
+			cfg.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled = *opts.KindDisableDefaultCNI
+			setNestedConfigValue(configMap, *opts.KindDisableDefaultCNI, "opencenter", "cluster", "kubernetes", "network_plugin", "calico", "enabled")
+		}
 	}
 
 	return nil

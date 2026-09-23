@@ -13,6 +13,8 @@ tags: [architecture, design, components, patterns]
 
 Understanding openCenter’s architecture helps you make informed decisions about deployment, customization, and troubleshooting. This explanation covers the key architectural patterns and design choices.
 
+This page explains *why* the system is built this way, for architects and operators. For the terse, source-grounded package map used by contributors and code-oriented agents, see [Architecture](../architecture.md); for a package-by-package breakdown of each subsystem, see the [CODEMAPS index](../CODEMAPS/INDEX.md).
+
 ## System Overview
 
 openCenter follows a **configuration-first, GitOps-native** architecture where a single YAML file drives the entire cluster lifecycle. The system transforms declarative configuration into production infrastructure through multiple layers of abstraction.
@@ -42,7 +44,7 @@ Production Cluster (Kubernetes + Services)
 1. **Parse YAML** -- Decode raw YAML into intermediate representation
 2. **Normalize** -- Canonicalize provider names, resolve aliases
 3. **Resolve References** -- Expand `${ref:path}`, `${env:VAR}`, `${file:path}` with dependency graph and cycle detection
-4. **Apply Defaults** -- Hydrate empty fields from provider-region defaults registry
+4. **Apply Defaults** -- Hydrate empty fields from the provider default map in `internal/config/v2/defaults.go`
 5. **Validate** -- Schema + business rules + provider + deployment + services checks
 
 Configuration precedence (highest to lowest):
@@ -55,7 +57,7 @@ Configuration precedence (highest to lowest):
 
 **Why this design:** The pipeline ensures every config is fully resolved and validated before use. Reference resolution with topological sort prevents circular dependencies. Hydration fills gaps without overwriting explicit values.
 
-**Evidence:** `internal/config/v2/loader.go`, `internal/config/manager.go`, `internal/config/defaults.go`
+**Evidence:** `internal/config/v2/loader.go`, `internal/config/v2/manager.go`, `internal/config/v2/defaults.go`. The top-level `internal/config` package is now a thin compatibility layer over `internal/config/v2` — for example `internal/config/manager.go` just re-exports `v2.ConfigurationManager` — plus CLI settings (`internal/config/cli_settings.go`). The v2 package is the authoritative implementation; see [CODEMAPS: Config system](../CODEMAPS/config-system.md).
 
 ### Validation Engine
 
@@ -72,7 +74,7 @@ Configuration precedence (highest to lowest):
 
 **Trade-offs:** More validation means slower feedback, but prevents costly deployment failures. Connectivity validation is optional because it requires credentials and network access.
 
-**Evidence:** `internal/config/v2/validator.go`, `internal/core/validation/`, `cmd/cluster_validate.go`
+**Evidence:** `internal/config/v2/validator.go`, `internal/config/v2/deployment_validator.go`, `internal/core/validation/`, `cmd/cluster_validate.go`
 
 ### Template Engine
 
@@ -89,7 +91,7 @@ Configuration precedence (highest to lowest):
 
 **Trade-offs:** Templates are less flexible than code but more maintainable. Changes require CLI rebuild, but this ensures tested combinations.
 
-**Evidence:** `internal/gitops/copy.go`, `internal/template/`, `.kiro/steering/product.md:35`
+**Evidence:** `internal/gitops/copy.go`, `internal/template/`
 
 ### GitOps Repository Generator
 
@@ -115,7 +117,7 @@ Configuration precedence (highest to lowest):
 
 **Trade-offs:** More directories and files, but clear separation of concerns. Overlay pattern requires understanding Kustomize, but provides powerful composition.
 
-**Evidence:** `internal/gitops/`, `.kiro/steering/structure.md:118-128`, Ecosystem.md
+**Evidence:** `internal/gitops/`, `docs/CODEMAPS/gitops-engine.md`
 
 ### Secrets Management
 
@@ -186,7 +188,7 @@ Key properties:
 
 ## Package Map
 
-For a complete architectural map of all packages, see [Codemaps Index](../index.md).
+For a complete architectural map of all packages, see the [CODEMAPS index](../CODEMAPS/INDEX.md). For the terse contributor/agent-oriented package map, see [Architecture](../architecture.md).
 
 Key packages by responsibility:
 
@@ -194,11 +196,13 @@ Key packages by responsibility:
 | --- | --- |
 | CLI | `cmd/` (Cobra commands), `internal/ui` (prompts), `internal/plugins` (external plugins) |
 | Domain | `internal/cluster` (lifecycle), `internal/secrets` (secrets mgmt), `internal/operations` (drift, backup) |
-| Config | `internal/config` (types, loader, builder, v2), `internal/config/services` (service registry) |
-| GitOps | `internal/gitops` (pipeline, templates, rendering), `internal/template` (engine) |
-| Infra | `internal/cloud` (providers), `internal/provision` (templates), `internal/tofu` (OpenTofu), `internal/ansible` (Kubespray) |
+| Config | `internal/config/v2` (authoritative typed model, loader, defaults, validation), `internal/config` (CLI settings and compatibility re-exports), `internal/config/services` (service registry) |
+| GitOps | `internal/gitops` (rendering, templates, atomic output), `internal/template` (engine) |
+| Infra | `internal/cloud`, `internal/cloud/openstack`, `internal/cloud/vmware`, `internal/cloud/kind`, `internal/cloud/magnum` (providers), `internal/provision` (embedded provisioning templates, including Ansible/Kubespray inventory assets), `internal/tofu` (OpenTofu) |
 | Security | `internal/security` (audit, masking, sanitization), `internal/sops` (encryption) |
 | Foundation | `internal/di` (DI container), `internal/core` (paths, validation), `internal/util` (shared), `internal/resilience` (locks, retry) |
+
+There is no dedicated `internal/ansible` package. Kubespray is invoked as an embedded `local-exec` provisioner inside the generated OpenTofu module (part of the `opentofu-apply` bootstrap step), using inventory templates embedded via `internal/provision` and `internal/gitops/templates/infrastructure-cluster-template/`; see `internal/cluster/bootstrap_provider_infra.go`.
 
 ## Architectural Patterns
 
@@ -219,7 +223,7 @@ Key packages by responsibility:
 * Changes require validation before apply
 * Secrets must be encrypted
 
-**Evidence:** `.kiro/steering/product.md:30-35`
+**Evidence:** `internal/config/v2/`, `internal/gitops/`
 
 ### GitOps Native
 
@@ -238,7 +242,7 @@ Key packages by responsibility:
 * FluxCD must be running
 * Changes take time to reconcile (5-15 minutes)
 
-**Evidence:** Ecosystem.md GitOps flow, `.kiro/steering/product.md:31`
+**Evidence:** [GitOps Workflow](gitops-workflow.md), `internal/gitops/`
 
 ### Provider Abstraction
 
@@ -256,7 +260,7 @@ Key packages by responsibility:
 * Abstraction adds complexity
 * Not all providers have same capabilities
 
-**Evidence:** `internal/cloud/`, `internal/provision/`, `.kiro/steering/product.md:34`
+**Evidence:** `internal/cloud/`, `internal/provision/`, `docs/CODEMAPS/providers.md`
 
 ### Layered Validation
 
@@ -293,7 +297,7 @@ Key packages by responsibility:
 * Binary size increases
 * Cannot customize without forking
 
-**Evidence:** `internal/gitops/embed.go`, `.kiro/steering/structure.md:95`
+**Evidence:** `internal/gitops/embed.go`
 
 ## Design Principles
 
@@ -305,7 +309,7 @@ Key packages by responsibility:
 
 **Rationale:** Declarative is idempotent (safe to re-apply), easier to understand (what not how), and enables automation (reconciliation loops).
 
-**Evidence:** `.kiro/steering/product.md:30`
+**Evidence:** `internal/config/v2/` typed model
 
 ### 2. Fail Fast
 
@@ -325,7 +329,7 @@ Key packages by responsibility:
 
 **Rationale:** More flexible (mix and match), easier to understand (explicit composition), avoids deep hierarchies.
 
-**Evidence:** Ecosystem.md Kustomize overlay pattern, `.kiro/steering/product.md:34`
+**Evidence:** [GitOps Workflow](gitops-workflow.md) Kustomize overlay pattern
 
 ### 4. Explicit Dependencies
 
@@ -354,7 +358,7 @@ Key packages by responsibility:
 ```
 User: opencenter cluster init my-cluster
     ↓
-CLI: Load defaults from internal/config/defaults.go
+CLI: Load defaults from internal/config/v2/defaults.go
     ↓
 CLI: Apply CLI defaults from ~/.config/opencenter/config.yaml
     ↓
@@ -461,11 +465,13 @@ Add new infrastructure providers by implementing provider interface:
 Add new platform services by:
 
 1. Create service configuration in `internal/config/services/<service>.go`
-2. Add service to defaults in `internal/config/defaults.go`
+2. Add the service to the default service map in `internal/config/v2/defaults.go`
 3. Create service manifests in openCenter-gitops-base
 4. Update documentation
 
-**Evidence:** `internal/config/services/`,
+See [Plugin Internal Services](plugin-internal-services.md) for the full worked example (cert-manager) and [Adding Services](../contributing/adding-services.md) for the contributor contract.
+
+**Evidence:** `internal/config/services/`, `internal/config/v2/defaults.go`
 
 ### Custom Validators
 
@@ -475,7 +481,7 @@ Add new validation rules by:
 2. Register validator with validation engine
 3. Add tests for validator
 
-**Evidence:** `internal/core/validation/`,
+**Evidence:** `internal/core/validation/`
 
 ### Plugins
 
@@ -507,10 +513,11 @@ Extend CLI with external plugins:
 
 ### "openCenter only works with OpenStack"
 
-**Reality:** OpenStack is the default and most mature provider, and the GA infrastructure surface also includes VMware, Baremetal, and Kind. AWS-backed service integrations remain available where platform services use them, but AWS is not a GA infrastructure provider.
+**Reality:** OpenStack is the default and most mature provider, and the GA infrastructure surface also includes Magnum (managed OpenStack Kubernetes via cluster templates), VMware, Baremetal, and Kind. AWS-backed service integrations remain available where platform services use them, but AWS is not a GA infrastructure provider. See [CODEMAPS: Providers](../CODEMAPS/providers.md) for the exact capability matrix.
 
 ## Further Reading
 
+* [Architecture (contributor map)](../architecture.md) - Terse, source-grounded package boundaries and runtime wiring
 * [GitOps Workflow](gitops-workflow.md) - Repository structure and reconciliation
 * [Security Model](security-model.md) - Security architecture and controls
 * [Configuration Lifecycle](configuration-lifecycle.md) - Configuration management
@@ -518,8 +525,4 @@ Extend CLI with external plugins:
 
 ---
 
----
-
-**Last Updated:** 2026-05-11
-
-For detailed code-level architecture maps, see [Codemaps](../index.md).
+For detailed code-level architecture maps, see the [CODEMAPS index](../CODEMAPS/INDEX.md).

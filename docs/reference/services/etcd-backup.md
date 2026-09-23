@@ -2,73 +2,67 @@
 id: service-etcd-backup
 title: "etcd Backup"
 sidebar_label: etcd Backup
-description: Scheduled etcd snapshot backups to S3-compatible storage.
+description: etcd snapshot backup service configuration, S3 endpoint fields, and secrets.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [etcd, backup, disaster-recovery]
+tags: [etcd, backup, disaster-recovery, services]
 ---
 
-> **Purpose:** For platform engineers, documents the etcd backup service for scheduled cluster state snapshots to S3-compatible storage.
+> **Purpose:** For platform engineers, documents the etcd backup service's configuration surface and required S3 credentials.
 
 ## Overview
 
-The etcd backup service is disabled by default. When enabled, it runs a nightly CronJob at 01:00, saves an etcd snapshot, and uploads it to the configured S3-compatible bucket using SigV4. The service-specific SOPS-managed Secret is materialized into the generated kustomization. The backup image is pinned by digest.
+The etcd backup service uploads etcd snapshots to an S3-compatible bucket. It is disabled by default.
 
 ## Configuration
-
-When enabling the service, configure all required storage fields and service-specific credentials:
 
 ```yaml
 opencenter:
   services:
     etcd-backup:
-      enabled: true
-      s3_endpoint: "https://s3.example.com"
-      s3_bucket_name: "my-cluster-etcd-backups"
-      s3_region: "us-east-1"
-
-secrets:
-  etcd_backup:
-    access_key_id: "<access-key-id>"
-    secret_access_key: "<secret-access-key>"
+      enabled: false               # default: false
+      namespace: kube-system        # default: kube-system
+      s3_host:
+      s3_endpoint:
+      s3_bucket_name:
+      s3_credential_id:
+      s3_region:
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable etcd snapshot backups |
-| `s3_endpoint` | string | — | Required absolute HTTP(S) URL for the S3-compatible API. Runtime prefers this full endpoint. |
-| `s3_bucket_name` | string | — | Required target bucket name; the configured value is used at runtime. |
-| `s3_region` | string | — | Required S3 signing region. |
-| `s3_host` | string | — | Legacy compatibility field. Keep it only for older configuration or lifecycle workflows; runtime prefers `s3_endpoint`. |
-| `s3_credential_id` | string | — | Non-secret OpenStack credential lifecycle metadata; it is not stored as a pod secret. |
+| `enabled` | bool | `false` | Whether etcd snapshot backups are enabled |
+| `namespace` | string | `kube-system` | Namespace for the backup CronJob |
+| `s3_host` | string | — | S3-compatible endpoint host (legacy compatibility field) |
+| `s3_endpoint` | string | — | S3-compatible endpoint URL |
+| `s3_bucket_name` | string | — | S3 bucket name |
+| `s3_credential_id` | string | — | OpenStack EC2 credential ID (non-secret lifecycle metadata, not a pod secret) |
+| `s3_region` | string | — | S3 region |
 
-### Secrets
+## Secrets
 
-The following service-specific secrets are required when the service is enabled and are materialized through SOPS:
+```yaml
+secrets:
+  etcd_backup:
+    access_key_id:
+    secret_access_key:
+```
 
-| Path | Description |
-|------|-------------|
-| `secrets.etcd_backup.access_key_id` | S3 access key ID |
-| `secrets.etcd_backup.secret_access_key` | S3 secret access key |
-
-Global AWS credentials are not used as a fallback for etcd-backup.
-
-## Schedule and Runtime
-
-- CronJob schedule: `0 1 * * *` (nightly at 01:00).
-- S3 requests use SigV4.
-- The configured `s3_bucket_name` is honored; the service does not substitute a built-in bucket name.
-- The container image is pinned by digest.
+Global AWS credentials are not used as a fallback for `etcd-backup`.
 
 ## Dependencies
 
-None.
+None enforced by `opencenter cluster service enable|disable`.
 
-## CLI Commands
+## Rendering
+
+`etcd-backup` has a dedicated descriptor (`internal/services/descriptors/data/service-etcd-backup.yaml`, `service: etcd-backup`) that owns everything under the `services/etcd-backup` template root and aggregates into `services-fluxcd-aggregate`.
+
+## CLI commands
 
 ```bash
-opencenter cluster service enable etcd-backup
+opencenter cluster service enable etcd-backup --param="s3_endpoint=https://s3.example.com" --param="s3_bucket_name=my-cluster-etcd-backups" --param="s3_region=us-east-1" --secret="access_key_id=..." --secret="secret_access_key=..."
 opencenter cluster service disable etcd-backup
-opencenter cluster service status etcd-backup
+opencenter cluster service status
 opencenter cluster service options etcd-backup
 ```

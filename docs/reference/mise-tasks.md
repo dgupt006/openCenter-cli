@@ -1,632 +1,104 @@
 ---
 id: mise-tasks
-title: "Mise Tasks"
+title: "Mise Tasks Reference"
 sidebar_label: Mise Tasks
-description: Complete reference of available mise tasks for development, testing, and building.
+description: Flat reference of every task and tool pin defined in .mise.toml.
 doc_type: reference
-audience: "developers"
-tags: [mise, tasks, build, development]
+audience: "developers, contributors"
+tags: [mise, build, tasks, reference]
 ---
-# Mise Tasks
+# Mise Tasks Reference
 
-**Purpose:** For developers, provides complete reference of available mise tasks for development, testing, and building.
+**Purpose:** For developers, provides a complete, flat reference of every tool pin and task defined in `.mise.toml`. For the *why* behind this build system, see [Build System (Mise)](../contributing/build-system.md).
 
-This reference lists all mise tasks defined in `.mise.toml` for openCenter CLI development.
+## Tool pins
 
-## Overview
+| Tool | Version |
+| --- | --- |
+| `golang` | `1.26.6` |
+| `golangci-lint` | `2.11.4` |
+| `kubectl` | `latest` |
+| `kind` | `latest` |
+| `helm` | `latest` |
+| `sops` | `3.13.3` |
+| `go:golang.org/x/vuln/cmd/govulncheck` | `latest` |
+| `aqua:gitleaks/gitleaks` | `latest` |
 
-Mise is the task automation tool for openCenter CLI. All development operations use mise tasks instead of raw commands for consistency and discoverability.
+## Environment defaults
 
-**Critical Rule:** Always use `mise run <task>` instead of raw commands (go, terraform, etc.).
-
-## Complete Task Inventory
-
-| Task | Category | Description |
+| Variable | Value | Purpose |
 | --- | --- | --- |
-| `build` | Build | Build both CLI and local plugin (chains build-cli + build-local-plugin) |
-| `build-cli` | Build | Build the opencenter CLI binary with version info |
-| `build-local-plugin` | Build | Build the local workflow plugin (bin/opencenter-local) |
-| `build-linux` | Build | Cross-compile for Linux amd64 |
-| `build-all` | Build | Build for multiple platforms |
-| `local-install` | Build | Build and install to local bin directory |
-| `release` | Release | Build release binaries + generate release notes |
-| `publish` | Release | Publish release to GitHub |
-| `fmt` | Quality | Format all Go source files |
-| `lint` | Quality | Lint Go source files |
-| `tidy` | Quality | Tidy Go module dependencies |
-| `upgrade-deps` | Quality | Upgrade all Go dependencies |
-| `test` | Test | Run unit tests (config, cmd, cloud packages) |
-| `test-race` | Test | Run Go race detector |
-| `test-all` | Test | Run all tests: unit + BDD + property |
-| `godog` | Test | Run BDD tests (non-@wip scenarios) |
-| `godog-wip` | Test | Run only @wip BDD scenarios |
-| `godog-tag` | Test | Run BDD scenarios filtered by tag |
-| `property` | Test | Run property-based tests |
-| `integration` | Test | Run integration tests |
-| `perf` | Test | Run performance-tagged checks |
-| `govulncheck` | Test | Run Go vulnerability analysis |
-| `verify` | Test | Local verification checks (catches CI regressions) |
-| `schema` | Schema | Generate cluster JSON schema |
-| `schema-gen` | Schema | Generate JSON schema from Go struct definitions |
-| `schema-v2` | Schema | Regenerate v2 JSON schema from Go types |
-| `schema-verify` | Schema | Comprehensive schema change verification |
-| `validate` | Schema | Validate cluster configuration |
-| `docs-gen` | Docs | Generate CLI documentation |
-| `tag-wip-failures` | Docs | Detect failing BDD scenarios and tag with @wip |
-| `gitea-up` | Local Dev | Start and configure local Gitea for testing |
-| `gitea-cleanup` | Local Dev | Tear down local Gitea instance |
-| `active` | Local Dev | Show current active cluster status |
-| `terraform-generate` | Local Dev | Generate Terraform main.tf from cluster config |
-| `preflight` | Local Dev | Preflight checks for cluster deployment |
-| `install-shell-integration` | Local Dev | Install shell integration (prompt, completions) |
-| `install-hooks` | Local Dev | Install git hooks for development |
-| `clean` | Cleanup | Remove build artifacts and generated files |
-| `kind-cleanup` | Cleanup | Destroy local Kind cluster and Gitea |
-| `demo-cleanup` | Cleanup | Full demo teardown (Kind + Gitea + artifacts) |
-| `openstack-reset` | OpenStack | Reset an OpenStack project to clean state |
+| `KIND_EXPERIMENTAL_PROVIDER` | `podman` | Tells `kind` to use Podman instead of Docker. |
+| `CONTAINER_RUNTIME` | `podman` | Container runtime used by local Kind/Gitea workflows. |
 
-## Build Tasks
+`.mise.toml` also documents (commented out) opt-in overrides for `OPENCENTER_CONFIG_DIR`, `OPENCENTER_DEBUG`, and `OPENCENTER_PLUGINS_DIR` for reproducible local test runs.
 
-### build
+## Tasks
 
-Build both the opencenter CLI and the local workflow plugin.
+| Task | Command(s) |
+| --- | --- |
+| `build-cli` | `go build -ldflags "-X main.version=... -X main.gitCommit=... -X main.gitBranch=... -X main.gitTag=... -X main.buildDate=..." -o bin/opencenter` |
+| `build-info` | `go version`; `go env GOOS GOARCH CGO_ENABLED GOROOT GOENV GOFLAGS` |
+| `build-local-plugin` | `go build -o bin/opencenter-local ./cmd/opencenter-local` |
+| `build` | `mise run build-cli` then `mise run build-local-plugin` |
+| `build-linux` | Same as `build-cli`, cross-compiled `GOOS=linux GOARCH=amd64` -> `bin/opencenter-linux` |
+| `build-all` | Cross-compiles `bin/opencenter-{linux,darwin}-{amd64,arm64}` |
+| `local-install` | Builds both binaries; installs to `~/.local/bin/opencenter` and `<plugins-dir>/opencenter-local`; updates `checksums.txt` |
+| `release <version> [target]` | Cross-compiles 4 release binaries into `bin/release/`, then runs `publish`, then prints manual tag/push/`gh release create` steps |
+| `publish <version> [target]` | Generates `bin/release/RELEASE_NOTES_<version>.md` from `git log <last-tag>..HEAD` grouped by `feat`/`fix`/`docs` |
+| `fmt` | `gofmt -w .` |
+| `tidy` | `go mod tidy` |
+| `upgrade-deps` | `go get -u ./...` then `go mod tidy` |
+| `vet` | `go vet ./...` |
+| `lint` | `golangci-lint run ./...` |
+| `test` | `go test ./internal/config/... ./cmd/... -count=1`; `go test ./internal/cloud/... -count=1` |
+| `test-race` | `go test ./internal/... ./cmd/... -count=1 -race` |
+| `test-build` | `go build ./...` |
+| `test-remediation` | `go test ./internal/sops ./internal/secrets ./internal/secretartifacts ./internal/gitops ./cmd -count=1` |
+| `test-remediation-race` | `go test -race ./internal/secrets -run 'TestSyncSecretsSerializesConcurrentTransactions\|TestReconcileStateWriteFailureRollsBackAllMutationsAndRetry' -count=3` |
+| `test-docs` | `go test -tags tools ./cmd/docs -count=1` |
+| `test-kustomize` | `go test ./internal/gitops -run '^TestGeneratedDefaultOverlayKustomizeFailureMatrix$' -count=1` |
+| `test-diff` | `git diff --check` |
+| `godog` | `go test ./tests/features/steps/... -v -- --godog.tags=~@wip --godog.paths=tests/features` |
+| `godog-wip` | Same, with `--godog.tags=@wip` |
+| `godog-tag <tag>` | Same, with `--godog.tags=@<tag>` |
+| `property` (alias `test-properties`) | `go test ./internal/... ./cmd/... -v -run "TestProperty" -count=1` |
+| `govulncheck` | `govulncheck ./...` |
+| `gitleaks` | `gitleaks detect --source . -c .gitleaks.toml --redact --no-banner` |
+| `integration` | Runs `TestClusterSetup` (`./cmd`), then `TestRetry\|TestCircuitBreaker\|TestLockManager\|TestProperty` (`./internal/resilience/...`), then `TestDriftDetector\|TestBackupManager\|TestProperty` (`./internal/operations/...`) |
+| `perf` | `go test -tags perf ./internal/config -run "TestMemoryUsageRegression" -count=1` |
+| `test:all` | `test`, `test-race`, `vet`, `godog`, `property`, `govulncheck` |
+| `verify` | `test`, `test-race`, `test-properties`, `govulncheck` |
+| `test-remediation-all` | `test-build`, `vet`, `test`, `test-remediation`, `test-race`, `test-remediation-race`, `godog`, `test-docs`, `test-kustomize`, `test-docs-idempotency`, `test-docs-frontmatter-remediation`, `test-diff` |
+| `schema` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json` |
+| `schema-gen` | `go run ./cmd/schema-gen/main.go --version 2.0 --output schema/cluster.schema.json` |
+| `schema-v2` | Writes and runs a throwaway `TestRegenSchema` against `internal/config/v2schema`, writes `schema/opencenter-v2.schema.json`, deletes the test file |
+| `validate` | `./bin/opencenter cluster validate` |
+| `schema-verify` | Build, generate schema, `cluster init`/`update`/`validate` against `OPENCENTER_CONFIG_DIR=./testdata/config`, `mise run test`, `mise run godog` |
+| `docs-gen` | `go run cmd/docs/generate.go` |
+| `test-docs-idempotency` | Runs `docs-gen` twice, diffs the two results, fails if unstable |
+| `test-docs-frontmatter` | `python3 hack/scripts/audit_doc_frontmatter.py --strict` |
+| `test-docs-frontmatter-remediation` | Same, with an `--ignore` list of documented legacy pages |
+| `tag-wip-failures` | `python3 hack/tag_wip_failures.py` |
+| `gitea-up` | `go run ./cmd/opencenter-local gitea up` |
+| `gitea-cleanup` | `go run ./cmd/opencenter-local gitea destroy` |
+| `active` | `./bin/opencenter cluster status` |
+| `terraform-generate <cluster> [dir]` | `mise run build`; `./bin/opencenter cluster terraform-generate <cluster> --output-dir=<dir>` |
+| `preflight` | `./bin/opencenter cluster validate` |
+| `install-shell-integration` | `./hack/install-shell-integration.sh` |
+| `install-hooks` | Verifies and `chmod +x`s `.git/hooks/pre-commit` |
+| `clean` | Removes `bin/`, `testdata/`, `new-schema.json`, `terraform-output/` |
+| `kind-cleanup [cluster]` | Destroys the named Kind cluster (default `my-cluster`) and local Gitea; removes a stale lock file |
+| `demo-cleanup` | `kind-cleanup` then `clean` |
+| `openstack-reset` | `hack/scripts/openstack-reset.sh` (accepts `--os-cloud`, `--force`, `--dry-run` after `--`) |
 
-**Usage:**
-
-```bash
-mise run build
-```
-
-**What it does:**
-
-* Runs `build-cli` then `build-local-plugin`
-* Compiles Go code with version information via ldflags
-* Creates binaries in `bin/`
-
-**Output:** `bin/opencenter` + `bin/opencenter-local` (current platform)
-
-**Evidence:** `.kiro/steering/tech.md:52`
-
-### build-linux
-
-Build binary for Linux platform.
-
-**Usage:**
+## Discovering tasks interactively
 
 ```bash
-mise run build-linux
+mise tasks                # list all tasks
+mise task show <name>      # show a task's full definition
+mise run -v <name>          # verbose run
+mise run --dry-run <name>    # show what would run
 ```
 
-**What it does:**
-
-* Cross-compiles for Linux amd64
-* Injects version information
-* Creates binary in `bin/opencenter-linux-amd64`
-
-**Output:** `bin/opencenter-linux-amd64`
-
-**Evidence:** `.kiro/steering/tech.md:55`
-
-### build-all
-
-Build binaries for the supported release platforms.
-
-**Usage:**
-
-```bash
-mise run build-all
-```
-
-**What it does:**
-
-* Builds for Linux and macOS
-* Creates binaries for amd64 and arm64
-* Injects version information
-
-**Output:**
-
-* `bin/opencenter-linux-amd64`
-* `bin/opencenter-linux-arm64`
-* `bin/opencenter-darwin-amd64`
-* `bin/opencenter-darwin-arm64`
-
-For official releases, push a `v*` tag and let `.github/workflows/release.yml` publish the signed artifacts. Use `mise run release` only for local preflight builds.
-
-**Evidence:** `.kiro/steering/tech.md:58`
-
-## Test Tasks
-
-### test
-
-Run the deterministic GA test gate.
-
-**Usage:**
-
-```bash
-mise run test
-```
-
-**What it does:**
-
-* Runs the default CLI/config/cloud verification lane
-* Covers `./internal/config/...`, `./cmd/...`, and `./internal/cloud/...`
-* Excludes perf-tagged coverage
-
-### property
-
-Run opt-in property-based coverage.
-
-**Usage:**
-
-```bash
-mise run property
-```
-
-**What it does:**
-
-* Runs tests selected by `-run "TestProperty"`
-* Keeps exploratory/property coverage separate from the default gate
-
-### integration
-
-Run the opt-in integration lane.
-
-**Usage:**
-
-```bash
-mise run integration
-```
-
-**What it does:**
-
-* Runs integration-oriented command and subsystem tests
-* Intended for deeper pre-release verification
-
-### perf
-
-Run perf-tagged checks.
-
-**Usage:**
-
-```bash
-mise run perf
-```
-
-**What it does:**
-
-* Runs `perf` build-tag coverage such as memory-regression checks
-* Keeps noisy or long-running performance tests out of the default lane
-
-### godog
-
-Run BDD tests (non-WIP scenarios).
-
-**Usage:**
-
-```bash
-mise run godog
-```
-
-**What it does:**
-
-* Runs Gherkin scenarios in `tests/features/`
-* Excludes scenarios tagged with `@wip`
-* Executes all production-ready scenarios
-
-**Evidence:** `.kiro/steering/tech.md:67`
-
-### godog-wip
-
-Run WIP (work-in-progress) BDD scenarios only.
-
-**Usage:**
-
-```bash
-mise run godog-wip
-```
-
-**What it does:**
-
-* Runs only scenarios tagged with `@wip`
-* Used during feature development
-* Excludes production scenarios
-
-**Evidence:** `.kiro/steering/tech.md:70`
-
-## Code Quality Tasks
-
-### fmt
-
-Format code with gofmt.
-
-**Usage:**
-
-```bash
-mise run fmt
-```
-
-**What it does:**
-
-* Runs `gofmt -w` on all Go files
-* Formats code to Go standards
-* Must be run before committing
-
-**Evidence:** `.kiro/steering/tech.md:73`
-
-### tidy
-
-Tidy Go module dependencies.
-
-**Usage:**
-
-```bash
-mise run tidy
-```
-
-**What it does:**
-
-* Runs `go mod tidy`
-* Removes unused dependencies
-* Updates `go.mod` and `go.sum`
-
-**Evidence:** `.kiro/steering/tech.md:76`
-
-### upgrade-deps
-
-Upgrade all dependencies to latest versions.
-
-**Usage:**
-
-```bash
-mise run upgrade-deps
-```
-
-**What it does:**
-
-* Updates all dependencies to latest compatible versions
-* Runs `go get -u ./...`
-* Updates `go.mod` and `go.sum`
-
-**Evidence:** `.kiro/steering/tech.md:79`
-
-## Schema Tasks
-
-### schema
-
-Generate JSON schema from Go types.
-
-**Usage:**
-
-```bash
-mise run schema
-```
-
-**What it does:**
-
-* Generates `schema/cluster.schema.json`
-* Extracts schema from Go struct tags
-* Used for configuration validation
-
-**Evidence:** `.kiro/steering/tech.md:82`
-
-### schema-verify
-
-Comprehensive schema verification.
-
-**Usage:**
-
-```bash
-mise run schema-verify
-```
-
-**What it does:**
-
-* Validates schema structure
-* Checks schema completeness
-* Verifies schema examples
-* Tests schema against fixtures
-
-**Evidence:** `.kiro/steering/tech.md:91`
-
-## Validation Tasks
-
-### validate
-
-Validate cluster configuration.
-
-**Usage:**
-
-```bash
-mise run validate
-```
-
-**What it does:**
-
-* Validates configuration files
-* Checks schema compliance
-* Verifies business rules
-
-**Evidence:** `.kiro/steering/tech.md:85`
-
-### preflight
-
-Run preflight checks before deployment.
-
-**Usage:**
-
-```bash
-mise run preflight
-```
-
-**What it does:**
-
-* Checks system requirements
-* Verifies tool installations
-* Validates credentials
-
-**Evidence:** `.kiro/steering/tech.md:88`
-
-## Documentation Tasks
-
-### docs-gen
-
-Generate CLI documentation.
-
-**Usage:**
-
-```bash
-mise run docs-gen
-```
-
-**What it does:**
-
-* Generates command documentation
-* Creates markdown files for each command
-* Updates CLI reference docs
-
-**Evidence:** `.kiro/steering/tech.md:94`
-
-## Cleanup Tasks
-
-### clean
-
-Clean build artifacts.
-
-**Usage:**
-
-```bash
-mise run clean
-```
-
-**What it does:**
-
-* Removes `bin/` directory
-* Removes temporary files
-* Cleans build cache
-
-**Evidence:** `.kiro/steering/tech.md:97`
-
-## Pre-Commit Workflow
-
-Required tasks before committing:
-
-```bash
-# 1. Build to verify compilation
-mise run build
-
-# 2. Format code
-mise run fmt
-
-# 3. Run tests
-mise run test
-
-# 4. Run BDD tests (if applicable)
-mise run godog
-```
-
-**Evidence:** `.kiro/steering/tech.md:103-118`
-
-## Task Chaining
-
-Mise tasks can be chained for complex workflows:
-
-```bash
-# Full pre-commit check
-mise run fmt && mise run test && mise run godog && mise run build
-
-# Schema update workflow
-mise run schema && mise run schema-verify
-
-# Full build and test
-mise run build-all && mise run test && mise run godog
-```
-
-## Custom Task Creation
-
-To add new tasks, edit `.mise.toml`:
-
-```toml
-[tasks]
-# Task description
-task-name = "command to run"
-
-# Task with multiple commands
-multi-step = [
-  "command 1",
-  "command 2",
-  "command 3"
-]
-
-# Task with dependencies
-dependent-task = { depends = ["task1", "task2"], run = "command" }
-```
-
-**Evidence:** `.kiro/steering/tech.md:120-135`
-
-## Environment Variables
-
-Mise tasks can use environment variables:
-
-```bash
-# Set environment variable for task
-OPENCENTER_CONFIG_DIR=/tmp/config mise run validate
-
-# Or export for multiple tasks
-export OPENCENTER_CONFIG_DIR=/tmp/config
-mise run validate
-mise run build
-```
-
-## Task Output
-
-Tasks output to stdout/stderr:
-
-```bash
-# Capture output
-mise run build > build.log 2>&1
-
-# Pipe output
-mise run test | grep PASS
-
-# Quiet mode (suppress output)
-mise run build --quiet
-```
-
-## Common Task Combinations
-
-### Development Workflow
-
-```bash
-# Start development
-mise install  # Install tools
-mise run build  # Build binary
-
-# Make changes
-vim internal/config/manager.go
-
-# Test changes
-mise run fmt  # Format
-mise run test  # Unit tests
-mise run build  # Verify compilation
-
-# Commit
-git add .
-git commit -m "feat: add new feature"
-```
-
-### Schema Update Workflow
-
-```bash
-# Update schema
-vim internal/config/types.go
-
-# Regenerate schema
-mise run schema
-
-# Verify schema
-mise run schema-verify
-
-# Test with fixtures
-mise run validate
-
-# Commit
-git add schema/cluster.schema.json internal/config/types.go
-git commit -m "feat: update schema"
-```
-
-### Release Workflow
-
-```bash
-# Build all platforms
-mise run build-all
-
-# Run full test suite
-mise run test
-mise run godog
-
-# Verify schema
-mise run schema-verify
-
-# Tag release
-git tag v1.0.0
-git push --tags
-```
-
-## Troubleshooting
-
-### Task Not Found
-
-**Error:** `Task 'xyz' not found`
-
-**Solution:**
-
-```bash
-# List available tasks
-mise tasks
-
-# Check .mise.toml for task definition
-cat .mise.toml | grep -A 5 "\[tasks\]"
-```
-
-### Task Fails
-
-**Error:** Task exits with non-zero code
-
-**Solution:**
-
-```bash
-# Run task with verbose output
-mise run <task> --verbose
-
-# Check task definition
-mise tasks --output json | jq '.[] | select(.name == "<task>")'
-
-# Run underlying command directly (for debugging only)
-# Check .mise.toml for actual command
-```
-
-### Mise Not Installed
-
-**Error:** `mise: command not found`
-
-**Solution:**
-
-```bash
-# Install mise
-curl https://mise.run | sh
-
-# Or with package manager
-brew install mise  # macOS
-apt install mise   # Ubuntu
-
-# Verify installation
-mise --version
-```
-
-## Best Practices
-
-1. **Always use mise tasks:** Never use raw commands in documentation or scripts
-2. **Run fmt before commit:** Ensure code is formatted
-3. **Run tests before commit:** Catch errors early
-4. **Use task chaining:** Combine tasks for complex workflows
-5. **Document custom tasks:** Add comments in .mise.toml
-6. **Keep tasks simple:** One task, one purpose
-7. **Use descriptive names:** `test-integration` not `ti`
-
-## Related Topics
-
-* [Development Setup](../contributing/development-setup.md) - Set up development environment
-* [Testing Guide](../contributing/testing-guide.md) - Write and run tests
-* [Build System](../contributing/build-system.md) - Understand mise-based build system
-* [Contributing](../contributing/contributing.md) - Contribute code
-
----
-
-## Evidence
-
-This reference is based on:
-
-* Mise tasks: `.kiro/steering/tech.md:40-97`
-* Pre-commit workflow: `.kiro/steering/tech.md:103-118`
-* Task creation: `.kiro/steering/tech.md:120-135`
-* Build system: `.kiro/steering/product.md:23-28`
+See [Testing Guide](../contributing/testing-guide.md) for which of these tasks CI actually runs, and [GitHub Actions Workflows](github-actions-workflows.md) for the workflows themselves.

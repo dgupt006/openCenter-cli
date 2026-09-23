@@ -1,6 +1,15 @@
+---
+id: manage-worker-pools
+title: "Manage Worker Pools"
+sidebar_label: Manage Worker Pools
+description: Add, scale, update, and safely remove Linux and Windows worker pools using the cluster pool CLI commands.
+doc_type: how-to
+audience: "operators, platform engineers"
+tags: [workers, scaling, pools, nodes, cli]
+---
 # Manage Worker Pools
 
-> **Purpose:** For operators, shows how to add, scale, and safely remove worker pools (Linux and Windows) using CLI commands.
+**Purpose:** For operators, shows how to add, scale, and safely remove worker pools (Linux and Windows) using CLI commands.
 
 ## Prerequisites
 

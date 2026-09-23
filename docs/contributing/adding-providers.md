@@ -2,662 +2,115 @@
 id: adding-providers
 title: "Adding New Infrastructure Providers"
 sidebar_label: Adding New Infrastructure
-description: Add support for new infrastructure providers (cloud, bare metal, virtualization) in openCenter-cli.
+description: Add support for a new infrastructure provider, using the Magnum provider as the current worked example.
 doc_type: how-to
 audience: "developers"
-tags: [contributing]
+tags: [contributing, providers]
 ---
 # Adding New Infrastructure Providers
 
-**Purpose:** For developers, shows how to add support for new infrastructure providers (cloud platforms, bare metal, etc.).
+**Purpose:** For developers, shows how to add support for a new infrastructure provider (cloud platform, bare metal, virtualization), using `internal/cloud/magnum/` -- the most recently added provider -- as the worked example.
 
 ## Prerequisites
 
-Before adding a provider, you need:
+* Development environment set up (see [Development Environment Setup](development-setup.md)).
+* Understanding of the target provider's API/SDK.
+* Test credentials for the target provider (or a way to fully mock its client -- see the Magnum test suite below for the pattern).
 
-* Development environment set up (see [Development Setup](development-setup.md))
-* Understanding of the target provider’s API
-* Provider credentials for testing
+## The extension points, precisely
 
-## Provider Architecture
+A provider touches several independent extension points. Not every provider needs all of them -- Kind and Baremetal, for example, do not implement a standalone `internal/cloud/<provider>` API client at all. Work through this list and implement only what your provider actually needs:
 
-Providers in openCenter-cli consist of:
+1. **Config schema and validation** -- `internal/config/v2/provider.go` (or `internal/config/v2/config.go` for the struct itself).
+2. **Guided configuration (`cluster configure --guided`)** -- an `orchestration.ProviderOrchestrator` implementation in `internal/cluster/<provider>_configure_orchestrator.go`, registered in `internal/cluster/configure_service.go`.
+3. **Deploy/bootstrap lifecycle (`cluster deploy`)** -- a `lifecycleBootstrapProvider` implementation in `internal/cluster/<provider>_bootstrap_provider.go`, wired by a switch in `internal/cluster/bootstrap_service.go`.
+4. **Destroy lifecycle (`cluster destroy`)** -- a `lifecycleDestroyProvider` implementation in `internal/cluster/<provider>_destroy_provider.go`, wired by a switch in `internal/cluster/destroy_service.go`.
+5. **Standalone API client** (if the provider has a lifecycle API worth isolating from the rest of the codebase) -- `internal/cloud/<provider>/provider.go`, imported only by the bootstrap/destroy providers above.
+6. **Provider availability gate** -- `cmd/provider_availability.go`'s `checkProviderAvailability`.
+7. *(Separate and optional)* **Drift detection** -- `internal/cloud.CloudProvider` (`GetCurrentState`/`DetectDrift`/`ReconcileDrift`), registered via `CloudProviderFactory.RegisterProvider`. This is a distinct interface from the lifecycle client in step 5. Today only OpenStack and VMware implement it; Kind, Baremetal, and Magnum do not -- do not assume every provider needs this.
 
-1. **Configuration defaults** - Default values for provider-specific settings
-2. **Validation logic** - Provider-specific validation rules
-3. **Preflight checks** - Connectivity and credential validation
-4. **Templates** - Infrastructure-as-code templates (Terraform/Pulumi)
-5. **Documentation** - Provider-specific guides
+## Worked example: Magnum
 
-## Step 1: Add Provider Configuration
+Magnum (`internal/cloud/magnum/provider.go`, ~1150 lines) manages an OpenStack Magnum-managed Kubernetes cluster directly through Gophercloud -- no Terraform/Kubespray, unlike the OpenStack provider. It is a good template because it exercises every extension point except drift detection.
 
-Add provider defaults to `internal/config/defaults.go`:
+### 1. Config schema (`internal/config/v2/provider.go`, `internal/config/v2/config.go`)
 
-```go
-// Add provider constant
-const (
-    ProviderOpenStack = "openstack"
-    ProviderAWS       = "aws"
-    ProviderVMware    = "vmware"
-    ProviderMyCloud   = "mycloud"  // New provider
-)
+* `InfrastructureConfig.Cloud.Magnum *MagnumCloudConfig` holds the provider-specific block.
+* Every *other* provider's `ValidateConfig` explicitly rejects a populated `cfg.Cloud.Magnum` block (mutual exclusion is enforced both ways -- see the `"infrastructure.cloud.magnum must be empty when provider is <x>"` checks for openstack/aws/gcp/azure/vmware).
+* `MagnumProvider.ValidateConfig` requires `auth_url`, `region`, `project_id`, `cluster_template`, and requires `application_credential_id`/`application_credential_secret` to be supplied together (both or neither).
 
-// Add to getProviderDefaults function
-func getProviderDefaults(provider string) map[string]interface{} {
-    switch provider {
-    case ProviderMyCloud:
-        return map[string]interface{}{
-            "opencenter": map[string]interface{}{
-                "infrastructure": map[string]interface{}{
-                    "cloud": map[string]interface{}{
-                        "mycloud": map[string]interface{}{
-                            "api_endpoint": "https://api.mycloud.com",
-                            "region":       "us-east-1",
-                            "project_id":   "",
-                            "api_key":      "",
-                        },
-                    },
-                },
-            },
-        }
-    // ... other providers
-    }
-}
-```
+### 2. Guided configuration (`internal/cluster/magnum_configure_orchestrator.go`)
 
-## Step 2: Update Configuration Schema
+Implements `orchestration.ProviderOrchestrator`:
 
-Add provider schema to `internal/config/schema.go`:
+* `Name()` / `Supports(provider string)` -- identifies itself as `"magnum"`.
+* `Discover(ctx, cfg)` -- intentionally a no-op for Magnum (cluster templates are deployment-specific and must be entered manually, not discovered from the cloud). A provider with a discoverable catalog (images, flavors, networks -- see OpenStack) implements real discovery here.
+* `Prompts(cfg, discovery)` -- returns `[]orchestration.PromptSpec` for every field the guided flow should ask about (`magnum.auth_url`, `magnum.region`, `magnum.project_id`, `magnum.application_credential_id`, `magnum.application_credential_secret` (as a `PromptKindSecret`), `magnum.cluster_template`, `magnum.keypair`, `magnum.master_flavor_id`, `magnum.node_flavor_id`, `magnum.master_count`, ...).
+* `ApplyAnswers` patches the typed config from the collected answers.
+* `CapabilityRequests` -- declares any additional capability checks needed for the flow.
 
-```go
-// Add to schema generation
-func (Config) JSONSchema() *jsonschema.Schema {
-    schema := &jsonschema.Schema{
-        // ... existing schema
-    }
+Register the new orchestrator in `internal/cluster/configure_service.go` next to `newMagnumConfigureOrchestrator()`.
 
-    // Add mycloud provider schema
-    mycloudSchema := &jsonschema.Schema{
-        Type: "object",
-        Properties: map[string]*jsonschema.Schema{
-            "api_endpoint": {
-                Type:        "string",
-                Description: "MyCloud API endpoint URL",
-                Format:      "uri",
-            },
-            "region": {
-                Type:        "string",
-                Description: "MyCloud region",
-                Enum:        []interface{}{"us-east-1", "us-west-1", "eu-west-1"},
-            },
-            "project_id": {
-                Type:        "string",
-                Description: "MyCloud project ID",
-            },
-            "api_key": {
-                Type:        "string",
-                Description: "MyCloud API key (encrypted with SOPS)",
-            },
-        },
-        Required: []string{"api_endpoint", "region", "project_id"},
-    }
+### 3. Deploy lifecycle (`internal/cluster/magnum_bootstrap_provider.go`)
 
-    // Add to cloud providers
-    schema.Properties["opencenter"].Properties["infrastructure"].
-        Properties["cloud"].Properties["mycloud"] = mycloudSchema
+Implements `lifecycleBootstrapProvider.BuildSteps(cfg *v2.Config, clusterPaths *paths.ClusterPaths, opts *BootstrapOptions) ([]bootstrapStep, error)`. For Magnum this validates that `opencenter.infrastructure.cloud.magnum` and a kubeconfig path are set, builds a `magnumprovider.Config` via `magnumConfigFromV2`, and returns a small step list (`magnum-create`, ...) that creates or recovers the cluster through the Magnum API, polls for readiness, and exports the kubeconfig -- rather than the many discrete OpenTofu/Kubespray steps used by [the OpenStack provider](cluster-deploy-openstack.md). It persists a durable identity/UUID state file (`magnumIdentityStatePath`) so a lost or ambiguous create response can be recovered instead of creating a duplicate cluster.
 
-    return schema
-}
-```
+Wire the new provider into `internal/cluster/bootstrap_service.go`'s provider switch (`newMagnumBootstrapProvider(s.runner)`).
 
-## Step 3: Implement Provider Bootstrap Preflight Checks
+### 4. Destroy lifecycle (`internal/cluster/magnum_destroy_provider.go`)
 
-Provider-specific credential and connectivity checks belong to the provider's deployment/bootstrap path, not to `opencenter cluster doctor`. The doctor command is a fixed, cluster-independent local binary audit: it checks `git`, `kubectl`, `helm`, `flux`, `sops`, `tofu|terraform`, `kind`, `podman|docker`, `ssh`, `ssh-keyscan`, and `ssh-keygen`; it excludes `openstack` and external `age`, and returns exit code 1 when rows are missing.
+Implements `lifecycleDestroyProvider.BuildSteps`, deletes the remote cluster through the Magnum API, waits for deletion, and clears the persisted identity/bootstrap state afterward (`clearDestroyedMagnumState`). Wire it into `internal/cluster/destroy_service.go`'s provider switch (`newMagnumDestroyProvider(cfg)`).
 
-Create `internal/cloud/mycloud/preflight.go`:
+### 5. Standalone API client (`internal/cloud/magnum/provider.go`)
 
-```go
-package mycloud
+A self-contained Gophercloud client, independent of the rest of this repository's config types (`Config` struct uses its own field names; `magnumConfigFromV2` in `internal/cluster/magnum_bootstrap_provider.go` is the only place that translates `*v2.MagnumCloudConfig` into it). Public surface: `NewProvider`, `NewProviderWithService`, `CreateCluster`, `GetCluster`, `WaitVisible`, `WaitReady`, `ExportKubeconfig`, `DeleteCluster`, `WaitDeleted`. `doc.go` documents a real Gophercloud constraint worth knowing before you write a similar client: **v1 lifecycle operations don't accept contexts**, so the provider checks cancellation before/after each operation and re-authenticates a fresh `ProviderClient` per request group with the context already attached, so Gophercloud's reauthentication callback refreshes the right client.
 
-import (
-    "fmt"
-    "net/http"
-    "time"
-)
+### 6. Provider availability gate (`cmd/provider_availability.go`)
 
-// Preflight validates MyCloud credentials and connectivity
-func Preflight(config map[string]any) []string {
-    var errors []string
+`checkProviderAvailability` only rejects providers in a hardcoded `planned` map (`aws`, `gcp`, `azure` today) with a "not yet available" error. A new provider works as soon as it is **not** in that map -- you do not need to add anything here for the provider to function. You should, however, update the error message's "Supported providers: ..." list if you want it to stay accurate; it currently reads `openstack, vmware, kind, baremetal` and does not mention `magnum`, which is a real, if harmless, drift in this repository today.
 
-    // Extract configuration
-    apiEndpoint, ok := config["api_endpoint"].(string)
-    if !ok || apiEndpoint == "" {
-        errors = append(errors, "api_endpoint is required")
-        return errors
-    }
+## Checklist for a new provider
 
-    region, ok := config["region"].(string)
-    if !ok || region == "" {
-        errors = append(errors, "region is required")
-    }
+* [ ] Config struct + schema entry in `internal/config/v2/config.go`, regenerate with `mise run schema-v2`.
+* [ ] Mutual-exclusion checks added to every *other* provider's `ValidateConfig` in `internal/config/v2/provider.go`, and a `ValidateConfig` for the new provider itself.
+* [ ] `orchestration.ProviderOrchestrator` implementation, registered in `internal/cluster/configure_service.go`.
+* [ ] `lifecycleBootstrapProvider` implementation, registered in `internal/cluster/bootstrap_service.go`.
+* [ ] `lifecycleDestroyProvider` implementation, registered in `internal/cluster/destroy_service.go`.
+* [ ] Standalone API client under `internal/cloud/<provider>/`, if warranted.
+* [ ] Decide whether the provider also needs `internal/cloud.CloudProvider` drift detection -- most new providers do not need this on day one.
+* [ ] `cmd/provider_availability.go` -- do *not* add the new provider to the `planned` map; update the "Supported providers" message text.
+* [ ] Tests (see below).
+* [ ] `docs/reference/providers.md` entry (owned by another doc set -- open a cross-reference, don't duplicate its content here).
 
-    projectID, ok := config["project_id"].(string)
-    if !ok || projectID == "" {
-        errors = append(errors, "project_id is required")
-    }
+## Tests to write
 
-    apiKey, ok := config["api_key"].(string)
-    if !ok || apiKey == "" {
-        errors = append(errors, "api_key is required")
-    }
+Magnum's test suite is the bar to match. `internal/cloud/magnum/provider_test.go` (~600 lines, ~18 test functions) covers: config/credential validation, auth-scope handling, CA + finite HTTP timeout handling, `CreateCluster` option building, `WaitReady`/`WaitDeleted` state-machine transitions and cancellation, kubeconfig export (secure file permissions, certificate-flow embedding, empty-certificate rejection), name-vs-ID lookup fallback, opt-in insecure transport, and Gophercloud reauthentication/token-refresh under cancellation. `internal/cluster/magnum_lifecycle_test.go` and `internal/cluster/magnum_configure_orchestrator_test.go` cover `BuildSteps` behavior (including the nil-options error case and dry-run not executing lifecycle steps), durable UUID reuse across a lost create response, destroy-time state handling, guided-flow prompt generation, answer application, and capability requests.
 
-    // Return early if required fields missing
-    if len(errors) > 0 {
-        return errors
-    }
+At minimum, write tests for:
 
-    // Test API connectivity
-    client := &http.Client{Timeout: 10 * time.Second}
-    req, err := http.NewRequest("GET", apiEndpoint+"/v1/health", nil)
-    if err != nil {
-        errors = append(errors, fmt.Sprintf("failed to create request: %v", err))
-        return errors
-    }
+* Config/credential validation (missing required fields, mutually-exclusive fields).
+* The create/wait/destroy state machine, including cancellation mid-operation.
+* Recovery from an ambiguous/lost API response (don't silently create a duplicate resource).
+* Kubeconfig or credential export (file permissions, no partial/empty writes).
+* The guided-configure prompt set and `ApplyAnswers` patching.
 
-    req.Header.Set("Authorization", "Bearer "+apiKey)
-
-    resp, err := client.Do(req)
-    if err != nil {
-        errors = append(errors, fmt.Sprintf("failed to connect to MyCloud API: %v", err))
-        return errors
-    }
-    defer resp.Body.Close()
-
-    if resp.StatusCode == 401 {
-        errors = append(errors, "authentication failed: invalid API key")
-    } else if resp.StatusCode != 200 {
-        errors = append(errors, fmt.Sprintf("API returned status %d", resp.StatusCode))
-    }
-
-    // Validate region
-    if err := validateRegion(client, apiEndpoint, apiKey, region); err != nil {
-        errors = append(errors, fmt.Sprintf("invalid region: %v", err))
-    }
-
-    // Validate project access
-    if err := validateProject(client, apiEndpoint, apiKey, projectID); err != nil {
-        errors = append(errors, fmt.Sprintf("project access denied: %v", err))
-    }
-
-    return errors
-}
-
-func validateRegion(client *http.Client, endpoint, apiKey, region string) error {
-    // Implementation to validate region exists
-    return nil
-}
-
-func validateProject(client *http.Client, endpoint, apiKey, projectID string) error {
-    // Implementation to validate project access
-    return nil
-}
-```
-
-## Step 4: Register Preflight Check
-
-Update `cmd/cluster_preflight.go` to call your preflight function:
-
-```go
-func runPreflight(cfg *config.Config) error {
-    provider := cfg.OpenCenter.Infrastructure.Provider
-
-    var errors []string
-
-    switch provider {
-    case "mycloud":
-        mycloudConfig := cfg.OpenCenter.Infrastructure.Cloud.MyCloud
-        errors = mycloud.Preflight(mycloudConfig)
-    case "openstack":
-        // ... existing providers
-    }
-
-    if len(errors) > 0 {
-        for _, err := range errors {
-            fmt.Fprintf(os.Stderr, "❌ %s\n", err)
-        }
-        return fmt.Errorf("preflight checks failed")
-    }
-
-    return nil
-}
-```
-
-## Step 5: Add Infrastructure Templates
-
-Create Terraform templates in `internal/gitops/gitops-base-dir/infrastructure/clusters/mycloud/`:
-
-```hcl
-# main.tf.tmpl
-terraform {
-  required_providers {
-    mycloud = {
-      source  = "mycloud/mycloud"
-      version = "~> 1.0"
-    }
-  }
-}
-
-provider "mycloud" {
-  api_endpoint = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.APIEndpoint }}"
-  region       = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.Region }}"
-  project_id   = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.ProjectID }}"
-  api_key      = var.mycloud_api_key
-}
-
-# Create VPC
-resource "mycloud_vpc" "cluster" {
-  name        = "{{ .OpenCenter.Meta.ClusterName }}-vpc"
-  cidr_block  = "{{ .OpenCenter.Infrastructure.Network.NodeSubnet }}"
-  region      = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.Region }}"
-}
-
-# Create control plane instances
-resource "mycloud_instance" "control_plane" {
-  count         = {{ .OpenCenter.Cluster.MasterCount }}
-  name          = "{{ .OpenCenter.Meta.ClusterName }}-master-${count.index + 1}"
-  instance_type = "{{ .OpenCenter.Cluster.MasterFlavor }}"
-  image_id      = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.ImageID }}"
-  vpc_id        = mycloud_vpc.cluster.id
-
-  tags = {
-    cluster = "{{ .OpenCenter.Meta.ClusterName }}"
-    role    = "control-plane"
-  }
-}
-
-# Create worker instances
-resource "mycloud_instance" "worker" {
-  count         = {{ .OpenCenter.Cluster.WorkerCount }}
-  name          = "{{ .OpenCenter.Meta.ClusterName }}-worker-${count.index + 1}"
-  instance_type = "{{ .OpenCenter.Cluster.WorkerFlavor }}"
-  image_id      = "{{ .OpenCenter.Infrastructure.Cloud.MyCloud.ImageID }}"
-  vpc_id        = mycloud_vpc.cluster.id
-
-  tags = {
-    cluster = "{{ .OpenCenter.Meta.ClusterName }}"
-    role    = "worker"
-  }
-}
-```
-
-```hcl
-# variables.tf.tmpl
-variable "mycloud_api_key" {
-  description = "MyCloud API key"
-  type        = string
-  sensitive   = true
-}
-```
-
-```hcl
-# outputs.tf.tmpl
-output "control_plane_ips" {
-  value = mycloud_instance.control_plane[*].private_ip
-}
-
-output "worker_ips" {
-  value = mycloud_instance.worker[*].private_ip
-}
-
-output "vpc_id" {
-  value = mycloud_vpc.cluster.id
-}
-```
-
-## Step 6: Add Provider Validation
-
-Create `internal/config/mycloud_validator.go`:
-
-```go
-package config
-
-import "fmt"
-
-// ValidateMyCloudConfig validates MyCloud-specific configuration
-func ValidateMyCloudConfig(cfg *Config) []error {
-    var errors []error
-
-    mycloud := cfg.OpenCenter.Infrastructure.Cloud.MyCloud
-
-    // Validate API endpoint
-    if mycloud.APIEndpoint == "" {
-        errors = append(errors, fmt.Errorf("mycloud.api_endpoint is required"))
-    }
-
-    // Validate region
-    validRegions := []string{"us-east-1", "us-west-1", "eu-west-1"}
-    if !contains(validRegions, mycloud.Region) {
-        errors = append(errors, fmt.Errorf("invalid region: %s", mycloud.Region))
-    }
-
-    // Validate instance types
-    if err := validateInstanceType(mycloud.MasterFlavor); err != nil {
-        errors = append(errors, fmt.Errorf("invalid master flavor: %w", err))
-    }
-
-    if err := validateInstanceType(mycloud.WorkerFlavor); err != nil {
-        errors = append(errors, fmt.Errorf("invalid worker flavor: %w", err))
-    }
-
-    return errors
-}
-
-func validateInstanceType(flavor string) error {
-    validFlavors := []string{"small", "medium", "large", "xlarge"}
-    if !contains(validFlavors, flavor) {
-        return fmt.Errorf("invalid instance type: %s", flavor)
-    }
-    return nil
-}
-```
-
-Register validator in `internal/config/validator.go`:
-
-```go
-func (v *Validator) Validate(cfg *Config) error {
-    // ... existing validation
-
-    // Provider-specific validation
-    switch cfg.OpenCenter.Infrastructure.Provider {
-    case "mycloud":
-        if errs := ValidateMyCloudConfig(cfg); len(errs) > 0 {
-            return fmt.Errorf("mycloud validation failed: %v", errs)
-        }
-    // ... other providers
-    }
-
-    return nil
-}
-```
-
-## Step 7: Write Tests
-
-Create `internal/cloud/mycloud/preflight_test.go`:
-
-```go
-package mycloud
-
-import (
-    "testing"
-    "github.com/stretchr/testify/assert"
-)
-
-func TestPreflight_MissingAPIEndpoint(t *testing.T) {
-    config := map[string]any{
-        "region":     "us-east-1",
-        "project_id": "test-project",
-        "api_key":    "test-key",
-    }
-
-    errors := Preflight(config)
-
-    assert.Len(t, errors, 1)
-    assert.Contains(t, errors[0], "api_endpoint is required")
-}
-
-func TestPreflight_InvalidRegion(t *testing.T) {
-    config := map[string]any{
-        "api_endpoint": "https://api.mycloud.com",
-        "region":       "invalid-region",
-        "project_id":   "test-project",
-        "api_key":      "test-key",
-    }
-
-    errors := Preflight(config)
-
-    assert.Contains(t, errors, "invalid region")
-}
-```
-
-Create BDD test in `tests/features/mycloud_provider.feature`:
-
-```gherkin
-Feature: MyCloud Provider Support
-  As a platform engineer
-  I want to deploy clusters on MyCloud
-  So that I can use MyCloud infrastructure
-
-  Scenario: Initialize cluster with MyCloud provider
-    When I run "opencenter cluster init test --org my-org --type mycloud"
-    Then the command should succeed
-    And the configuration should have provider "mycloud"
-    And the configuration should have mycloud.region "us-east-1"
-
-  Scenario: Audit local prerequisites
-    When I run "opencenter cluster doctor"
-    Then stdout should contain "BINARY"
-    And stdout should contain "RESULT:"
-```
-
-## Step 8: Update Documentation
-
-Add provider documentation to `docs/reference/providers.md`:
-
-```markdown
-### MyCloud
-
-**Status:** Production Ready
-
-MyCloud is a cloud platform providing compute, storage, and networking services.
-
-**Requirements:**
-- MyCloud account with API access
-- Project ID
-- API key with compute permissions
-
-**Configuration:**
-```yaml
-opencenter:
-  infrastructure:
-    provider: mycloud
-    cloud:
-      mycloud:
-        api_endpoint: https://api.mycloud.com
-        region: us-east-1
-        project_id: my-project-id
-        api_key: ""  # Set via SOPS encryption
-```
-
-**Supported Regions:**
-
-* us-east-1 (US East)
-* us-west-1 (US West)
-* eu-west-1 (Europe West)
-
-**Instance Types:**
-
-* small: 2 vCPU, 4 GB RAM
-* medium: 4 vCPU, 8 GB RAM
-* large: 8 vCPU, 16 GB RAM
-* xlarge: 16 vCPU, 32 GB RAM
-```
-
-Create tutorial in `docs/getting-started/mycloud-deployment.md`:
-
-```markdown
-# Deploy Cluster on MyCloud
-
-This tutorial shows how to deploy a production Kubernetes cluster on MyCloud.
-
-## Prerequisites
-
-- MyCloud account
-- API key with compute permissions
-- Project ID
-
-## Step 1: Initialize Configuration
-
-```bash
-opencenter cluster init prod --org my-org --type mycloud
-```
-
-## Step 2: Configure MyCloud Settings
-
-```bash
-opencenter cluster edit prod
-```
-
-Update MyCloud configuration:
-
-```yaml
-opencenter:
-  infrastructure:
-    cloud:
-      mycloud:
-        api_endpoint: https://api.mycloud.com
-        region: us-east-1
-        project_id: my-project-123
-```
-
-## Step 3: Encrypt API Key
-
-```bash
-# Set API key (will be encrypted with SOPS)
-opencenter cluster set prod \
-  opencenter.infrastructure.cloud.mycloud.api_key="your-api-key"
-```
-
-## Step 4: Validate Configuration
-
-```bash
-opencenter cluster validate prod
-opencenter cluster doctor
-```
-
-## Step 5: Deploy Cluster
-
-```bash
-opencenter cluster generate prod
-opencenter cluster deploy prod
-```
-
-```
-
-## Step 9: Test End-to-End
-
-Test the complete workflow:
-
-```bash
-# Build CLI
-mise run build
-
-# Initialize cluster
-./bin/opencenter cluster init mycloud-test --org test-org --type mycloud
-
-# Validate
-./bin/opencenter cluster validate mycloud-test
-
-# Run the cluster-independent local binary audit (no provider credentials required)
-./bin/opencenter cluster doctor
-
-# Generate infrastructure
-./bin/opencenter cluster generate mycloud-test
-
-# Verify generated files
-ls -la ~/.config/opencenter/clusters/test-org/mycloud-test/gitops/infrastructure/
-```
-
-## Step 10: Submit Pull Request
-
-1. Run all tests:
-
-   ```bash
-   mise run test
-   mise run godog
-   ```
-2. Update CHANGELOG.md:
-
-   ```markdown
-   ## [Unreleased]
-
-   ### Added
-   - MyCloud provider support with Terraform templates
-   - MyCloud preflight checks for credential validation
-   - MyCloud provider documentation and tutorial
-   ```
-3. Create pull request with:
-   * Description of provider capabilities
-   * Test results
-   * Documentation updates
-   * Example configuration
-
-## Provider Checklist
-
-Before submitting, verify:
-
-* [ ] Configuration defaults added to `internal/config/defaults.go`
-* [ ] Schema updated in `internal/config/schema.go`
-* [ ] Preflight checks implemented in `internal/cloud/<provider>/preflight.go`
-* [ ] Preflight registered in `cmd/cluster_preflight.go`
-* [ ] Terraform templates created in `internal/gitops/gitops-base-dir/`
-* [ ] Provider validation added to `internal/config/<provider>_validator.go`
-* [ ] Unit tests written for preflight and validation
-* [ ] BDD tests written for provider workflows
-* [ ] Provider documented in `docs/reference/providers.md`
-* [ ] Tutorial created in `docs/getting-started/<provider>-deployment.md`
-* [ ] All tests pass (`mise run test && mise run godog`)
-* [ ] Schema verification passes (`mise run schema-verify`)
-
-## Common Issues
-
-### Preflight checks fail in CI
-
-**Problem:** Preflight tests fail because CI doesn’t have provider credentials
-
-**Solution:** Mock API calls in tests or skip preflight tests in CI:
-
-```go
-func TestPreflight(t *testing.T) {
-    if os.Getenv("CI") == "true" {
-        t.Skip("Skipping preflight test in CI")
-    }
-    // ... test implementation
-}
-```
-
-### Template rendering fails
-
-**Problem:** Template syntax errors or missing configuration fields
-
-**Solution:** Test template rendering:
+## Verification
 
 ```bash
 mise run build
+mise run schema-v2   # if you changed the config schema
+go test ./internal/cloud/<provider>/... ./internal/cluster/...
+mise run test
+mise run godog
+```
+
+Then exercise the real CLI flow end to end against a test account:
+
+```bash
+./bin/opencenter cluster init test --org test-org --type <provider>
+./bin/opencenter cluster configure test --guided
+./bin/opencenter cluster validate test
 ./bin/opencenter cluster generate test
-# Check generated files for errors
+./bin/opencenter cluster deploy test
+./bin/opencenter cluster destroy test --force
 ```
-
-### Schema validation fails
-
-**Problem:** Configuration doesn’t match JSON schema
-
-**Solution:** Regenerate schema and verify:
-
-```bash
-mise run schema-verify
-```
-
----
-
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Provider defaults: `internal/config/defaults.go:27-451`
-* Schema generation: `internal/config/schema.go`
-* Preflight checks: `internal/cloud/openstack/preflight.go`, `internal/cloud/` directory
-* Preflight command: `cmd/cluster_preflight.go`
-* Templates: `internal/gitops/gitops-base-dir/` directory
-* Provider validation: `internal/config/*_validator.go` files
-* Existing providers: `docs/providers/README.md:1-20`
-* Project structure: `.kiro/steering/structure.md:31-68`

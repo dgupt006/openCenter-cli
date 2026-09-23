@@ -72,7 +72,7 @@ opencenter cluster init [name] [flags]
       --regenerate-keys            regenerate keys even if they exist
       --server-pool stringArray    additional server pool configuration
       --strict                     fail if required values are missing
-      --type string                cluster type: openstack, baremetal, kind, vmware (default "openstack")
+      --type string                cluster type: openstack, baremetal, kind, vmware, magnum (default "openstack")
 ```
 
 ### Options inherited from parent commands

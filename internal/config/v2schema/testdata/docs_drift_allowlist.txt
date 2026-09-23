@@ -129,10 +129,6 @@ docs/reference/configuration-schema.md:opencenter.infrastructure.node_naming.wor
 docs/reference/configuration-schema.md:opencenter.infrastructure.node_naming.master
 docs/reference/configuration-schema.md:opencenter.infrastructure.node_naming.worker_windows
 docs/reference/file-locations.md:opencenter.cluster.networking
-docs/reference/platform-services.md:opencenter.services.vsphere-csi.image_repository
-docs/reference/platform-services.md:opencenter.services.vsphere-csi.image_tag
-docs/reference/platform-services.md:opencenter.services.weave-gitops.hostname
-docs/reference/platform-services.md:opencenter.managed_service
 docs/reference/validation-rules.md:opencenter.infrastructure.openstack
 docs/reference/validation-rules.md:opencenter.cluster.networking
 docs/reference/validation-rules.md:opencenter.cluster.master_count

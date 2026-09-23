@@ -49,7 +49,7 @@ cluster config
   -> generated overlay promotion
 ```
 
-This is not the same as secret manifest sync. The SOPS manager handles file-level encryption, `.sops.yaml` generation/validation, Age key storage, and encryption checks. `SetupService` uses an overlay encryption hook before promoting generated application output.
+This is not the same as secret manifest sync. The SOPS manager handles file-level encryption, `.sops.yaml` generation/validation, Age key storage, and encryption checks. `SetupService` uses an overlay encryption hook before promoting generated application output. Both `internal/sops/manager.go` and `internal/sops/git.go` select the ordered list of overlay files to encrypt through one shared function, `overlayFilesToEncrypt` in `internal/sops/overlay_files.go`: it always includes the Flux bootstrap and base-repo source files, adds provider-specific credential files for OpenStack and vSphere, and adds `services/<name>/helm-values/override-values.yaml` for any service whose rendered Helm values may embed credentials (`openstack-ccm`/`openstack-csi` on OpenStack, plus `loki`, `tempo`, `mimir`, `headlamp`, `harbor`). Missing files (a disabled service, or a file not yet generated) are silently skipped by the encryption callers.
 
 ## OpenStack storage credential boundary
 

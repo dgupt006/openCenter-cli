@@ -137,3 +137,15 @@ Rollback strategy: fix-forward or git revert. There is no runtime feature flag t
 Rationale: maintaining two parallel rendering paths with a runtime switch adds complexity and testing burden disproportionate to the risk. The descriptor coverage validation catches the most dangerous failure mode (missing files) at build time. Git revert provides a fast rollback path for any regression.
 
 If operational experience reveals that git revert is insufficient, a runtime feature flag can be added as a targeted response. This is a conscious deferral, not an oversight.
+
+## 7. Why descriptor-driven rendering (rejected alternatives)
+
+Before landing on the model described above, the project evaluated and rejected three simpler alternatives:
+
+* **Inline Kubernetes resources in cluster config.** Letting operators embed raw manifests/Helm values directly in the cluster YAML was rejected: it collapses the boundary between "public, typed, validated operator input" and "rendering implementation detail," and it defeats schema validation and IDE autocomplete for the config file.
+* **Full service manifests driving config, CLI help, validation, and rendering from one YAML-defined model.** Rejected as a second configuration system running alongside the existing typed `internal/config/services/*.go` structs, `go-playground/validator` tags, and generated JSON Schema -- it would require migrating that entire pipeline, not just the renderer, for a benefit (removing rendering boilerplate) that a narrower change could achieve on its own.
+* **Keep the convention-based (negative-list) renderer and only remove the hardcoded CLI switch statements in `cmd/cluster_service.go`.** Rejected because it left the "too much output" failure mode described in section 4 unaddressed and did nothing about template-discovery drift (the old hardcoded `inferServices` list in `internal/template/embedded_registry.go`).
+
+The adopted design keeps typed Go config as the source of truth for configuration shape, defaults, and validation, and adds overlay descriptors as a separate, narrowly-scoped source of truth for rendered topology (this document, section 5). Complex per-service rendering logic that doesn't fit the bounded descriptor condition model (see [Descriptor Condition Schema](descriptor-condition-schema.md)) stays in Go as a direct function reference registered in the immutable `RenderCatalog` (`internal/gitops/render_catalog.go`) -- never as a string-keyed mutable registry. See [Adding New Platform Services](adding-services.md) for the resulting contributor workflow.
+
+This work was originally tracked and validated against a RelayPoint customer fixture (`testdata/relaypoint-logistics-shared/`) that reproduced five real overlay trees. That fixture has since been removed from the repository (it contained sanitized-but-sensitive customer-shaped data); `internal/gitops/relaypoint_parity_test.go` now skips itself when the fixture directory is absent. The descriptor-driven renderer it validated remains the active, in-use rendering path -- the removal only affects the historical parity-test fixture, not the design.

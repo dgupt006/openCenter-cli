@@ -22,13 +22,16 @@ Today that means:
 
 ## Supported Providers
 
+`internal/cloud.CloudProviderFactory` only has two `CloudProvider` implementations registered for drift work — OpenStack and VMware (`cmd/cluster_drift.go`). Kind and bare metal have no entry in that factory at all: asking for drift on those providers is a configuration/usage error, not a partial feature.
+
 | Provider | Status | Reconciliation |
 | --- | --- | --- |
 | OpenStack | Supported | Limited safe reconciliation for mutable items such as tags and security-group rules |
 | VMware | Supported | Detection only; remediation is manual |
-| Kind | Not applicable | No infrastructure drift backend |
-| Baremetal | Not applicable | No infrastructure drift backend |
-| AWS | Removed from GA drift registry | Not supported |
+| Kind | Not applicable | No entry in the drift provider factory |
+| Baremetal | Not applicable | No entry in the drift provider factory |
+| Magnum | Not applicable | No entry in the drift provider factory |
+| AWS/GCP/Azure | Not applicable | Not a supported infrastructure provider at all |
 
 ## Typical Flow
 
@@ -36,12 +39,21 @@ Today that means:
 # Detect drift
 opencenter cluster drift detect prod-cluster
 
-# Filter output by severity
+# Filter output by severity (critical, warning, info)
 opencenter cluster drift detect prod-cluster --severity=critical
 
-# Preview any supported reconciliation
+# Preview reconciliation
 opencenter cluster drift reconcile prod-cluster --dry-run
+
+# Promote approved live state back into the config file instead of
+# reconciling infrastructure to match the config
+opencenter cluster drift reconcile prod-cluster --to-config --confirm
+
+# Schedule periodic drift checks
+opencenter cluster drift schedule prod-cluster --interval=24h
 ```
+
+Drift severities are `critical` (for example control-plane or network configuration changes), `warning` (worker nodes, tags, labels), and `info` (metadata) — defined in `internal/operations/drift_detector.go`.
 
 ## VMware-Specific Behavior
 

@@ -360,7 +360,7 @@ Compare → report drift items with severity
 | Dependency validation | `internal/config/services/dependency_validator.go` | `ValidateDependencies` |
 | Setup orchestration | `internal/cluster/setup_service.go` | `generateGitOpsManifests` |
 | Bootstrap (Kind) | `internal/cluster/kind_bootstrap_provider.go` | `BuildSteps` |
-| Bootstrap (OpenStack) | `internal/cluster/openstack_bootstrap_provider.go` | `BuildSteps` |
+| Bootstrap (OpenStack) | `internal/cluster/bootstrap_provider_infra.go` | `openstackBootstrapProvider.BuildSteps` (see [cluster deploy — OpenStack Provider](cluster-deploy-openstack.md)) |
 
 ## Known Gaps
 

@@ -2,17 +2,17 @@
 id: service-headlamp
 title: "Headlamp Dashboard"
 sidebar_label: Headlamp
-description: Kubernetes dashboard with OIDC authentication and Flux GitOps plugin.
+description: Kubernetes dashboard configuration, OIDC integration, secrets, and conditional dependency on Keycloak.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [dashboard, ui, oidc, headlamp, gitops]
+tags: [dashboard, ui, oidc, headlamp, services]
 ---
 
-> **Purpose:** For platform engineers and operators, documents the Headlamp dashboard service configuration, covering OIDC integration, Flux plugin, and verification.
+> **Purpose:** For platform engineers and operators, documents Headlamp's configuration surface and its conditional dependency on Keycloak.
 
 ## Overview
 
-Headlamp provides a web-based Kubernetes dashboard with OIDC authentication via Keycloak. It includes the headlamp-plugin-flux plugin for GitOps visibility into FluxCD resources. When `identity.oidc.source=internal`, the OIDC client secret placeholder is acceptable because the bootstrap process generates it automatically.
+Headlamp provides a Kubernetes dashboard, optionally authenticated via OIDC.
 
 ## Configuration
 
@@ -21,70 +21,41 @@ opencenter:
   services:
     headlamp:
       enabled: true                          # default: true
-      hostname: "headlamp.example.com"
-      oidc_issuer_url: "https://keycloak.example.com/realms/master"
-      oidc_client_id: "headlamp"
+      namespace: headlamp                     # default: headlamp
+      hostname:                                # default: dashboard.<cluster_fqdn>
+      oidc_issuer_url:
+      oidc_client_id:
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable Headlamp dashboard |
-| `hostname` | string | — | Public hostname for the dashboard |
-| `oidc_issuer_url` | string | — | OIDC issuer URL (Keycloak realm) |
-| `oidc_client_id` | string | — | OIDC client ID registered in Keycloak |
+| `enabled` | bool | `true` | Whether Headlamp is deployed |
+| `namespace` | string | `headlamp` | Namespace for Headlamp resources |
+| `hostname` | string | `dashboard.<cluster_fqdn>` (set by the CLI on enable) | Public hostname for the dashboard |
+| `oidc_issuer_url` | string | — | OIDC issuer URL |
+| `oidc_client_id` | string | — | OIDC client ID |
 
 ## Secrets
-
-Configured under `secrets.headlamp`:
 
 ```yaml
 secrets:
   headlamp:
-    oidc_client_secret: "ENC[AES256_GCM,data:...,type:str]"
+    oidc_client_secret:
 ```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `oidc_client_secret` | string | OIDC client secret (SOPS encrypted). When `identity.oidc.source=internal`, a placeholder value is acceptable — bootstrap generates the real secret. |
 
 ## Dependencies
 
-| Service | Reason |
-|---------|--------|
-| `keycloak` | Provides OIDC authentication |
-| `gateway-api` | Required for ingress routing |
+`internal/config/services/dependency_validator.go` enforces a conditional rule via `ValidateHeadlampOIDC`: **if `headlamp` is enabled and either `oidc_issuer_url` or `oidc_client_id` is set, `keycloak` must also be enabled.** If neither OIDC field is set, Headlamp has no enforced dependency.
 
-## Verification
+## Rendering
 
-```bash
-# Check Headlamp pods
-kubectl get pods -n headlamp
+`headlamp` has no dedicated YAML descriptor; it is rendered through the built-in render catalog using a dedicated Helm override-values template.
 
-# Verify Headlamp service
-kubectl get svc -n headlamp
-
-# Check HTTPRoute for ingress
-kubectl get httproutes -n headlamp
-
-# Verify OIDC configuration
-kubectl get secret -n headlamp headlamp-oidc -o jsonpath='{.data}'
-
-# Access the dashboard
-curl -sI https://headlamp.example.com
-```
-
-## CLI Commands
+## CLI commands
 
 ```bash
-# Enable Headlamp
 opencenter cluster service enable headlamp
-
-# Disable Headlamp
 opencenter cluster service disable headlamp
-
-# View configuration options
-opencenter cluster service options headlamp
-
-# Check service status
 opencenter cluster service status
+opencenter cluster service options headlamp
 ```

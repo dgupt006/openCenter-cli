@@ -16,8 +16,13 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | `reference/` | `reference` | CLI, schema, services, flags |
 | `concepts/` | `explanation` | Architecture and rationale |
 | `providers/` | `reference` | Per-provider guides |
-| `contributing/` | `explanation` | Developer docs |
+| `contributing/` | mixed (`how-to`/`reference`/`explanation`) | Developer docs |
 | `release/` | `reference` | Release notes |
+| `CODEMAPS/` | `explanation` | Durable code-map deep dives (not part of the published site) |
+
+A few pages live at the `docs/` root rather than in a lifecycle directory
+(`architecture.md`, `llm-code-map.md`, `opencenter-cluster-via-cli.md`,
+`index.md`, `glossary.md`, `README.md`) -- see "Other" below.
 
 ## Complete Site Map
 
@@ -41,6 +46,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [normalize-legacy-renderer-metadata](operations/normalize-legacy-renderer-metadata.md) | Remove legacy v2 renderer metadata |
 | [configure-networking](operations/configure-networking.md) | Network and DNS setup |
 | [add-worker-pools](operations/add-worker-pools.md) | Add worker node groups |
+| [manage-worker-pools](operations/manage-worker-pools.md) | Scale, update, and remove worker pools |
 | [backup-and-restore](operations/backup-and-restore.md) | Velero backup/restore |
 | [upgrade-kubernetes](operations/upgrade-kubernetes.md) | Kubernetes version upgrades |
 | [migrate-clusters](operations/migrate-clusters.md) | Cluster migration |
@@ -51,6 +57,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [create-kind-cluster](operations/create-kind-cluster.md) | Kind cluster creation |
 | [create-openstack-cluster](operations/create-openstack-cluster.md) | OpenStack cluster creation |
 | [deploy-openstack-cluster](operations/deploy-openstack-cluster.md) | OpenStack cluster deployment |
+| [deployment-profiles](operations/deployment-profiles.md) | Deployment method profiles |
 
 ### Reference
 
@@ -71,14 +78,17 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [github-actions-workflows](reference/github-actions-workflows.md) | Repository CI/CD workflows and runner contract |
 | [audit-key](reference/audit-key.md) | Audit signing key |
 | [providers](reference/providers.md) | Infrastructure providers |
+| [platform-services](reference/platform-services.md) | Platform service catalog |
 | [opencenter/](reference/opencenter/) | Auto-generated per-command reference |
 
 #### Platform Services (per-service docs)
 
 | Page | Category | Description |
 |------|----------|-------------|
-| [services/index](reference/services/index.md) | — | Service matrix and overview |
+| [services/index](reference/services/index.md) | -- | Service matrix and overview |
 | [services/calico](reference/services/calico.md) | Networking | Calico CNI |
+| [services/cilium](reference/services/cilium.md) | Networking | Cilium CNI |
+| [services/kube-ovn](reference/services/kube-ovn.md) | Networking | Kube-OVN CNI |
 | [services/gateway-api](reference/services/gateway-api.md) | Networking | Gateway API CRDs |
 | [services/gateway](reference/services/gateway.md) | Networking | Envoy gateway |
 | [services/metallb](reference/services/metallb.md) | Networking | Bare-metal LB |
@@ -99,6 +109,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [services/opentelemetry-kube-stack](reference/services/opentelemetry-kube-stack.md) | Observability | OTel collectors |
 | [services/alert-proxy](reference/services/alert-proxy.md) | Observability | Alert forwarding |
 | [services/fluxcd](reference/services/fluxcd.md) | GitOps | Continuous delivery |
+| [services/sources](reference/services/sources.md) | GitOps | Shared Flux GitRepository sources |
 | [services/weave-gitops](reference/services/weave-gitops.md) | GitOps | GitOps dashboard |
 | [services/velero](reference/services/velero.md) | Backup | Disaster recovery |
 | [services/etcd-backup](reference/services/etcd-backup.md) | Backup | etcd snapshots |
@@ -117,6 +128,7 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [gitops-workflow](concepts/gitops-workflow.md) | GitOps model and FluxCD |
 | [configuration-lifecycle](concepts/configuration-lifecycle.md) | Config from init to deploy |
 | [security-model](concepts/security-model.md) | Security design and SOPS |
+| [security-update-design](concepts/security-update-design.md) | Security update/patch design |
 | [services-templates](concepts/services-templates.md) | Template rendering system |
 | [drift-detection](concepts/drift-detection.md) | Infrastructure drift |
 | [plugin-internal-services](concepts/plugin-internal-services.md) | Internal plugin system |
@@ -127,7 +139,6 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 
 | Page | Description |
 |------|-------------|
-| [README](providers/README.md) | Provider overview |
 | [vmware](providers/vmware.md) | VMware provider guide |
 | [vmware-quick-start](providers/vmware-quick-start.md) | VMware quick start |
 | [vmware-terraform-template](providers/vmware-terraform-template.md) | VMware Terraform |
@@ -140,28 +151,29 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 | [development-setup](contributing/development-setup.md) | Dev environment setup |
 | [code-structure](contributing/code-structure.md) | Package layout |
 | [testing-guide](contributing/testing-guide.md) | Testing approach |
-| [adding-providers](contributing/adding-providers.md) | New provider guide |
+| [adding-providers](contributing/adding-providers.md) | New provider guide (worked example: Magnum) |
 | [adding-services](contributing/adding-services.md) | New service guide |
-| [build-system](contributing/build-system.md) | Build and release |
+| [build-system](contributing/build-system.md) | Mise build system |
 | [release-process](contributing/release-process.md) | Release workflow |
-| [validation](contributing/validation.md) | Validation system |
-| [services](contributing/services.md) | Service internals |
-| [rendering-contract](contributing/rendering-contract.md) | Template rendering rules |
-| [descriptor-condition-schema](contributing/descriptor-condition-schema.md) | Descriptor conditions |
-| [services-rendering-options](contributing/services-rendering-options.md) | Rendering variants |
-| [services-rendering-parity-plan](contributing/services-rendering-parity-plan.md) | Parity tracker |
-| [per-service-file-variance](contributing/per-service-file-variance.md) | File variance analysis |
-| [overlay-security-policy](contributing/overlay-security-policy.md) | Overlay security |
-| [cluster-init-details](contributing/cluster-init-details.md) | Init internals |
-| [cluster-deploy-openstack](contributing/cluster-deploy-openstack.md) | Deploy internals |
-| [kind-cluster-verification](contributing/kind-cluster-verification.md) | Kind verification |
-| [repo-cleanup-audit](contributing/repo-cleanup-audit.md) | Cleanup tracker |
+| [validation](contributing/validation.md) | `cluster validate` execution flow |
+| [services](contributing/services.md) | Service enable/disable lifecycle |
+| [rendering-contract](contributing/rendering-contract.md) | Renderer-owned vs. bootstrap-owned paths, lifecycle states |
+| [descriptor-condition-schema](contributing/descriptor-condition-schema.md) | Overlay descriptor condition operators |
+| [overlay-security-policy](contributing/overlay-security-policy.md) | Overlay rendering security policy |
+| [cluster-init-details](contributing/cluster-init-details.md) | `cluster init` internals |
+| [cluster-deploy-openstack](contributing/cluster-deploy-openstack.md) | `cluster deploy` internals (OpenStack) |
+| [kind-cluster-verification](contributing/kind-cluster-verification.md) | Kind cluster service verification |
 
 ### Release Notes
 
 | Page | Description |
 |------|-------------|
 | [1.0.0-rc01](release/1.0.0-rc01.md) | Release candidate 1 |
+| [1.0.0-rc02](release/1.0.0-rc02.md) | Release candidate 2 |
+| [1.0.0-rc03](release/1.0.0-rc03.md) | Release candidate 3 |
+| [1.0.0-rc04](release/1.0.0-rc04.md) | Release candidate 4 |
+| [1.0.0-rc05](release/1.0.0-rc05.md) | Release candidate 5 |
+| [1.0.0-rc06](release/1.0.0-rc06.md) | Release candidate 6 |
 
 ### Other
 
@@ -169,11 +181,18 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 |------|-------------|
 | [index](index.md) | Documentation home |
 | [glossary](glossary.md) | Term definitions |
+| [architecture](architecture.md) | Terse, contributor-facing package/entry-point map (distinct in scope from `concepts/architecture.md`) |
+| [llm-code-map](llm-code-map.md) | Entry points, package responsibilities, and safe-change boundaries for code-oriented agents |
+| [opencenter-cluster-via-cli](opencenter-cluster-via-cli.md) | Full OpenStack cluster walkthrough via the CLI (provider discovery, per-service storage) |
 
 ## Non-Published Content
 
-- [`CODEMAPS/`](CODEMAPS/) — Architecture maps for the development workflow.
-  Not part of the published site. See [CODEMAPS/INDEX.md](CODEMAPS/INDEX.md).
+- [`CODEMAPS/`](CODEMAPS/) -- Architecture maps for the development workflow.
+  Not part of the published site. See [CODEMAPS/INDEX.md](CODEMAPS/INDEX.md)
+  for the full set: CLI commands, cluster lifecycle, config system, DI
+  container, GitOps engine, import/operations/resilience, OpenStack provider
+  storage operations, providers, rendering ownership and secret artifacts,
+  runtime extensions and local development, and secrets management.
 
 ## Editing Rules
 
@@ -184,7 +203,11 @@ Pages are organised by **lifecycle category**, not by Diátaxis type:
 - Place pages in the lifecycle directory matching the reader's task.
 - Refresh the per-command reference under `reference/opencenter/`
   with `go run -tags tools ./cmd/docs` when the Cobra tree changes.
+- Every technical claim must be verifiable against the current source --
+  when rewriting a page, re-derive facts from the code/schema/CI config
+  rather than carrying forward unverified prose from an earlier revision.
 
 ## Tooling
 
-- `hack/scripts/audit_doc_frontmatter.py` — verify frontmatter rules (CI-safe).
+- `hack/scripts/audit_doc_frontmatter.py` -- verify frontmatter rules (CI-safe; run via `mise run test-docs-frontmatter`).
+- `hack/tag_wip_failures.py` -- tag failing BDD scenarios `@wip` (via `mise run tag-wip-failures`).

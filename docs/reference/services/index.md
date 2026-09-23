@@ -2,89 +2,115 @@
 id: services-index
 title: "Platform Services"
 sidebar_label: Services
-description: Index of all platform services available in openCenter clusters.
+description: Directory of every platform service configurable in openCenter clusters, with default state and links to per-service reference pages.
 doc_type: reference
 audience: "operators, platform engineers"
 tags: [services, platform, reference]
 ---
 
-# Platform Services
+# Platform services
 
-> **Purpose:** For operators and platform engineers, indexes all platform services deployable with openCenter, organized by category.
+> **Purpose:** For operators and platform engineers, indexes every service defined in `schema/opencenter-v2.schema.json`, organized by category, with its default enabled state and a link to its configuration reference.
 
-## Service Matrix
+Services are configured under `opencenter.services.<name>` (or `opencenter.managed_services.<name>` / `opencenter.managed-service.<name>` for managed-service deployments — both accept the same fields). See [Platform services architecture](../platform-services.md) for how these maps are validated and rendered.
 
-| Service | Category | Default | Description | Details |
-|---------|----------|---------|-------------|---------|
-| [calico](calico.md) | Networking | Enabled | Calico CNI for pod networking with BGP support | |
-| [gateway-api](gateway-api.md) | Networking | Enabled | Gateway API CRDs for modern ingress routing | |
-| [gateway](gateway.md) | Networking | Enabled | Gateway API implementation (Envoy-based) | Depends: gateway-api |
-| [metallb](metallb.md) | Networking | Enabled | Bare-metal load balancer using L2/BGP | |
-| [cert-manager](cert-manager.md) | Security | Enabled | Automated TLS certificate management | Multi-provider DNS |
-| [keycloak](keycloak.md) | Security | Enabled | Identity and access management (OIDC/SAML) | Depends: cert-manager, postgres-operator |
-| [kyverno](kyverno.md) | Security | Enabled | Kubernetes policy engine | 17 default policies |
-| [rbac-manager](rbac-manager.md) | Security | Enabled | Declarative RBAC management | |
-| [sealed-secrets](sealed-secrets.md) | Security | Enabled | Encrypted Kubernetes secrets in Git | |
-| [openstack-ccm](openstack-ccm.md) | Cloud | Enabled | OpenStack Cloud Controller Manager | OpenStack only |
-| [openstack-csi](openstack-csi.md) | Storage | Enabled | OpenStack Cinder CSI driver | OpenStack only |
-| [vsphere-csi](vsphere-csi.md) | Storage | Disabled | VMware vSphere CSI driver | VMware only |
-| [longhorn](longhorn.md) | Storage | Disabled | Distributed block storage | |
-| [external-snapshotter](external-snapshotter.md) | Storage | Enabled | CSI volume snapshot controller | |
-| [kube-prometheus-stack](kube-prometheus-stack.md) | Observability | Enabled | Prometheus, Grafana, Alertmanager | |
-| [loki](loki.md) | Observability | Enabled | Log aggregation (S3/Swift backends) | |
-| [tempo](tempo.md) | Observability | Enabled | Distributed tracing (S3/Swift backends) | |
-| [mimir](mimir.md) | Observability | Disabled | Long-term metrics storage | Depends: kafka-cluster |
-| [opentelemetry-kube-stack](opentelemetry-kube-stack.md) | Observability | Disabled | OpenTelemetry collectors | |
-| [alert-proxy](alert-proxy.md) | Observability | Disabled | Alert forwarding proxy | Managed service |
-| [fluxcd](fluxcd.md) | GitOps | Enabled | GitOps continuous delivery | Core dependency |
-| [weave-gitops](weave-gitops.md) | GitOps | Disabled | GitOps dashboard UI | |
-| [velero](velero.md) | Backup | Enabled | Cluster backup and disaster recovery | Multi-backend storage |
-| [etcd-backup](etcd-backup.md) | Backup | Disabled | Nightly etcd snapshot backup to configured S3-compatible storage | Requires endpoint, bucket, region, and service-specific credentials |
-| [headlamp](headlamp.md) | Management | Enabled | Kubernetes dashboard with OIDC | |
-| [olm](olm.md) | Management | Enabled | Operator Lifecycle Manager | |
-| [postgres-operator](postgres-operator.md) | Management | Enabled | PostgreSQL operator (Zalando) | |
-| [harbor](harbor.md) | Management | Disabled | Container registry | |
-| [kafka-cluster](kafka-cluster.md) | Management | Disabled | Apache Kafka (Strimzi) | |
+"Default" below reflects `internal/config/v2/defaults.go`. Services marked **Opt-in** have no entry in the default generated configuration at all — you must add them explicitly.
 
-## Enable/Disable Services
+## Networking
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [calico](calico.md) | Enabled (`calico-system`) | Calico CNI: pod networking and NetworkPolicy enforcement |
+| [cilium](cilium.md) | Opt-in | eBPF-based CNI, alternative to Calico |
+| [kube-ovn](kube-ovn.md) | Opt-in | OVN-based overlay CNI, alternative to Calico/Cilium |
+| [gateway-api](gateway-api.md) | Enabled (`envoy-gateway-system`) | Gateway API CRDs consumed by the `gateway` service |
+| [gateway](gateway.md) | Enabled (`gateway`) | Envoy Gateway implementation of the Gateway API |
+| [metallb](metallb.md) | Disabled (`metallb-system`) | Bare-metal LoadBalancer IP address management |
+
+## Security
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [cert-manager](cert-manager.md) | Enabled (`cert-manager`) | ACME/self-signed/CA certificate issuance |
+| [keycloak](keycloak.md) | Enabled (`keycloak`) | OIDC identity provider, backed by postgres-operator |
+| [kyverno](kyverno.md) | Enabled (`kyverno`) | Kubernetes policy engine |
+| [rbac-manager](rbac-manager.md) | Enabled (`rbac-system`) | Declarative RBAC via CRDs |
+| [sealed-secrets](sealed-secrets.md) | Disabled (`sealed-secrets`) | Asymmetric-encrypted Secret objects |
+
+## Storage
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [openstack-ccm](openstack-ccm.md) | Enabled (`openstack-ccm`) | OpenStack Cloud Controller Manager |
+| [openstack-csi](openstack-csi.md) | Enabled (`openstack-csi`) | OpenStack Cinder CSI driver |
+| [vsphere-csi](vsphere-csi.md) | Disabled (`vmware-system-csi`) | VMware vSphere CSI driver |
+| [longhorn](longhorn.md) | Disabled (`longhorn-system`) | Distributed block storage |
+| [external-snapshotter](external-snapshotter.md) | Enabled (`external-snapshotter`) | VolumeSnapshot CRDs and controller |
+
+## Observability
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [kube-prometheus-stack](kube-prometheus-stack.md) | Enabled (`observability`) | Prometheus, Grafana, Alertmanager |
+| [loki](loki.md) | Enabled (`observability`) | Log aggregation, S3 or Swift storage |
+| [tempo](tempo.md) | Enabled (`observability`) | Distributed tracing, S3 storage |
+| [mimir](mimir.md) | Disabled (`observability`) | Long-term metrics storage |
+| [opentelemetry-kube-stack](opentelemetry-kube-stack.md) | Disabled (`observability`) | OpenTelemetry collectors |
+| [alert-proxy](alert-proxy.md) | Opt-in (managed service) | Alertmanager webhook forwarding proxy |
+
+## GitOps
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [fluxcd](fluxcd.md) | Enabled (`flux-system`) | GitOps reconciliation engine (structural/core) |
+| [sources](sources.md) | Enabled (`flux-system`) | Aggregate Flux `GitRepository`/`OCIRepository` sources consumed by every other service's Kustomization |
+| [weave-gitops](weave-gitops.md) | Disabled (`flux-system`) | Web dashboard for Flux resources |
+
+## Backup
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [velero](velero.md) | Enabled (`velero`) | Cluster resource and volume backup |
+| [etcd-backup](etcd-backup.md) | Disabled (`kube-system`) | Nightly etcd snapshot upload to S3-compatible storage |
+
+## Management
+
+| Service | Default | Description |
+|---------|---------|-------------|
+| [headlamp](headlamp.md) | Enabled (`headlamp`) | Kubernetes dashboard with OIDC login |
+| [olm](olm.md) | Enabled (`olm`) | Operator Lifecycle Manager |
+| [postgres-operator](postgres-operator.md) | Enabled (`postgres-operator`) | Zalando PostgreSQL operator; required by keycloak |
+| [harbor](harbor.md) | Disabled (`harbor`) | Container registry |
+| [kafka-cluster](kafka-cluster.md) | Disabled (`kafka-system`) | Apache Kafka via the Strimzi operator |
+
+## Common operations
 
 ```bash
-# Enable a service
-opencenter cluster set my-cluster opencenter.services.loki.enabled=true
-
-# Disable a service
-opencenter cluster set my-cluster opencenter.services.loki.enabled=false
-
-# View service options
-opencenter cluster service options loki
-
-# View all service states
+# List all service states
 opencenter cluster service status
+
+# Enable/disable a service (add --managed for opencenter.managed_services)
+opencenter cluster service enable <service> [--param key=value] [--secret key=value]
+opencenter cluster service disable <service>
+
+# View a service's example parameters/secrets
+opencenter cluster service options <service>
 ```
 
-## Credential Fallback Chain
+## Storage backend defaults
 
-Some services that need cloud credentials follow this resolution order:
+`loki`, `tempo`, and `velero` accept a `storage_type`. `internal/config/services/provider_registry.go` maps the cluster's infrastructure provider to a default backend when one is not set explicitly:
 
-1. Service-specific secret (e.g., `secrets.loki.s3_access_key_id`)
-2. Global application credentials (`secrets.global.aws.application.*`)
-3. Global infrastructure credentials (`secrets.global.aws.infrastructure.*`)
+| Infrastructure provider | Default `storage_type` |
+|--------------------------|-------------------------|
+| OpenStack | `swift` (`s3` also compatible) |
+| AWS | `s3` |
+| GCP | `gcs` |
+| Azure | `azure` |
+| Bare-metal / vSphere | `s3` |
 
-`etcd-backup` is an exception: it requires `secrets.etcd_backup.access_key_id` and `secrets.etcd_backup.secret_access_key` when enabled and does not fall back to global AWS credentials.
+Tempo does not actually support a Swift backend at runtime (see [Tempo](tempo.md)); use `s3` against a Swift S3-compatible endpoint on OpenStack.
 
-## Storage Provider Defaults
+## Related documentation
 
-The infrastructure provider determines the default `storage_type` for services that require object storage:
-
-| Infrastructure Provider | Default Storage | Available Options |
-|------------------------|----------------|-------------------|
-| OpenStack | `swift` | swift, s3 |
-| AWS | `s3` | s3 |
-| GCP | `gcs` | gcs |
-| Azure | `azure` | azure |
-
-## Related Documentation
-
-- [Customize Services](../../operations/customize-services.md) — how-to guide for enabling, disabling, and configuring services
-- [Services and Templates](../../concepts/services-templates.md) — how the template system generates service manifests
-- [Adding Services](../../contributing/adding-services.md) — contributor guide for adding new services
+- [Platform services architecture](../platform-services.md) — how the descriptor and render-catalog systems render these services, and what the CLI enforces at enable/disable time.

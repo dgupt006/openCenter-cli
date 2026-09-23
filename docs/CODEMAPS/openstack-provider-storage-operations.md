@@ -30,7 +30,7 @@ The provider path has no remote mutation capability. `plan` validates and report
 
 ## Storage plan/apply
 
-`cmd/cluster_service_storage.go` requires one service, one cluster, one backend, and an OpenStack cloud profile. Supported mappings are `loki` and `tempo` with Swift or S3, and `etcd-backup` and `velero` with S3. Container/bucket names and explicit S3 endpoints are validated before remote work.
+`cmd/cluster_service_storage.go` requires one service, one cluster, one backend, and an OpenStack cloud profile; it does not hardcode the service allowlist itself. `internal/cluster/storage/openstack/service.go` defines the supported service/backend mapping: `loki` accepts Swift or S3; `tempo`, `harbor`, `etcd-backup`, and `velero` accept S3 only (Tempo has no Swift backend upstream and rejects it as an unknown backend). Container/bucket names and explicit S3 endpoints are validated before remote work.
 
 `internal/cluster/storage/openstack.Plan` performs storage preflight, derives the endpoint and region, and calculates typed service and secret changes before any confirmation or apply mutation. When credential creation, rotation, or revocation is required, preflight resolves the credential owner from `auth.user_id` when explicitly configured; otherwise it extracts `token.user.id` from the already-authenticated Keystone v3 result without an identity lookup. Existing complete credentials are reused unless `--rotate-credentials` is supplied. A partial credential pair blocks the plan until rotation is explicitly requested, and that already-blocked path does not require owner resolution. All output redacts generated or sensitive values; the resolved owner ID is internal preflight state and is omitted from JSON/YAML serialization.
 

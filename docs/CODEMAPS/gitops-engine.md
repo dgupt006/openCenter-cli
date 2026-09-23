@@ -30,7 +30,7 @@ validated v2.Config
   -> manifest validation and generated-file count
 ```
 
-The application render is staged and promoted so the final GitOps target is not partially updated. `custom/` is preserved because it is outside generator-owned output.
+The application render is staged and promoted so the final GitOps target is not partially updated. Promotion is tracked in `internal/gitops/ownership.go`: a `.opencenter-generated.json` manifest at the overlay root records a sha256 hash per generator-owned path under `services/`, `managed-services/`, and `customer-managed/` (plus the top-level `kustomization.yaml` and `.sops.yaml`). Promotion diffs planned output against this manifest and the on-disk tree to classify each path as added, updated, unchanged, seeded (first-write only, e.g. a service's `custom/kustomization.yaml`), renamed, adopted, or pruned; a path with an on-disk hash that no longer matches the manifest is an ownership conflict and blocks promotion rather than being silently overwritten. Any `custom/` subdirectory inside a generator-owned root is never scanned as generator-owned and is excluded from the manifest, so promotion cannot prune or overwrite it.
 
 ## Package ownership
 

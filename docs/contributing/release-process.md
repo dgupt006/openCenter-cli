@@ -2,356 +2,119 @@
 id: release-process
 title: "Release Process"
 sidebar_label: Release Process
-description: Cut, sign, and publish a release of openCenter-cli, including version bumps and changelog updates.
+description: Cut, sign, and publish a release of openCenter-cli using the GitHub Actions release workflow.
 doc_type: how-to
 audience: "maintainers"
-tags: [contributing]
+tags: [contributing, release]
 ---
 # Release Process
 
 **Purpose:** For maintainers, shows how to create and publish releases of openCenter-cli.
 
-The exact GitHub Actions triggers, permissions, runner requirements, and release assets are documented in [GitHub Actions Workflows](../reference/github-actions-workflows.md).
+`.github/workflows/release.yml` is the source of truth for published artifacts -- it is what actually builds, signs, and publishes a release. The `release`/`publish` mise tasks are local preflight helpers only; they do not publish anything. See [GitHub Actions Workflows](../reference/github-actions-workflows.md) for the workflow's full trigger/permission/job breakdown.
 
 ## Prerequisites
 
-Before creating a release, you need:
+* Maintainer access to the repository (the workflow needs `contents: write` and `id-token: write`, which come from the repository's default `GITHUB_TOKEN` -- no extra secrets to configure for signing, since cosign runs keyless).
+* `gh` CLI installed, for watching the run and inspecting the resulting release (optional).
+* All required CI checks green on `main` (see [Testing Guide](testing-guide.md) and [GitHub Actions Workflows](../reference/github-actions-workflows.md)).
 
-* Maintainer access to the repository
-* Git configured with commit signing
-* GitHub CLI (`gh`) installed (optional but recommended)
-* All tests passing on main branch
+## Versioning
 
-## Release Types
+Releases are tagged `v<version>` (e.g. `v1.2.0`) and pushed to trigger the workflow. There is no `CHANGELOG.md` to update -- release notes are generated automatically by the workflow (`--generate-notes` from `gh release create`) from the commit range since the previous tag. Historical release notes are also kept as static pages under `docs/release/` (currently `1.0.0-rc01.md` through `1.0.0-rc06.md`); add a new page there if the project wants a durable copy of the notes outside GitHub's release page.
 
-### Semantic Versioning
+## Step 1: Run the local preflight build (optional)
 
-openCenter-cli follows [Semantic Versioning](https://semver.org/):
-
-* **Major** (v2.0.0) - Breaking changes
-* **Minor** (v1.1.0) - New features, backward compatible
-* **Patch** (v1.0.1) - Bug fixes, backward compatible
-* **Pre-release** (v1.0.0-rc1) - Release candidates
-
-### Release Cadence
-
-* **Major releases** - As needed for breaking changes
-* **Minor releases** - Monthly or when features are ready
-* **Patch releases** - As needed for critical bugs
-* **Pre-releases** - Before major/minor releases for testing
-
-## Step 1: Prepare Release
-
-### Update CHANGELOG.md
-
-Move unreleased changes to new version section:
-
-```markdown
-## [1.2.0] - 2026-02-17
-
-### Added
-- AWS provider support with EC2 provisioning
-- Multi-cluster management commands
-- Shell integration for active cluster display
-
-### Changed
-- Improved validation error messages
-- Updated default Kubernetes version to 1.33.5
-
-### Fixed
-- VRRP validation logic for OpenStack
-- Template rendering for VMware provider
-
-### Security
-- Updated dependencies with security patches
-
-## [Unreleased]
-
-### Added
-- (empty for next release)
-```
-
-### Update Version Documentation
-
-Update version references in:
-
-* `README.md` - Installation instructions
-* `docs/getting-started/getting-started.md` - Version examples
-* `docs/reference/default-values.md` - Default versions
-
-### Run Full Test Suite
+Before tagging, you can build and inspect the release artifacts locally without publishing anything:
 
 ```bash
-# Build
-mise run build
-
-# Run all tests
-mise run test
-mise run godog
-
-# Schema verification
-mise run schema-verify
-
-# Vulnerability analysis
-mise run govulncheck
-
-# Integration checks
-mise run integration
+mise run release v1.2.0
 ```
 
-All required checks must pass before proceeding.
+This cross-compiles four `dist/opencenter-1.2.0-<os>-<arch>` binaries into `bin/release/`, writes `bin/release/RELEASE_NOTES_1.2.0.md` (grouped from `git log <last-tag>..HEAD --oneline --no-merges` by `feat`/`fix`/`docs` subject prefix), and prints the manual tag/push/`gh release create` commands as a reminder. Nothing is pushed or published by this task.
 
-## Step 2: Push The Release Tag
+## Step 2: Verify tests pass
 
-The GitHub Actions release workflow is the source of truth for published artifacts. Pushing a `v*` tag starts `.github/workflows/release.yml`; a manual dispatch is also available.
+```bash
+mise run verify   # test, test-race, test-properties, govulncheck
+mise run godog
+```
+
+## Step 3: Tag and push
 
 ```bash
 git tag -a v1.2.0 -m "Release 1.2.0"
 git push origin v1.2.0
 ```
 
-The workflow builds four CLI binaries and four `opencenter-local` plugin binaries for Linux amd64/arm64 and macOS amd64/arm64. It generates `checksums.txt`, signs every binary and the checksum file with keyless cosign, generates `opencenter.spdx.json` with Syft, and creates the GitHub release.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`. A manual `workflow_dispatch` trigger is also available from the Actions tab for re-running a release.
 
-## Step 3: Watch The Release Workflow
+## Step 4: What the workflow does
 
-Use GitHub Actions or the GitHub CLI to monitor the run:
+`release.yml` runs three jobs:
+
+1. **`build-cli`** -- matrix over `{linux/amd64, linux/arm64, darwin/amd64, darwin/arm64}`, self-hosted runners. Builds `dist/opencenter-<version>-<os>-<arch>` with full `-ldflags` version metadata (version is the tag with its leading `v` stripped). Uploads each as an artifact.
+2. **`build-plugin`** -- same matrix, builds `./cmd/opencenter-local` -> `dist/opencenter-local-<version>-<os>-<arch>` (no ldflags). Uploads each as an artifact.
+3. **`release`** (needs both build jobs) -- downloads all artifacts into `dist/`, computes `sha256sum opencenter-* | sort > checksums.txt`, installs `sigstore/cosign-installer`, runs `cosign sign-blob --yes --bundle <artifact>.bundle <artifact>` (keyless signing, `COSIGN_YES=true`) for every artifact and for `checksums.txt`, installs `syft` and generates `dist/opencenter.spdx.json`, then runs `gh release create "$GITHUB_REF_NAME" dist/* --generate-notes` using the workflow's own `GITHUB_TOKEN`.
+
+The resulting GitHub release contains: 4 CLI binaries, 4 `opencenter-local` plugin binaries, `checksums.txt`, a `.bundle` cosign signature next to every signed file, and `opencenter.spdx.json`. The workflow does not build or push a container image.
+
+## Step 5: Watch the run
 
 ```bash
 gh run list --workflow release.yml
 gh run watch
 ```
 
-## Step 4: Verify Release
+## Step 6: Verify the release
 
-### Review Generated Assets
+* Confirm all expected files are attached to the GitHub release.
+* Spot-check a binary:
 
-Verify the GitHub release contains:
+  ```bash
+  curl -L https://github.com/opencenter-cloud/opencenter-cli/releases/download/v1.2.0/opencenter-1.2.0-linux-amd64 -o opencenter
+  chmod +x opencenter
+  ./opencenter version
+  ```
+* Optionally verify a cosign bundle:
 
-* the four CLI binaries and four `opencenter-local` plugin binaries
-* `checksums.txt`
-* a cosign `.bundle` file next to each signed binary and `checksums.txt`
-* `opencenter.spdx.json`
+  ```bash
+  cosign verify-blob --bundle opencenter-1.2.0-linux-amd64.bundle \
+    --certificate-identity-regexp '.*' --certificate-oidc-issuer-regexp '.*' \
+    opencenter-1.2.0-linux-amd64
+  ```
 
-The workflow does not publish a container image or GHCR package.
-
-### Local Dry Run Helper
-
-`mise run release <version>` remains available for local preflight builds and manual
-artifact inspection, but it is no longer the publishing mechanism for official releases.
-
-## Step 5: Verify Release
-
-### Download and Test
+## Hotfix releases
 
 ```bash
-# Download binary
-curl -L https://github.com/opencenter-cloud/openCenter-cli/releases/download/v1.2.0/opencenter-1.2.0-linux-amd64 -o opencenter
-
-# Make executable
-chmod +x opencenter
-
-# Test
-./opencenter version
-./opencenter cluster init test --org test-org
+git checkout -b hotfix/1.2.1 v1.2.0
+# fix, commit
+git checkout main
+git merge hotfix/1.2.1   # or open a PR
+git push origin main
+git tag -a v1.2.1 -m "Hotfix 1.2.1"
+git push origin v1.2.1   # triggers release.yml the same way
 ```
 
-### Check Release Page
+## Pre-releases
 
-Verify on GitHub:
-
-* Release appears in releases list
-* All binaries are attached
-* Release notes are correct
-* Installation instructions work
-
-## Step 6: Announce Release
-
-### Update Documentation
-
-Update installation instructions:
-
-```markdown
-## Installation
-
-Download the latest release:
-
-**Linux (x86_64)**
-```bash
-curl -L https://github.com/opencenter-cloud/openCenter-cli/releases/download/v1.2.0/opencenter-1.2.0-linux-amd64 -o opencenter
-chmod +x opencenter
-sudo mv opencenter /usr/local/bin/
-```
-
-**macOS (Apple Silicon)**
-
-```bash
-curl -L https://github.com/opencenter-cloud/openCenter-cli/releases/download/v1.2.0/opencenter-1.2.0-darwin-arm64 -o opencenter
-chmod +x opencenter
-sudo mv opencenter /usr/local/bin/
-```
-
-```
-
-### Announce Release
-
-Announce in:
-- GitHub Discussions
-- Team Slack/chat
-- Project mailing list
-- Release notes blog post (if applicable)
-
-## Release Checklist
-
-Before releasing, verify:
-
-- [ ] All tests pass (`mise run test && mise run godog`)
-- [ ] CHANGELOG.md updated with release notes
-- [ ] Version documentation updated
-- [ ] Release binaries built (`mise run release v1.2.0`)
-- [ ] Release notes generated (`mise run publish 1.2.0`)
-- [ ] Binaries tested on target platforms
-- [ ] Git tag created and pushed
-- [ ] Cosign `.bundle` files and SPDX JSON attached
-- [ ] Release verified by downloading and testing
-- [ ] Documentation updated with new version
-- [ ] Release announced to team
-
-## Hotfix Releases
-
-For critical bugs in production:
-
-1. Create hotfix branch from release tag:
-   ```bash
-   git checkout -b hotfix/1.2.1 v1.2.0
-```
-
-1. Fix bug and commit:
-
-   ```bash
-   git commit -m "fix: critical bug in validation"
-   ```
-2. Update CHANGELOG.md:
-
-   ```markdown
-   ## [1.2.1] - 2026-02-18
-
-   ### Fixed
-   - Critical bug in validation logic
-   ```
-3. Build and release:
-
-   ```bash
-   mise run release v1.2.1
-   mise run publish 1.2.1
-   git tag -a v1.2.1 -m "Hotfix 1.2.1"
-   git push origin v1.2.1
-   gh release create v1.2.1 --notes-file bin/release/RELEASE_NOTES_1.2.1.md bin/release/opencenter-*
-   ```
-4. Merge hotfix back to main:
-
-   ```bash
-   git checkout main
-   git merge hotfix/1.2.1
-   git push origin main
-   ```
-
-## Pre-Release Testing
-
-Before major/minor releases, create release candidate:
-
-```bash
-# Build RC
-mise run release v1.2.0-rc1
-
-# Create pre-release
-gh release create v1.2.0-rc1 \
-  --prerelease \
-  --notes "Release candidate for 1.2.0. Please test and report issues." \
-  bin/release/opencenter-*
-```
-
-Test for 1-2 weeks before final release.
+Tag with a suffix (`v1.2.0-rc1`) and push; `release.yml` treats any `v*` tag the same way. Mark it as a pre-release afterward with `gh release edit v1.2.0-rc1 --prerelease`, or build it locally first with `mise run release v1.2.0-rc1` to sanity-check binaries before tagging.
 
 ## Rollback
 
-If a release has critical issues:
+GitHub releases are not deleted for a bad release -- mark it as a pre-release (`gh release edit <tag> --prerelease`) with a note pointing at the last good version, then ship a hotfix release per above. Reverting the underlying commits on `main` and cutting a new patch tag is the mechanism; there is no separate "unpublish" workflow.
 
-1. Mark release as pre-release on GitHub
-2. Add warning to release notes
-3. Create hotfix release
-4. Update documentation to point to previous stable version
+## Common issues
 
-## Common Issues
-
-### Build fails with version mismatch
-
-**Problem:** `go.mod` version doesn’t match build
-
-**Solution:**
+**Tag already exists:**
 
 ```bash
-# Update go.mod
-go mod tidy
-
-# Rebuild
-mise run build
-```
-
-### Tag already exists
-
-**Problem:** Git tag already exists
-
-**Solution:**
-
-```bash
-# Delete local tag
 git tag -d v1.2.0
-
-# Delete remote tag
 git push origin :refs/tags/v1.2.0
-
-# Recreate tag
 git tag -a v1.2.0 -m "Release 1.2.0"
 git push origin v1.2.0
 ```
 
-### Release notes missing commits
+**Binary doesn't run on the target platform** -- check `GOOS`/`GOARCH` match the download; rebuild with `mise run build-all` or `mise run release <version>` locally to reproduce.
 
-**Problem:** Some commits not in release notes
-
-**Solution:**
-
-```bash
-# Manually generate changelog
-git log v1.1.0..v1.2.0 --oneline --no-merges
-
-# Edit release notes
-vim bin/release/RELEASE_NOTES_1.2.0.md
-```
-
-### Binary doesn’t run on target platform
-
-**Problem:** Binary fails with "exec format error"
-
-**Solution:**
-
-```bash
-# Verify GOOS/GOARCH
-file bin/release/opencenter-1.2.0-linux-amd64
-
-# Rebuild with correct platform
-GOOS=linux GOARCH=amd64 go build -o bin/release/opencenter-1.2.0-linux-amd64
-```
-
----
-
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Release task: `.mise.toml:127-223` (release task)
-* Publish task: `.mise.toml:225-326` (publish task)
-* Version injection: `.mise.toml:23-47` (build task with ldflags)
-* Version management: `.kiro/steering/tech.md:143-149`
-* Build system: `.mise.toml:1-961`
-* Contributing guide: `CONTRIBUTING.md:1-82`
+**Release notes look wrong** -- `gh release create ... --generate-notes` derives notes from merged PR titles/commits since the previous tag; edit the release description on GitHub directly (`gh release edit <tag> --notes "..."`) if it needs correction. This does not affect the signed binaries or checksums.

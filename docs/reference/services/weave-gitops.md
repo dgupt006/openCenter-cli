@@ -2,17 +2,17 @@
 id: service-weave-gitops
 title: "Weave GitOps"
 sidebar_label: Weave GitOps
-description: Web dashboard for visualizing and managing FluxCD GitOps resources.
+description: Weave GitOps dashboard configuration, secrets, and enforced dependency on FluxCD.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [gitops, dashboard, flux]
+tags: [gitops, dashboard, flux, services]
 ---
 
-> **Purpose:** For platform engineers, documents the Weave GitOps dashboard for Flux resource visualization and reconciliation management.
+> **Purpose:** For platform engineers, documents the Weave GitOps dashboard's configuration surface and its enforced dependency on FluxCD.
 
 ## Overview
 
-Weave GitOps provides a web-based dashboard for visualizing and managing FluxCD GitOps resources. It displays GitRepository sources, Kustomizations, HelmReleases, and their reconciliation status in a unified interface. The dashboard requires authentication via a password configured in the cluster secrets.
+Weave GitOps provides a web dashboard for FluxCD resources. It has no service-specific configuration beyond the shared `BaseConfig` fields (`internal/config/services/default_services.go` registers it as `DefaultServiceConfig`).
 
 ## Configuration
 
@@ -20,36 +20,37 @@ Weave GitOps provides a web-based dashboard for visualizing and managing FluxCD 
 opencenter:
   services:
     weave-gitops:
-      enabled: true
+      enabled: false             # default: false
+      namespace: flux-system      # default: flux-system
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable Weave GitOps dashboard |
+| `enabled` | bool | `false` | Whether the Weave GitOps dashboard is deployed |
+| `namespace` | string | `flux-system` | Namespace for the dashboard |
 
-### Secrets
+## Secrets
 
 ```yaml
 secrets:
   weave_gitops:
-    password: <plaintext-password>
-    password_hash: <bcrypt-hash>
+    password:
+    password_hash:
 ```
-
-| Secret | Description |
-|--------|-------------|
-| `secrets.weave_gitops.password` | Dashboard login password |
-| `secrets.weave_gitops.password_hash` | Bcrypt hash of the password |
 
 ## Dependencies
 
-None (FluxCD is implicitly available as a core service).
+`internal/config/services/dependency_validator.go` enforces: **`weave-gitops` requires `fluxcd` to be enabled.** This is checked by `opencenter cluster service enable|disable`.
 
-## CLI Commands
+## Rendering
+
+`weave-gitops` has no dedicated YAML descriptor; it is rendered through the built-in render catalog, with an override Kustomization dependency on `sources` and `envoy-gateway-api-base`.
+
+## CLI commands
 
 ```bash
-opencenter cluster service enable weave-gitops
+opencenter cluster service enable weave-gitops --secret="password_hash=..."
 opencenter cluster service disable weave-gitops
-opencenter cluster service status weave-gitops
+opencenter cluster service status
 opencenter cluster service options weave-gitops
 ```

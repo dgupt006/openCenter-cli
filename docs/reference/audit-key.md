@@ -2,181 +2,64 @@
 id: audit-key
 title: "Audit Signing Key"
 sidebar_label: Audit Signing Key
-description: Reference for the HMAC signing key used to protect CLI audit log integrity.
+description: The HMAC-SHA256 signing key that protects the openCenter audit log's integrity -- generation, storage, and verification, verified against internal/security/audit_logger.go.
 doc_type: reference
 audience: "operators, security engineers"
 tags: [audit, security, hmac, integrity, signing-key]
 ---
 # Audit Signing Key
 
-**Purpose:** For operators and security engineers, documents the HMAC signing key that protects CLI audit log integrity, covering generation, storage, usage, and verification.
+**Purpose:** For operators and security engineers, documents the HMAC signing key that protects openCenter's audit log integrity: how it's generated, where it's stored, how it's used, and how to verify a log against it.
 
-## Overview
+## What gets audited
 
-Every openCenter CLI installation maintains a local HMAC-SHA256 signing key. The CLI uses this key to sign each audit log entry at write time and to verify signatures when checking log integrity. If a log entry is modified after it was written, the signature check fails.
+`internal/security/audit_logger.go`'s `AuditLogger` is wired up via `internal/di/providers.go` and `cmd/secrets_helpers.go`, and is actually called from the secrets subsystem (`internal/secrets/manager.go`, `internal/secrets/rotation.go`, `internal/secrets/revocation.go`). Logged event types include: `key.generated`, `key.accessed`, `key.rotated`, `key.revoked`, `key.expired`, `validation.failed`, `input.rejected`, `template.validation.failed`, `secrets.sync`, `secrets.drift_detected`, `secrets.validated`, `secret.decrypted`. This is not a general command-audit trail -- it covers key lifecycle and secrets-sync/validation/drift events, not every CLI invocation.
 
-The key protects against post-hoc tampering of the audit trail. It does not encrypt anything and has no relationship to SOPS Age keys or SSH keys.
+## Default locations
 
-## Key Details
+| What | Path | Function |
+| --- | --- | --- |
+| Audit log | `<state-dir>/audit/audit.log` | `GetDefaultAuditLogPath()` |
+| Signing key | `<config-dir>/audit/audit.key` | `GetDefaultAuditSigningKeyPath()` |
 
-| Property | Value |
-| --- | --- |
-| Algorithm | HMAC-SHA256 |
-| Key size | 32 bytes (256 bits) |
-| Format | Raw binary |
-| File permissions | `0600` |
-| Directory permissions | `0700` |
-| Generation | `crypto/rand` (OS CSPRNG) |
+(`<state-dir>` and `<config-dir>` follow the normal [Configuration Precedence](configuration-precedence.md) / [File Locations](file-locations.md) resolution -- `OPENCENTER_STATE_DIR`/`OPENCENTER_CONFIG_DIR` override them.)
 
-## File Location
+## Key generation and storage
 
-**Default path:**
+* The signing key is exactly **32 random bytes** (`crypto/rand`).
+* `loadOrCreateSigningKey(path)` reads the key file if it exists (rejecting it if its length isn't exactly 32 bytes); if the file doesn't exist, it generates a new 32-byte key, creates the parent directory (`0700`), and writes the key to disk with mode **`0600`**.
+* This happens automatically the first time an `AuditLogger` is constructed via `NewDefaultAuditLogger()` -- there is no separate `opencenter` subcommand to pre-generate it. If the key file is lost, a new one is silently generated on next use, and previously-written log entries can no longer be verified against the new key (see Verification below).
+* A caller can also supply an in-memory key directly (`AuditLoggerConfig.SigningKey`) instead of a key file, bypassing disk storage entirely -- not the default path, but available to embedders of the `security` package.
 
-```
-~/.config/opencenter/audit/audit.key
-```
+## How signing works
 
-The path is derived from the CLI config directory:
+Each `AuditEvent` (`id`, `timestamp`, `event_type`, `actor`, `resource`, `action`, `result`, `details`, `correlation_id`, `signature`) is signed with **HMAC-SHA256** over a pipe-joined string of exactly six fields:
 
 ```
-<OPENCENTER_CONFIG_DIR>/audit/audit.key
+timestamp | event_type | actor | resource | action | result
 ```
 
-If `OPENCENTER_CONFIG_DIR` is not set, the config directory defaults to `~/.config/opencenter`.
+The hex-encoded HMAC is stored in the event's own `signature` field, and the whole event (including its signature) is appended to the log file as one JSON object per line. Note that `details` is **not** part of the signed data -- tampering with `details` after the fact would not be caught by signature verification. Sensitive values inside `details` are masked before signing/writing: known-sensitive field names (`password`, `secret`, `token`, `api_key`, `private_key`, `age_key`, `aws_secret_access_key`, `application_credential_secret`, `bearer`, `authorization`, and similar) are replaced with `***MASKED***`; everything else goes through pattern-based masking via the credential masker.
 
-Evidence: `internal/security/audit_logger.go` -- `GetDefaultAuditSigningKeyPath()`, `loadOrCreateSigningKey()`
+## Verification
 
-## Generation
-
-The key is created lazily on first audit log write. There is no separate `generate` command. The process:
-
-1. CLI attempts to read the key file at the expected path.
-2. If the file exists and contains exactly 32 bytes, the key is loaded.
-3. If the file does not exist, the CLI:
-   * Creates the parent directory (`audit/`) with `0700` permissions.
-   * Generates 32 cryptographically random bytes via `crypto/rand`.
-   * Writes the key file with `0600` permissions.
-4. If the file exists but has an unexpected length, the CLI returns an error.
-
-This means the key is generated during whichever CLI operation first triggers audit logging -- typically `cluster init`.
-
-Evidence: `internal/security/audit_logger.go` -- `loadOrCreateSigningKey()`
-
-## How Signing Works
-
-Each `AuditEvent` is signed before it is written to the log. The signed payload is a pipe-delimited concatenation of six fields:
-
-```
-<timestamp>|<event_type>|<actor>|<resource>|<action>|<result>
+```go
+logger.VerifyIntegrity()          // checks every line in the log file
+logger.QueryEvents(ctx, filter)   // also verifies each event's signature while querying
 ```
 
-The CLI computes `HMAC-SHA256(signing_key, payload)` and stores the hex-encoded result in the event’s `signature` field. The complete event (including signature) is then serialized as a single JSON line in the audit log.
+Both re-derive the HMAC from the same six fields and compare with `hmac.Equal`. A mismatch is reported (to stderr, and as a nonzero invalid-event count from `VerifyIntegrity`) but does not stop processing of the remaining log -- a single tampered or re-keyed entry does not hide the rest of the log from inspection.
 
-Evidence: `internal/security/audit_logger.go` -- `signEvent()`
+There is no dedicated `opencenter` CLI subcommand exposed for running `VerifyIntegrity`/`QueryEvents` from the command line as of this writing -- these are library methods on `*security.AuditLogger`, currently reached only through code that constructs one (e.g. the secrets subsystem). If you need to inspect or verify the log, read `internal/security/audit_logger_test.go` and `audit_logger_query_test.go` for example call patterns, or use `QueryEventsSince`/`ExportEventsToJSON` from Go code.
 
-## Signed Event Types
+## Operational notes
 
-The audit logger signs every event it records. Event types include:
+* **Rotation:** the log file rotates automatically once it reaches 100MB (`MaxLogSize`), renaming the current file with a timestamp suffix and starting a fresh one.
+* **Retention:** rotated log files older than 30 days (`LogRetentionDays`) are deleted automatically on the next rotation.
+* **Key rotation:** there is no automated *signing-key* rotation. Replacing `audit.key` invalidates verification of every previously-written entry (their signatures were computed with the old key) -- if you need to rotate the signing key, archive/verify the existing log first.
+* **Backup:** back up `audit.key` if you need long-term ability to re-verify historical logs; losing it does not lose the log contents (still readable/queryable), only the ability to cryptographically confirm they weren't altered.
 
-| Event Type | Trigger |
-| --- | --- |
-| `key_generated` | Age or SSH key creation |
-| `key_accessed` | Key file read (success or failure) |
-| `key_rotated` | Age or SSH key rotation |
-| `key_revoked` | Key revocation |
-| `key_expired` | Key expiration detected |
-| `secret_decrypted` | SOPS decryption operation |
-| `secrets_sync` | Secrets synchronization |
-| `secrets_sync_failed` | Secrets sync failure |
-| `secrets_validated` | Secrets validation pass |
-| `drift_detected` | Configuration drift found |
-| `validation_failed` | Config validation failure |
-| `input_rejected` | Malicious input blocked |
-| `template_validation_failed` | Template validation failure |
+## Cross-reference
 
-Evidence: `internal/security/audit_logger.go` -- `Log*()` methods
-
-## Integrity Verification
-
-`VerifyIntegrity()` reads the audit log line by line, deserializes each JSON event, recomputes the HMAC, and compares it to the stored signature. Any mismatch is reported with the event ID and line number.
-
-```
-# Conceptual flow (no standalone CLI command today)
-for each line in audit.log:
-    event = JSON.parse(line)
-    expected = HMAC-SHA256(signing_key, event fields)
-    if event.signature != expected:
-        report "integrity check failed for event <id> at line <n>"
-```
-
-A single invalid signature causes the verification to return an error with the count of tampered entries.
-
-Evidence: `internal/security/audit_logger.go` -- `VerifyIntegrity()`, `verifySignature()`
-
-## Audit Log Location
-
-The audit log itself is stored separately from the key:
-
-```
-~/.local/state/opencenter/audit/audit.log
-```
-
-The log path follows the state directory precedence:
-
-1. `OPENCENTER_STATE_DIR` environment variable
-2. CLI config `paths.stateDir`
-3. `${XDG_STATE_HOME:-~/.local/state}/opencenter`
-
-Evidence: `internal/security/audit_logger.go` -- `GetDefaultAuditLogPath()`
-
-## Log Rotation
-
-| Setting | Value |
-| --- | --- |
-| Max file size | 100 MB |
-| Retention | 30 days |
-| Rotated file pattern | `audit.log.<timestamp>` |
-
-When the log exceeds 100 MB, the current file is renamed with a timestamp suffix and a new file is created. Files older than 30 days are deleted during rotation.
-
-Evidence: `internal/security/audit_logger.go` -- `MaxLogSize`, `LogRetentionDays`, `rotateLog()`, `cleanupOldLogs()`
-
-## Security Considerations
-
-* The key provides tamper detection, not tamper prevention. An attacker with access to both the key file and the log can re-sign modified entries.
-* The key is local to the machine. It is not shared across hosts and is not committed to any repository.
-* If the key is lost, existing log signatures cannot be verified. The CLI will generate a new key on next use, but old entries become unverifiable.
-* The key file should be included in workstation backups if audit log integrity verification is required for compliance.
-
-## Troubleshooting
-
-### "unexpected signing key length"
-
-The key file exists but does not contain exactly 32 bytes. This can happen if the file was corrupted or manually edited.
-
-**Fix:** Delete the key file and let the CLI regenerate it. Note that signatures on existing log entries will no longer verify.
-
-```bash
-rm ~/.config/opencenter/audit/audit.key
-# Next CLI operation that triggers audit logging will create a new key
-```
-
-### "failed to load audit signing key"
-
-The CLI cannot read or create the key file. Check directory permissions:
-
-```bash
-ls -la ~/.config/opencenter/audit/
-# Expected: drwx------ (0700) for directory
-# Expected: -rw------- (0600) for audit.key
-```
-
-### Verifying log integrity after key loss
-
-Not possible. Without the original 32-byte key, HMAC signatures cannot be recomputed. If the key is regenerated, only events written after regeneration will have verifiable signatures.
-
-## Related Topics
-
-* [Security Model](../concepts/security-model.md) -- Defense-in-depth architecture
-* [File Locations](file-locations.md) -- All CLI file paths
-* [Environment Variables](environment-variables.md) -- `OPENCENTER_CONFIG_DIR`, `OPENCENTER_STATE_DIR`
+* [File Locations](file-locations.md) -- how `<config-dir>`/`<state-dir>` are resolved.
+* [Overlay Rendering Security Policy](../contributing/overlay-security-policy.md) -- the separate audit-trail discussion for GitOps overlay rendering (Git history, not this HMAC log).

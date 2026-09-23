@@ -128,8 +128,8 @@ Changes to security-sensitive config fields are auditable through Git history of
 ### Expectations
 
 * Config files should be committed with meaningful commit messages that explain why security-sensitive fields changed.
-* SOPS-encrypted config files provide an implicit audit trail: decryption requires the correct Age key, and key rotation is tracked by the CLI’s key lifecycle commands.
-* No structured audit logging beyond Git history is currently implemented. If regulatory requirements demand it, a structured audit log can be added as a separate feature.
+* SOPS-encrypted config files provide an implicit audit trail: decryption requires the correct Age key, and key rotation is tracked by the CLI's key lifecycle commands.
+* The CLI does have a structured, tamper-evident audit log (`internal/security/audit_logger.go`, HMAC-SHA256-signed JSON lines -- see [Audit Signing Key](../reference/audit-key.md)), but its event types (`key.generated`, `key.rotated`, `key.revoked`, `secrets.sync`, `secrets.drift_detected`, `secret.decrypted`, etc.) cover SOPS/age key lifecycle and secrets-sync operations generally. It is **not** wired to specifically log overlay-unit config field changes (`overlay_units.sops.*`, `overlay_units.customer_managed.repository_url`, `secrets.overlay_units.customer_managed.*`) as distinct audit events today -- for those fields, Git history of the cluster config file remains the only audit trail. Extending the audit logger to cover overlay-unit config changes specifically would be a natural next step if that gap matters for a compliance requirement.
 
 ## Implementation References
 

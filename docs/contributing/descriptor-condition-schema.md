@@ -91,6 +91,16 @@ Adding new operators or capabilities to the condition model requires:
 
 The bar for extension is intentionally high. The condition model is meant to stay simple. If a rendering decision requires complex logic, that logic belongs in Go code (typed config defaults, validation, or a dedicated rendering function), not in descriptor conditions.
 
+## Real-world variance coverage
+
+An inventory of actual per-service, per-cluster file differences (originally taken across five real overlay trees in a since-removed customer fixture -- see [Renderer Contract](rendering-contract.md) section 7) found that every observed variance was expressible with the four operators above, with no new operator needed:
+
+* boolean service enablement and feature flags -- `true` / `false` (e.g. `harbor`, `etcd-backup`, `sealed-secrets`, `longhorn`, `kyverno` presence; `opencenter.gitops.overlay_units.customer_managed.enabled`; `opencenter.gitops.overlay_units.sops.enabled`)
+* optional credential presence -- `exists` (e.g. an AWS-credentials file that should only render when `secrets.global.aws.application.access_key` is set)
+* string-valued configuration choices -- `equals` (e.g. selecting a reclaim-policy-specific StorageClass file)
+
+Treat this as evidence for the operator set's sufficiency, not as a guarantee -- if a genuinely new per-service condition doesn't fit these four operators, follow the extension review process above rather than working around the limitation with template hacks.
+
 ## Implementation References
 
 * Type definitions: `internal/services/descriptors/types.go` (`Condition`, `ConditionOperator`)

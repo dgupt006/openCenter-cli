@@ -67,12 +67,13 @@ The lifecycle flow exposes two explicit OpenStack operation families outside boo
 | VMware | Shared `openstackBootstrapProvider` with vSphere validation/environment | OpenTofu/Kubespray-style infrastructure path and Flux |
 | Baremetal | Shared provider implementation with static-node validation and no cloud credentials | Infrastructure path and Kubernetes initialization without OpenStack/vSphere environment |
 | Kind | `kindBootstrapProvider` in `kind_bootstrap_provider.go` | Kind create/readiness, local Flux/Gitea integration, live secret reconciliation |
+| Magnum | `newMagnumBootstrapProvider` in `magnum_bootstrap_provider.go`, backed by the standalone `internal/cloud/magnum` client | Create/poll a Magnum-managed cluster from an existing cluster template, then securely write kubeconfig; no OpenTofu step |
 
 Provider routing and capability distinctions are detailed in [Providers](providers.md). Resumable state and distributed operation locks are supported by [Import, operations, and resilience](import-operations-and-resilience.md).
 
 ## Destroy and day-2 boundaries
 
-Destroy uses `lifecycleDestroyProvider` implementations; OpenStack has an OpenTofu destroy path and Kind delegates to its cloud/kind lifecycle provider. Drift, backup, import, and lock commands use packages outside the lifecycle service and must not be folded into rendering or config loading.
+Destroy uses `lifecycleDestroyProvider` implementations; OpenStack has an OpenTofu destroy path, Kind delegates to its cloud/kind lifecycle provider, and Magnum's `newMagnumDestroyProvider` deletes the Magnum-managed cluster through the `internal/cloud/magnum` client. Drift, backup, import, and lock commands use packages outside the lifecycle service and must not be folded into rendering or config loading.
 
 ## Cross-module boundaries
 

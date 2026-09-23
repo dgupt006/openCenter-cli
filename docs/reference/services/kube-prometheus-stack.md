@@ -2,17 +2,17 @@
 id: service-kube-prometheus-stack
 title: "kube-prometheus-stack"
 sidebar_label: Prometheus Stack
-description: Monitoring stack deploying Prometheus, Grafana, Alertmanager, node-exporter, and kube-state-metrics.
+description: Prometheus, Grafana, and Alertmanager configuration fields, storage sizing, and secrets.
 doc_type: reference
 audience: "platform engineers, operators"
 tags: [prometheus, grafana, alertmanager, monitoring, observability, services]
 ---
 
-> **Purpose:** For platform engineers and operators, documents the complete configuration surface, secrets, dependencies, and verification steps for the kube-prometheus-stack service.
+> **Purpose:** For platform engineers and operators, documents kube-prometheus-stack's configuration surface, secrets, and rendering.
 
 ## Overview
 
-kube-prometheus-stack deploys a complete monitoring pipeline: Prometheus for metrics collection and alerting rules, Grafana for dashboards, Alertmanager for notification routing, node-exporter for host metrics, and kube-state-metrics for Kubernetes object state. All components use persistent storage with configurable volume sizes and storage classes.
+`kube-prometheus-stack` deploys Prometheus, Grafana, and Alertmanager.
 
 ## Configuration
 
@@ -20,71 +20,63 @@ kube-prometheus-stack deploys a complete monitoring pipeline: Prometheus for met
 opencenter:
   services:
     kube-prometheus-stack:
-      enabled: true
-      hostname:                          # Required. Grafana FQDN (e.g., grafana.example.com)
-      grafana_volume_size: 10            # Grafana PVC size in GB (default: 10)
-      grafana_storage_class: csi-cinder-sc-delete  # Grafana storage class (default: csi-cinder-sc-delete)
-      prometheus_volume_size: 50         # Prometheus PVC size in GB (default: 50)
-      prometheus_storage_class: csi-cinder-sc-delete  # Prometheus storage class (default: csi-cinder-sc-delete)
-      alertmanager_volume_size: 10       # Alertmanager PVC size in GB (default: 10)
-      alertmanager_storage_class: csi-cinder-sc-delete  # Alertmanager storage class (default: csi-cinder-sc-delete)
-      webhook_url:                       # Alertmanager webhook receiver URL
+      enabled: true                          # default: true
+      namespace: observability                # default: observability
+      hostname:                               # deprecated alias for grafana_hostname
+      grafana_hostname:
+      prometheus_hostname:
+      alertmanager_hostname:
+      grafana_volume_size:
+      grafana_storage_class:
+      prometheus_volume_size:
+      prometheus_storage_class:
+      alertmanager_volume_size:
+      alertmanager_storage_class:
+      webhook_url:
 ```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether the stack is deployed |
+| `namespace` | string | `observability` | Namespace for all stack components |
+| `hostname` | string | — | Deprecated alias for `grafana_hostname`; kept for backward compatibility |
+| `grafana_hostname` | string | — | Grafana external hostname |
+| `prometheus_hostname` | string | — | Prometheus external hostname |
+| `alertmanager_hostname` | string | — | Alertmanager external hostname |
+| `grafana_volume_size` | int | — | Grafana PVC size in GB |
+| `grafana_storage_class` | string | — | Grafana storage class |
+| `prometheus_volume_size` | int | — | Prometheus PVC size in GB |
+| `prometheus_storage_class` | string | — | Prometheus storage class |
+| `alertmanager_volume_size` | int | — | Alertmanager PVC size in GB |
+| `alertmanager_storage_class` | string | — | Alertmanager storage class |
+| `webhook_url` | string | — | Alertmanager webhook receiver URL |
+
+### Validation
+
+Volume sizes must be non-negative if set (`internal/services/plugins/prometheus_stack.go` — validation logic for this package, see [Platform services architecture](../platform-services.md) for why this validator is not currently the enforced path).
 
 ## Secrets
 
-| Path | Description | Required |
-|------|-------------|----------|
-| `secrets.grafana.admin_password` | Grafana admin user password | Always |
+```yaml
+secrets:
+  grafana:
+    admin_password:
+    admin_user:
+```
 
 ## Dependencies
 
-None. kube-prometheus-stack has no service-level dependencies.
+None enforced by `opencenter cluster service enable|disable`. [alert-proxy](alert-proxy.md) and [rbac-manager](rbac-manager.md) render conditionally depending on whether `kube-prometheus-stack` is enabled, but this is a rendering-order relationship in the render catalog, not a validated CLI dependency.
 
-## Verification
+## Rendering
 
-```bash
-# Check all monitoring pods
-kubectl get pods -n monitoring
+`kube-prometheus-stack` has no dedicated YAML descriptor; it is rendered through the built-in render catalog. Its Flux Kustomization depends on `sources` and `envoy-gateway-api-base`. The generated `services/sources/kustomization.yaml.tpl` also includes an `opencenter-observability` source whenever `kube-prometheus-stack`, `loki`, `tempo`, `mimir`, or `opentelemetry-kube-stack` is enabled.
 
-# Verify Prometheus is scraping targets
-kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 &
-curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets | length'
-
-# Check Grafana is running
-kubectl rollout status deployment/kube-prometheus-stack-grafana -n monitoring
-
-# Verify Alertmanager cluster
-kubectl get pods -n monitoring -l app.kubernetes.io/name=alertmanager
-
-# Check PVC binding
-kubectl get pvc -n monitoring
-
-# Verify node-exporter is running on all nodes
-kubectl get daemonset -n monitoring -l app.kubernetes.io/name=node-exporter
-
-# Check kube-state-metrics
-kubectl get deployment -n monitoring -l app.kubernetes.io/name=kube-state-metrics
-```
-
-## CLI Commands
+## CLI commands
 
 ```bash
-# Enable the monitoring stack
 opencenter cluster service enable kube-prometheus-stack
-
-# Disable the monitoring stack
 opencenter cluster service disable kube-prometheus-stack
-
-# View service status
-opencenter cluster service status kube-prometheus-stack
-
-# Show configuration options
+opencenter cluster service status
 opencenter cluster service options kube-prometheus-stack
-
-# Set Prometheus volume size
-opencenter cluster set <cluster> services.kube-prometheus-stack.prometheus_volume_size=100
-
-# Set Grafana hostname
-opencenter cluster set <cluster> services.kube-prometheus-stack.hostname=grafana.example.com
 ```

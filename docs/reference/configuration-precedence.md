@@ -2,258 +2,51 @@
 id: configuration-precedence
 title: "Configuration Precedence"
 sidebar_label: Configuration Precedence
-description: How flags, environment variables, config files, and built-in defaults interact.
+description: The two distinct precedence systems in openCenter -- cluster-config field merging, and CLI-tool path resolution.
 doc_type: reference
-audience: "all users"
-tags: [configuration, precedence, flags, environment, defaults]
+audience: "operators, developers"
+tags: [configuration, precedence, cli, reference]
 ---
 # Configuration Precedence
 
-**Purpose:** For all users, documents the exact order in which the CLI resolves configuration values from flags, environment variables, files, and built-in defaults.
+**Purpose:** For operators and developers, explains how openCenter resolves a value when it could come from more than one place. There are two independent precedence systems -- do not conflate them.
 
-## General Rule
+## 1. Cluster-config field precedence (`internal/config/flags/configuration_merger.go`)
 
-When the same setting is specified in multiple places, the CLI uses the value from the highest-precedence source:
-
-```
-1. Command-line flags        (highest)
-2. Environment variables
-3. Cluster config file       (.<cluster>-config.yaml)
-4. CLI config file           (~/.config/opencenter/config.yaml)
-5. Built-in defaults         (lowest)
-```
-
-A higher-numbered source is used only when no higher source provides a value.
-
-## Detailed Breakdown
-
-### 1. Command-Line Flags
-
-Flags always win. Two categories:
-
-**Persistent flags** (available on every command):
-
-| Flag | Type | Description |
-| --- | --- | --- |
-| `--log-level` | string | Log level: `debug`, `info`, `warn`, `error` |
-| `--dry-run` | bool | Preview without executing |
-| `--yes` | bool | Auto-confirm destructive operations |
-| `--config-dir` | string | Override the openCenter configuration directory |
-| `--output` | string | Output format for supported commands: `text`, `json`, `yaml` |
-| `--quiet` | bool | Suppress nonessential human output |
-
-Command-scoped flags still take precedence over configuration and environment values. For example, lifecycle commands that acquire locks expose their own `--break-lock` flag.
-
-**the set override mechanism** overrides individual fields using dot-path notation:
-
-```bash
-opencenter cluster set my-cluster opencenter.meta.env=staging
-```
-
-Evidence: `cmd/root.go` -- `addGlobalFlags()`, `parseGlobalOptions()`
-
-### 2. Environment Variables
-
-Environment variables override config file values but lose to explicit flags.
-
-**Log level example** -- the code checks whether `--log-level` is still at its default (`warn`). If so, it reads `OPENCENTER_LOG_LEVEL`. If the flag was explicitly set to any value, the env var is ignored:
-
-```go
-// Precedence: flag > env var > default ("warn")
-if globalFlags.LogLevel == "warn" {
-    if envLevel := os.Getenv("OPENCENTER_LOG_LEVEL"); envLevel != "" {
-        globalFlags.LogLevel = envLevel
-    }
-}
-```
-
-Evidence: `cmd/root.go` lines 165--171
-
-### 3. Cluster Configuration File
-
-The per-cluster config at `<clustersDir>/<organization>/.<cluster>-config.yaml`. This is the primary source for cluster-specific settings (provider, networking, services, secrets, gitops).
-
-Loaded by `ConfigurationManager.Load()` which resolves the path via the `PathResolver`.
-
-Evidence: `internal/config/manager.go` -- `Load()`
-
-### 4. CLI Configuration File
-
-The user-level CLI config at `~/.config/opencenter/config.yaml`. Provides defaults that apply across all clusters:
-
-```yaml
-logging:
-    level: warn
-paths:
-    configDir: ~/.config/opencenter
-    clustersDir: ~/.config/opencenter/clusters
-    pluginsDir: ~/.config/opencenter/plugins
-defaults:
-    provider: openstack
-    region: dfw3
-    environment: dev
-```
-
-Evidence: `internal/config/cli_config.go` -- `DefaultCLIConfig()`, `NewConfigManager()`
-
-### 5. Built-In Defaults
-
-Hard-coded in the Go source. Applied when no other source provides a value:
-
-| Setting | Default | Source |
-| --- | --- | --- |
-| `logging.level` | `warn` | `DefaultCLIConfig()` |
-| `logging.format` | `text` | `DefaultCLIConfig()` |
-| `cluster_defaults.provider` | `openstack` | `DefaultCLIConfig()` |
-| `cluster_defaults.region` | `dfw3` | `DefaultCLIConfig()` |
-| `cluster_defaults.environment` | `dev` | `DefaultCLIConfig()` |
-| `cluster_defaults.gitops_auth_method` | `token` | `DefaultCLIConfig()` |
-| `gitops.repository.branch` | `main` | `normalize()` in loader |
-| `gitops.flux.interval` | `5m` | `normalize()` in loader |
-
-Evidence: `internal/config/cli_config.go` -- `DefaultCLIConfig()`, `internal/config/v2/loader.go` -- `normalize()`
-
-## Directory Resolution
-
-Directories follow their own precedence chains. Each directory type is resolved independently.
-
-### Config Directory
-
-Determines where CLI-level configuration is stored.
+When building or updating a cluster's configuration, individual field values can originate from more than one source. `DefaultConfigurationMerger` merges them in this order, lowest to highest precedence:
 
 ```
-1. OPENCENTER_CONFIG_DIR env var
-2. Platform default:
-   - macOS/Linux: ~/.config/opencenter
-   - Windows: %APPDATA%\opencenter
+SourceDefault  (lowest)
+SourceFile
+SourceTemplate
+SourceCLI      (highest -- CLI flags always win)
 ```
 
-Evidence: `internal/config/persistence/paths.go` -- `DefaultConfigDir()`
+* **`SourceDefault`** -- built-in defaults (`internal/config/v2/defaults.go`'s `NewV2Default`/`NewV2FullTemplate` and friends).
+* **`SourceFile`** -- values loaded from an existing `.<cluster>-config.yaml` (or an explicit `--config-file`).
+* **`SourceTemplate`** -- values applied from a named template (`--type <provider>` at `cluster init`, or an explicit template selection).
+* **`SourceCLI`** -- values supplied directly as CLI flags, including dotted override flags (e.g. `opencenter.infrastructure.compute.worker_count=5` on `cluster init`/`cluster set`). These always take precedence over anything from a file, template, or default.
 
-### Clusters Directory
+This is the precedence you're using when you run, e.g., `opencenter cluster init my-cluster --type openstack opencenter.infrastructure.compute.worker_count=5`: the default v2 config is built, provider-specific (OpenStack) template defaults are layered on, and the explicit `worker_count=5` CLI override wins over both.
 
-Determines the base path for all organization and cluster directories.
+`InitService.applyOverrides` (see [Cluster Init Details](../contributing/cluster-init-details.md)) also tracks which values were set explicitly (a map of "was this key touched by the user") specifically so that later path-resolution and Git-auth-default logic never silently overwrites a user-supplied value.
 
-```
-1. OPENCENTER_CLUSTERS_DIR env var
-2. CLI config paths.clustersDir   (from ~/.config/opencenter/config.yaml)
-3. OPENCENTER_CONFIG_DIR + /clusters
-4. <DefaultConfigDir>/clusters
-```
+## 2. CLI-tool path precedence (per-directory, `internal/config/cli_settings_helpers.go`)
 
-`OPENCENTER_CLUSTERS_DIR` is a runtime override for cluster storage. Without it, the CLI config value takes priority even when `OPENCENTER_CONFIG_DIR` is set. This allows pointing the config dir at one location while storing clusters elsewhere.
-
-Evidence: `internal/config/cli_config_helpers.go` -- `ResolveClustersDir()`
-
-### State Directory
-
-Stores runtime artifacts: audit logs, bootstrap state, file locks.
+This is a *completely separate* precedence system that resolves *where on disk* the CLI reads/writes things -- it has nothing to do with cluster config field values. For every directory role (clusters, GitOps, blueprints, cluster state, secrets, plugins, general state), the resolution order is the same three steps:
 
 ```
-1. OPENCENTER_STATE_DIR env var
-2. CLI config paths.stateDir
-3. XDG_STATE_HOME + /opencenter
-4. Platform default:
-   - macOS/Linux: ~/.local/state/opencenter
-   - Windows: %LOCALAPPDATA%\opencenter\state
+1. The role's OPENCENTER_<X>_DIR environment variable, if set
+2. The matching paths.<x>Dir value in ~/.config/opencenter/config.yaml (the CLI settings file)
+3. A computed default (usually <clustersDir>/<role>, or a platform-specific base for clustersDir/configDir/stateDir themselves)
 ```
 
-Evidence: `internal/config/persistence/paths.go` -- `DefaultStateDir()`
+See [File Locations](file-locations.md) for the exact default path and environment variable for every role, and [Environment Variables](environment-variables.md) for the full list of recognized variables.
 
-### Plugins Directory
+No environment variable overrides a cluster-config *field* value directly -- environment variables in this system only ever change *where files live*, never what a loaded cluster config's fields contain. The one partial exception is `OPENCENTER_DEBUG`, which changes CLI *behavior* (verbose logging, and triggers `cluster validate`'s debug-config export) rather than a config field.
 
-```
-1. OPENCENTER_PLUGINS_DIR env var
-2. CLI config paths.pluginsDir
-3. <DefaultConfigDir>/plugins
-```
+## Practical implications
 
-Evidence: `internal/config/cli_config_helpers.go` -- `GetPluginsDir()`
-
-## Cluster Path Resolution
-
-When a command receives a cluster identifier, the resolver uses two strategies depending on format:
-
-**With organization** (`opencenter-cloud/gizmo`):
-
-```
-<clustersDir>/<organization>/infrastructure/clusters/<cluster>/
-```
-
-Uses `PathResolver.Resolve()` -- scoped to the specified organization.
-
-**Without organization** (`gizmo`):
-
-Scans all organization directories under `clustersDir` looking for a matching `infrastructure/clusters/<cluster>/` directory. Uses `PathResolver.ResolveWithFallback()`.
-
-Evidence: `internal/core/paths/resolver.go` -- `Resolve()`, `ResolveWithFallback()`
-
-## Provider Credential Resolution
-
-Cloud provider credentials follow provider-specific precedence. The CLI does not invent its own credential chain -- it defers to the provider’s standard mechanism.
-
-### OpenStack
-
-```
-1. flags (e.g., secrets.global.openstack_username=...)
-2. Cluster config secrets.global.openstack_* fields
-3. OS_* environment variables (OS_CLOUD, OS_AUTH_URL, OS_USERNAME, etc.)
-4. clouds.yaml (~/.config/openstack/clouds.yaml)
-```
-
-### AWS (for service integrations)
-
-```
-1. flags
-2. Cluster config secrets.global.aws_* fields
-3. AWS_* environment variables
-4. AWS credentials file (~/.aws/credentials)
-5. IAM instance role (EC2/ECS)
-```
-
-### VMware
-
-```
-1. flags
-2. Cluster config cloud.vmware.* fields
-3. VSPHERE_* environment variables
-```
-
-## Debugging Precedence
-
-Run any command with `--log-level debug` to see which sources the CLI is reading:
-
-```bash
-opencenter cluster use opencenter-cloud/gizmo --log-level debug
-```
-
-The debug output includes:
-
-```
-=== OpenCenter CLI Debug Information ===
-Command: opencenter cluster use
-Environment Variables:
-  OPENCENTER_CONFIG_DIR: /custom/path  (or "not set")
-  OPENCENTER_LOG_LEVEL: debug          (or "not set")
-Configuration Paths:
-  Clusters Directory: /Users/you/.config/opencenter/clusters
-Global Flags:
-  --log-level: debug========================================
-```
-
-Evidence: `cmd/root.go` -- `PersistentPreRunE`
-
-## Common Pitfalls
-
-**Cluster storage vs `OPENCENTER_CONFIG_DIR`:** `OPENCENTER_CONFIG_DIR` controls CLI-level configuration. To override cluster storage without editing config.yaml, set `OPENCENTER_CLUSTERS_DIR`. If it is unset, an explicit CLI config `paths.clustersDir` takes priority over the `OPENCENTER_CONFIG_DIR/clusters` fallback.
-
-**`--log-level` default masking:** The env var `OPENCENTER_LOG_LEVEL` is only read when the flag is at its default value (`warn`). If you pass `--log-level warn` explicitly, the CLI treats it as "flag was set" and the env var is still read (because the value matches the default). This is a Cobra limitation -- the CLI checks the value, not whether the flag was explicitly passed.
-
-**the config file flag scope:** The the config file flag provides an alternative cluster configuration file path. It does not change the CLI config (`~/.config/opencenter/config.yaml`) or the clusters directory.
-
-## Related Topics
-
-* [Environment Variables](environment-variables.md) -- Full env var reference
-* [File Locations](file-locations.md) -- All file paths
-* [Configuration Schema](configuration-schema.md) -- Cluster config structure
-* [CLI Commands](cli-commands.md) -- Flag reference per command
+* Changing `OPENCENTER_CONFIG_DIR` mid-project does not change any value inside an already-loaded cluster config file; it changes which `config.yaml`/`clusters/` tree the CLI looks at next.
+* A dotted CLI override on `cluster init`/`cluster set` always beats whatever is in the file or template -- if a value looks wrong after running one of these commands, check the exact flags passed before suspecting a stale file.
+* `cluster configure --guided` reuses the same `InitService` internals (`createDefaultConfig`, `applyOverrides`, `updateConfigPaths`) when no config exists yet, so the same `SourceDefault -> SourceFile -> SourceTemplate -> SourceCLI` precedence applies there too.

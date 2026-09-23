@@ -2,17 +2,17 @@
 id: service-keycloak
 title: "Keycloak"
 sidebar_label: Keycloak
-description: Identity and access management service providing OIDC authentication, realm management, and user federation.
+description: Identity and access management service configuration, defaults, secrets, and enforced dependencies.
 doc_type: reference
 audience: "platform engineers, operators"
 tags: [keycloak, identity, oidc, authentication, services]
 ---
 
-> **Purpose:** For platform engineers and operators, documents the complete configuration surface, secrets, dependencies, and verification steps for the Keycloak service.
+> **Purpose:** For platform engineers and operators, documents Keycloak's full configuration surface, secrets, enforced dependencies, and rendering.
 
 ## Overview
 
-Keycloak provides identity and access management for the cluster, handling OIDC authentication, realm management, user federation, and session caching. It runs as a highly-available deployment backed by PostgreSQL with Kubernetes-native distributed caching and optional SMTP integration for email flows.
+Keycloak provides OIDC identity and access management for the cluster.
 
 ## Configuration
 
@@ -20,106 +20,79 @@ Keycloak provides identity and access management for the cluster, handling OIDC 
 opencenter:
   services:
     keycloak:
-      enabled: true
-      hostname:                          # Required. FQDN for Keycloak (e.g., auth.example.com)
-      frontend_url:                      # Required. Public-facing URL (e.g., https://auth.example.com)
-      realm: opencenter                  # Realm name (default: opencenter)
-      client_id: opencenter              # OIDC client identifier (default: opencenter)
-      realm_import_enabled: true         # Import realm configuration on startup (default: true)
-      realm_groups: []                   # List of realm groups to create
-      realm_admin_email:                 # Admin user email address
-      start_optimized: false             # Use optimized startup mode (default: false)
-      cache_enabled: true                # Enable distributed caching (default: true)
-      cache_stack: kubernetes            # Cache discovery mechanism (default: kubernetes)
-      resource_requests_cpu: 500m        # CPU request (default: 500m)
-      resource_requests_memory: 1250M    # Memory request (default: 1250M)
-      resource_limits_cpu: 2             # CPU limit (default: 2)
-      resource_limits_memory: 2250M      # Memory limit (default: 2250M)
-      instances: 3                       # Number of replicas (default: 3)
-      min_replicas: 3                    # HPA minimum replicas (default: 3)
-      max_replicas: 10                   # HPA maximum replicas (default: 10)
-      database_host:                     # PostgreSQL host (provided by postgres-operator)
-      database_port: 5432                # PostgreSQL port (default: 5432)
-      database_name:                     # PostgreSQL database name
-      database_user:                     # PostgreSQL user
-      db_pool_min_size: 30               # Minimum connection pool size (default: 30)
-      db_pool_initial_size: 30           # Initial connection pool size (default: 30)
-      db_pool_max_size: 30               # Maximum connection pool size (default: 30)
-      metrics_enabled: true              # Expose Prometheus metrics (default: true)
-      event_metrics_enabled: true        # Expose event-based metrics (default: true)
-      health_enabled: true               # Enable health endpoints (default: true)
-      log_level: INFO                    # Log level: INFO | DEBUG | WARN | ERROR (default: INFO)
-      log_format: json                   # Log format: default | json (default: json)
-      tls_secret_name: keycloak-tls-secret  # TLS certificate secret name (default: keycloak-tls-secret)
-      tls_enabled: true                  # Enable TLS termination (default: true)
-      backup_enabled: true               # Enable scheduled database backups (default: true)
-      backup_schedule: "0 2 * * *"       # Backup cron schedule (default: 0 2 * * *)
-      smtp_host:                         # SMTP server hostname
-      smtp_port: 587                     # SMTP port (default: 587)
-      smtp_from:                         # SMTP sender address
-      smtp_starttls: true                # Enable STARTTLS (default: true)
+      enabled: true                        # default: true
+      namespace: keycloak                  # default: keycloak
+      hostname:                            # default: auth.<cluster_fqdn>
+      frontend_url:
+      realm:
+      client_id: opencenter                # default: opencenter
+      realm_import_enabled: true           # default: true
+      realm_groups: []
+      realm_admin_email:
+      start_optimized: false               # default: false
+      cache_enabled: true                  # default: true
+      cache_stack: kubernetes               # default: kubernetes (kubernetes | ispn)
+      resource_requests_cpu: 500m           # default: 500m
+      resource_requests_memory: 1250M       # default: 1250M
+      resource_limits_cpu: "2"              # default: 2
+      resource_limits_memory: 2250M         # default: 2250M
+      instances: 3                          # default: 3
+      min_replicas: 3                       # default: 3
+      max_replicas: 10                      # default: 10
+      database_host:
+      database_port: 5432                   # default: 5432
+      database_name:
+      database_user:
+      db_pool_min_size: 30                   # default: 30
+      db_pool_initial_size: 30               # default: 30
+      db_pool_max_size: 30                   # default: 30
+      metrics_enabled: true                  # default: true
+      event_metrics_enabled: true            # default: true
+      health_enabled: true                   # default: true
+      log_level: INFO                        # default: INFO (INFO | DEBUG | WARN | ERROR | TRACE)
+      log_format: json                       # default: json (default | json)
+      tls_secret_name: keycloak-tls-secret    # default: keycloak-tls-secret
+      tls_enabled: true                       # default: true
+      backup_enabled: true                    # default: true
+      backup_schedule: "0 2 * * *"            # default: 0 2 * * *
+      smtp_host:
+      smtp_port: 587                          # default: 587
+      smtp_from:
+      smtp_starttls: true                     # default: true
 ```
 
-### Validation Rules
+### Validation
 
-- `start_optimized: true` requires `instances >= 2` (optimized mode needs clustering).
-- `min_replicas` cannot exceed `max_replicas`.
-- `db_pool_min_size` cannot exceed `db_pool_max_size`.
+Enforced both by `internal/services/plugins/validators.go`'s dead-code validator (documentation of intent only — see [Platform services architecture](../platform-services.md)) and, for the fields that matter operationally, by the plugin's own `validate()` and by `cmd/cluster_service.go`:
+
+- `start_optimized: true` requires `instances >= 2`.
+- `min_replicas` must not exceed `max_replicas`.
+- `db_pool_min_size` must not exceed `db_pool_max_size`.
+- `frontend_url`, if set, must start with `http://` or `https://`.
+- `secrets.keycloak.admin_password` is required when enabling via the CLI.
 
 ## Secrets
 
-| Path | Description | Required |
-|------|-------------|----------|
-| `secrets.keycloak.admin_password` | Keycloak admin console password | Always |
-| `secrets.keycloak.client_secret` | OIDC client secret | Conditional |
-
-When `identity.oidc.source=internal`, the `client_secret` is auto-generated during bootstrap and stored in the encrypted secrets file. When `identity.oidc.source=external`, the operator must provide it explicitly.
+```yaml
+secrets:
+  keycloak:
+    admin_password:      # required
+    client_secret:        # OIDC client secret
+```
 
 ## Dependencies
 
-| Service | Reason |
-|---------|--------|
-| cert-manager | Issues TLS certificates for Keycloak ingress |
-| gateway-api | Provides HTTP routing to Keycloak endpoints |
-| postgres-operator | Provisions and manages the backing PostgreSQL database |
+`internal/config/services/dependency_validator.go` enforces: **`keycloak` requires `olm` and `postgres-operator` to be enabled.** This is checked by `opencenter cluster service enable|disable`.
 
-## Verification
+## Rendering
 
-```bash
-# Check Keycloak pods are running
-kubectl get pods -n keycloak -l app.kubernetes.io/name=keycloak
+Keycloak has a dedicated descriptor (`internal/services/descriptors/data/service-keycloak.yaml`, `service: keycloak`) covering the `services/keycloak` template root, with two conditional files: the Keycloak backup CronJob (rendered when `backup_enabled: true`) and the HPA manifest (rendered when `max_replicas` is set). It aggregates into `services-fluxcd-aggregate` and `services-sources-aggregate`.
 
-# Verify all replicas are ready
-kubectl rollout status statefulset/keycloak -n keycloak
-
-# Check health endpoint
-kubectl exec -n keycloak keycloak-0 -- curl -s http://localhost:8080/health/ready
-
-# Verify TLS certificate
-kubectl get certificate -n keycloak
-
-# Check HPA status
-kubectl get hpa -n keycloak
-
-# Verify database connectivity
-kubectl logs -n keycloak -l app.kubernetes.io/name=keycloak --tail=20 | grep "Database"
-```
-
-## CLI Commands
+## CLI commands
 
 ```bash
-# Enable Keycloak
-opencenter cluster service enable keycloak
-
-# Disable Keycloak
+opencenter cluster service enable keycloak --secret="admin_password=..."
 opencenter cluster service disable keycloak
-
-# View service status
-opencenter cluster service status keycloak
-
-# Show configuration options
+opencenter cluster service status
 opencenter cluster service options keycloak
-
-# Set a configuration value
-opencenter cluster set <cluster> services.keycloak.instances=5
 ```

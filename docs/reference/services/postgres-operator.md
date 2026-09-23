@@ -2,17 +2,17 @@
 id: service-postgres-operator
 title: "PostgreSQL Operator"
 sidebar_label: Postgres Operator
-description: Zalando PostgreSQL operator for automated database cluster management.
+description: PostgreSQL operator configuration and its role as a keycloak dependency.
 doc_type: reference
 audience: "platform engineers, database administrators"
-tags: [database, postgresql, operator]
+tags: [database, postgresql, operator, services]
 ---
 
-> **Purpose:** For platform engineers, documents the Zalando PostgreSQL operator for provisioning and managing PostgreSQL clusters on Kubernetes.
+> **Purpose:** For platform engineers, documents the postgres-operator service's configuration surface and why keycloak requires it.
 
 ## Overview
 
-The Zalando PostgreSQL operator automates the deployment and management of highly available PostgreSQL clusters on Kubernetes. It handles automated failover, connection pooling via PgBouncer, continuous backups, and rolling upgrades. The operator creates PostgreSQL clusters from `postgresql` custom resources and is required by services that need managed PostgreSQL databases (e.g., Keycloak).
+`postgres-operator` provisions and manages PostgreSQL clusters used by other services (e.g. [keycloak](keycloak.md)). It has no service-specific configuration beyond the shared `BaseConfig` fields (`internal/config/services/default_services.go` registers it as `DefaultServiceConfig`).
 
 ## Configuration
 
@@ -20,32 +20,28 @@ The Zalando PostgreSQL operator automates the deployment and management of highl
 opencenter:
   services:
     postgres-operator:
-      enabled: true
+      enabled: true                    # default: true
+      namespace: postgres-operator      # default: postgres-operator
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable Zalando PostgreSQL operator |
-
-### Secrets
-
-None.
+| `enabled` | bool | `true` | Whether the PostgreSQL operator is deployed |
+| `namespace` | string | `postgres-operator` | Namespace for the operator |
 
 ## Dependencies
 
-None.
+None of its own. [keycloak](keycloak.md) requires `postgres-operator` to be enabled — see `internal/config/services/dependency_validator.go`, enforced by `opencenter cluster service enable|disable`.
 
-## Required By
+## Rendering
 
-| Service | Notes |
-|---------|-------|
-| keycloak | Uses operator-managed PostgreSQL for identity data |
+`postgres-operator` has no dedicated YAML descriptor; it is rendered through the built-in render catalog, with a fixed Helm override (`configGeneral.workers: 2`).
 
-## CLI Commands
+## CLI commands
 
 ```bash
 opencenter cluster service enable postgres-operator
 opencenter cluster service disable postgres-operator
-opencenter cluster service status postgres-operator
+opencenter cluster service status
 opencenter cluster service options postgres-operator
 ```

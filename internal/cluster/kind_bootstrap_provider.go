@@ -115,6 +115,36 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 			},
 		},
 		{
+			ID:          "kind-install-cni",
+			Description: "Install Calico CNI (managed CNI mode)",
+			Plan: BootstrapPlanStep{
+				ID:         "kind-install-cni",
+				Action:     "Install Calico CNI (managed CNI mode)",
+				WorkingDir: clusterPaths.ClusterDir,
+				Commands: []BootstrapPlanCommand{
+					commandPlan("kubectl", "apply", "--server-side", "-f", "<calico-operator-crds>"),
+					commandPlan("helm", "upgrade", "--install", "calico", calicoHelmChart),
+				},
+				Environment: []BootstrapPlanEnv{{Name: "KUBECONFIG", Value: opts.KubeconfigPath}},
+				Reads:       []string{opts.KubeconfigPath},
+				Notes: []string{
+					"Only runs when kind's default CNI is disabled and Calico is the enabled network plugin.",
+					"Installs the CNI before flux-bootstrap so Flux controllers can schedule.",
+				},
+			},
+			Run: func(ctx context.Context) error {
+				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
+					return nil
+				}
+				// Only install Calico in managed-CNI mode. In the default kind
+				// mode kindnet provides the CNI and this step is a no-op.
+				if !kindCalicoEnabled(cfg) {
+					return nil
+				}
+				return p.installKindCalico(ctx, cfg, opts.KubeconfigPath)
+			},
+		},
+		{
 			ID:          "gitea-attach-kind",
 			Description: "Attach local Gitea to the Kind network",
 			Plan: BootstrapPlanStep{
@@ -188,6 +218,21 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				return reconcileSopsAgeSecret(ctx, clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner)
 			},
 		},
+		func() bootstrapStep {
+			// kube-prometheus-stack's Grafana references an existingSecret named
+			// grafana-admin-password in the observability namespace. Apply it
+			// imperatively, mirroring the OpenStack and magnum providers; without
+			// this the Grafana pod fails with CreateContainerConfigError on kind.
+			step := newGrafanaAdminSecretStep(cfg, opts.KubeconfigPath, p.runner)
+			run := step.Run
+			step.Run = func(ctx context.Context) error {
+				if os.Getenv("OPENCENTER_TEST_MODE") != "" {
+					return nil
+				}
+				return run(ctx)
+			}
+			return step
+		}(),
 		{
 			ID:          "gitea-rebase",
 			Description: "Rebase local checkout with Flux bootstrap commits from Gitea",

@@ -13,15 +13,25 @@ tags: [glossary, terminology, definitions]
 
 ## A
 
+* ***Active Cluster***\
+The cluster a shell session is currently operating against without needing to pass a cluster name on every command. Set by `opencenter cluster use`/`cluster active`, resolved via the `OPENCENTER_CLUSTER` environment variable, a session file, or a persistent marker. See [Environment Variables](reference/environment-variables.md).
 * ***Age***\
 Modern encryption tool using public-key cryptography. openCenter uses Age for SOPS encryption. Simpler than GPG with no key servers or expiration by default.
 * ***Ansible***\
 Automation tool used by Kubespray to deploy Kubernetes. openCenter generates Ansible inventory files for cluster provisioning.
 * ***Application Credential***\
 OpenStack authentication method using credential ID and secret instead of username/password. Recommended for automation.
+* ***Audit Signing Key***\
+A 32-byte HMAC-SHA256 key (`~/.config/opencenter/audit/audit.key` by default) the CLI uses to sign every entry it writes to its tamper-evident audit log (`~/.local/state/opencenter/audit/audit.log`). See [Audit Signing Key](reference/audit-key.md).
 
 ## B
 
+* ***BaseConfig***\
+The common embedded struct (`internal/config/services/base.go`) every platform service's typed config includes: `Enabled`, `Namespace`, and status fields. Public service config types are meant to hold only fields like this -- not rendering topology or raw Helm overrides.
+* ***Barbican***\
+OpenStack's Key Manager service. openCenter has a standalone client (`internal/barbican/`) for it, separate from SOPS/Age secret management.
+* ***Blueprint***\
+The v2 cluster configuration YAML file itself (`<cluster>-config.yaml`, `ClusterPaths.ConfigPath`), stored under the CLI's "blueprints" zone (`<clusters dir>/blueprints/<org>/<cluster>/`). See [File Locations](reference/file-locations.md).
 * ***Bootstrap***\
 Process of deploying a cluster from configuration. Includes infrastructure provisioning, Kubernetes deployment, and GitOps setup.
 * ***BDD (Behavior-Driven Development)***\
@@ -43,7 +53,9 @@ Kubernetes components that manage the cluster (API server, scheduler, controller
 * ***Diátaxis***\
 Documentation framework organizing content into four types: Tutorials, How-To Guides, Reference, and Explanation. openCenter documentation follows Diátaxis.
 * ***Drift Detection***\
-Process of identifying differences between desired configuration (Git) and actual cluster state. openCenter provides drift detection commands.
+Process of identifying differences between desired configuration (Git) and actual cluster state. openCenter provides drift detection commands (`internal/operations/drift_detector.go`). Implemented today for the providers that register an `internal/cloud.CloudProvider` (OpenStack, VMware); it does not currently inspect FluxCD or service-level Kubernetes resources.
+* ***Descriptor (overlay descriptor)***\
+A YAML file under `internal/services/descriptors/data/` that is the authority for *what files the renderer produces* for a service -- template roots, conditional files, and aggregate targets. Distinct from `ServicePluginManifest`, which describes service identity/dependencies/validation, not rendering topology. See [Renderer Contract](contributing/rendering-contract.md) and [Descriptor Condition Schema](contributing/descriptor-condition-schema.md).
 
 ## F
 
@@ -54,6 +66,8 @@ OpenStack term for VM size (CPU, RAM, disk). Similar to AWS instance types or VM
 
 ## G
 
+* ***Gitea***\
+Self-hosted Git service. openCenter's local development workflow (`mise run gitea-up`, `opencenter local gitea ...`) runs a disposable Gitea instance as the GitOps push target for local Kind clusters.
 * ***GitOps***\
 Operational model where Git is the single source of truth for infrastructure and applications. Changes are made via Git commits, not direct cluster access.
 * ***Godog***\
@@ -77,6 +91,8 @@ FluxCD custom resource that applies Kustomize overlays. openCenter generates Kus
 
 ## M
 
+* ***Magnum***\
+OpenStack's managed-Kubernetes service. openCenter's `magnum` provider (`internal/cloud/magnum/`) creates and manages a Magnum-backed cluster directly through the OpenStack API, rather than provisioning VMs with OpenTofu and installing Kubernetes with Kubespray as the plain `openstack` provider does.
 * ***Mise***\
 Tool version manager and task runner. openCenter uses Mise for managing Go, kubectl, kind, helm versions and build tasks.
 
@@ -96,10 +112,19 @@ Kubernetes admission controller enforcing security policies on pods. openCenter 
 * ***Preflight Check***\
 Validation performed before deployment to catch issues early. openCenter provides preflight commands for connectivity, quotas, and provider constraints.
 * ***Provider***\
-Infrastructure platform for cluster deployment. openCenter’s GA infrastructure providers are OpenStack, VMware, Baremetal, and Kind.
+Infrastructure platform for cluster deployment. openCenter's provider set includes OpenStack, VMware, Baremetal, Kind, and Magnum (the OpenStack managed-Kubernetes variant); AWS, GCP, and Azure are present in the config schema but rejected as "planned, not yet available" by `cmd/provider_availability.go`.
+
+## R
+
+* ***Readiness (validation)***\
+The offline, cross-field business-rule checks `opencenter cluster validate` runs after schema validation (`v2.ValidateReadiness`, `internal/config/v2/readiness.go`) -- provider required fields, GitOps auth consistency, and enabled-service secrets. Never contacts a cloud provider or Git remote. See [Validation Rules](reference/validation-rules.md).
+* ***Render Catalog***\
+The immutable, in-code lookup of built-in rendering behavior for services with non-standard rendering needs (`internal/gitops/render_catalog.go`, `newBuiltInRenderCatalog`). Holds direct Go function references (renderer functions, dependency lists) keyed by service name -- never a mutable, string-based registry. See [Adding New Platform Services](contributing/adding-services.md).
 
 ## S
 
+* ***ServicePluginManifest***\
+The type (`internal/services/plugin.go`) describing a service's identity, dependencies, and validation rules -- not its rendering topology (that's the descriptor's job; see *Descriptor* above).
 * ***SOPS (Secrets OPerationS)***\
 Tool for encrypting files with Age or GPG keys. openCenter uses SOPS for secrets management in Git.
 * ***Sprig***\
@@ -152,6 +177,13 @@ Kubernetes node that runs application workloads. openCenter deploys 2+ worker no
 | VM | Virtual Machine | Virtualized computer |
 | VRRP | Virtual Router Redundancy Protocol | HA protocol for routers |
 | YAML | YAML Ain’t Markup Language | Human-readable data format |
+
+---
+
+## Open items
+
+* ***OpenStack minimal default service profile*** (not implemented)\
+A draft plan proposed narrowing the default enabled-service set for the OpenStack provider (to `calico`, `cert-manager`, `fluxcd`, `gateway`, `gateway-api`, `kyverno`, `openstack-ccm`, `openstack-csi`, `sources` only) and disabling `opencenter.identity.oidc.enabled` by default for OpenStack, while leaving Kind, Baremetal, and VMware defaults unchanged. As of this writing, `defaultServiceMap` in `internal/config/v2/defaults.go` takes no provider argument and applies the same default-enabled service set across providers; identity OIDC defaults are not provider-conditional. Anyone picking this up should re-verify current defaults in `internal/config/v2/defaults.go` before implementing.
 
 ---
 

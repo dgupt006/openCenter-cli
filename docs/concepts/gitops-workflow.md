@@ -24,8 +24,6 @@ openCenter follows these GitOps principles:
 
 **Why GitOps:** Audit trail (Git history), rollback capability (Git revert), collaboration (pull requests), security (no direct cluster access needed).
 
-**Evidence:** Ecosystem.md GitOps flow, `.kiro/steering/product.md:31`
-
 ## Repository Structure
 
 openCenter generates a standardized GitOps repository:
@@ -79,12 +77,14 @@ openCenter generates a standardized GitOps repository:
 
 **Design Rationale:**
 
-* **Separation:** Infrastructure (Terraform) separate from applications (Kubernetes)
+* **Separation:** Infrastructure (Terraform/OpenTofu) separate from applications (Kubernetes)
 * **Overlays:** Cluster-specific configuration without duplicating base
 * **Encryption:** SOPS configuration at multiple levels (root, cluster)
 * **Sources:** GitRepository CRDs reference openCenter-gitops-base
 
-**Evidence:** `internal/gitops/`, Ecosystem.md repository structure
+Generated files under a cluster overlay's `services/`, `managed-services/`, and `customer-managed/` roots are tracked by ownership hash in a `.opencenter-generated.json` manifest at the overlay root (`internal/gitops/ownership.go`). Anything placed in a service's `custom/` subdirectory is created once, on first generation, and never touched again by `opencenter cluster generate`. See [Rendering Ownership and Secret Artifacts](../CODEMAPS/rendering-ownership-and-secret-artifacts.md).
+
+**Evidence:** `internal/gitops/`
 
 ## FluxCD Components
 
@@ -100,7 +100,7 @@ openCenter generates a standardized GitOps repository:
 
 **Reconciliation:** Polls sources at configured interval (default 15m), detects changes, notifies dependent controllers.
 
-**Example:**
+**Example** (for a base-service source such as `opencenter-cert-manager`, rendered through `sourceAuthBlockForService`/`sourceAuthBlockAnonymous` in `internal/gitops/copy.go` and `internal/gitops/source_auth.go`):
 
 ```yaml
 apiVersion: source.toolkit.fluxcd.io/v1
@@ -113,18 +113,18 @@ spec:
   # --- token auth (active) ---
   url: https://github.com/opencenter-cloud/openCenter-gitops-base.git
   ref:
-    tag: 2026.01
-  secretRef:
-    name: opencenter-base
+    tag: "2026.01"
   # --- ssh auth (alternative) ---
   # url: ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git
   # ref:
-  #   tag: 2026.01
-  # secretRef:
-  #   name: opencenter-base
+  #   tag: "2026.01"
 ```
 
-`opencenter cluster generate <cluster> --gitops-auth=token|ssh` controls which source block is active. With no flag, generation uses `cluster_defaults.gitops_auth_method`, then the built-in `token` default. The choice only affects that run; it does not modify cluster configuration. The generated `opencenter-base` reference is reconciled as a live Secret in `flux-system` during deploy, using token `username`/`password` data or SSH `identity`, `identity.pub`, and `known_hosts` data from local credentials.
+`opencenter cluster generate <cluster> --gitops-auth=token|ssh` controls which block is active. With no flag, generation uses `cluster_defaults.gitops_auth_method`, then the built-in `token` default. The choice only affects that run; it does not modify cluster configuration.
+
+**There is no `secretRef` on this source, in either mode.** `openCenter-gitops-base` is a public repository, so base-service sources render anonymously — attaching a credential Secret would make Flux authenticate to public GitHub with the wrong credential and fail with HTTP 401 (the exact scenario `internal/gitops/source_auth.go` guards against). No `opencenter-base` credential Secret is created anywhere in the bootstrap path (see the comments in `internal/cluster/bootstrap_provider_infra.go` and `internal/cluster/kind_bootstrap_provider.go`).
+
+The one source that *does* carry a `secretRef` is `opencenter-keycloak-config`, because it points at the **customer's own** GitOps repository rather than the public base repo. It uses `secretRef: name: flux-system` — the credential Secret the `flux` CLI itself creates when `opencenter cluster deploy` runs `flux bootstrap` against the customer repository.
 
 ### Kustomize Controller
 
@@ -145,23 +145,28 @@ metadata:
   name: cert-manager-base
   namespace: flux-system
 spec:
-  interval: 5m
-  path: ./applications/base/services/cert-manager
-  prune: true
-  wait: true
+  dependsOn:
+    - name: sources
+      namespace: flux-system
+  interval: 15m
+  retryInterval: 1m
+  timeout: 10m
   sourceRef:
     kind: GitRepository
     name: opencenter-cert-manager
-  decryption:
-    provider: sops
-    secretRef:
-      name: sops-age
+    namespace: flux-system
+  path: applications/base/services/cert-manager
+  targetNamespace: cert-manager
+  prune: true
+  wait: true
   healthChecks:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: cert-manager
       namespace: cert-manager
 ```
+
+(This is the actual generated `cert-manager-base` Kustomization, from `internal/gitops/templates/cluster-apps-base/services/fluxcd/cert-manager.yaml.tpl`; the paired `cert-manager-override` Kustomization additionally sets `decryption.provider: sops` with `secretRef: name: sops-age` and points its own `sourceRef` at the customer's `flux-system` GitRepository instead of the base repo. See [Service Templates](services-templates.md) for the full pair and the `force`/`suspend`/`commonMetadata` fields both carry.)
 
 ### Helm Controller
 
@@ -258,7 +263,7 @@ Every 5 minutes (HelmRelease interval):
 
 **Why these intervals:** 15m for Git polling reduces load on Git server. 5m for Kustomization provides fast reconciliation. Intervals are configurable per resource.
 
-**Evidence:** `.kiro/steering/gitops-manifest-standards.md`, Ecosystem.md reconciliation
+These are FluxCD's own default `interval` values (15m for `GitRepository`, 5m or 15m for `Kustomization` depending on the service; see the templates cited above); intervals are configurable per resource.
 
 ## Kustomize Overlay Pattern
 
@@ -321,8 +326,6 @@ spec:
 
 **Trade-offs:** Requires understanding Kustomize. Debugging can be harder (need to build overlay to see final manifest).
 
-**Evidence:** Ecosystem.md Kustomize overlay pattern
-
 ## SOPS Integration
 
 ### Encryption at Rest (Git)
@@ -332,13 +335,16 @@ spec:
 **Configuration:**
 
 ```yaml
-# .sops.yaml
+# .sops.yaml, rendered from internal/gitops/templates/cluster-apps-base/.sops.yaml.tpl
 creation_rules:
-  - path_regex: 'secrets/.*\.yaml$'
-    encrypted_regex: "^(secret)$"
-    age: >-
-      age1abc123...
+{{- range .OpenCenter.GitOps.OverlayUnits.SOPS.Rules }}
+  - path_regex: {{ .PathRegex }}
+    age: {{ join "," .AgeRecipients }}
+    encrypted_regex: {{ .EncryptedRegex }}
+{{- end }}
 ```
+
+The template renders one `creation_rules` entry per configured SOPS overlay rule (`opencenter.gitops.overlay_units.sops.rules`, `internal/config/overlay/types.go`) rather than one fixed rule. Separately, the top-level `secrets.sops.encrypted_regex` (`internal/config/v2/config.go` `SOPSConfig`) defaults to `^(data|stringData|secret)$` (`internal/config/v2/defaults.go`) and governs SOPS's own field-matching behavior for provider/GitOps overlay values encrypted directly by `internal/sops` (see [Secrets Management](../CODEMAPS/secrets-management.md)) — a related but distinct mechanism from the per-rule overlay-unit encryption shown above.
 
 **Workflow:**
 
@@ -389,7 +395,7 @@ spec:
 
 **Why this design:** Secrets safe in Git (encrypted), FluxCD handles decryption automatically, no manual decryption needed.
 
-**Evidence:** `internal/sops/manager.go`, Ecosystem.md secrets management
+**Evidence:** `internal/sops/manager.go`
 
 ## Dependency Management
 
@@ -399,36 +405,37 @@ spec:
 
 **Example:**
 
+Real chains have more than one link and more than one named stage per service. Keycloak's actual chain (`internal/gitops/templates/cluster-apps-base/services/fluxcd/keycloak.yaml.tpl`) is, in order: `sources` → `keycloak-namespace` → (with `postgres-operator-base` also required) a Postgres cluster stage → (with `olm-base` also required) the Keycloak operator stage → the Keycloak override stage, e.g.:
+
 ```yaml
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: keycloak
+  name: keycloak-operator
   namespace: flux-system
 spec:
   dependsOn:
     - name: sources
-    - name: cert-manager-base
-    - name: postgres-operator-base
+      namespace: flux-system
+    - name: olm-base
+      namespace: flux-system
+    - name: keycloak-postgres
+      namespace: flux-system
 ```
 
 **Reconciliation:**
 
 ```
-1. FluxCD: Apply sources Kustomization
-2. FluxCD: Wait for sources to be Ready
-3. FluxCD: Apply cert-manager-base Kustomization
-4. FluxCD: Wait for cert-manager to be Ready
-5. FluxCD: Apply postgres-operator-base Kustomization
-6. FluxCD: Wait for postgres-operator to be Ready
-7. FluxCD: Apply keycloak Kustomization
+1. FluxCD: apply sources, wait Ready
+2. FluxCD: apply keycloak-namespace, wait Ready
+3. FluxCD: apply the Postgres-cluster stage (also depends on postgres-operator-base), wait Ready
+4. FluxCD: apply keycloak-operator (also depends on olm-base), wait Ready
+5. FluxCD: apply the Keycloak override stage (depends on keycloak-postgres and keycloak-operator)
 ```
 
 **Why this design:** Ensures services deploy in correct order. Prevents failures due to missing dependencies.
 
 **Trade-offs:** Slower initial deployment (sequential). But more reliable (no race conditions).
-
-**Evidence:** `.kiro/steering/gitops-manifest-standards.md`, Ecosystem.md dependencies
 
 ## Drift Detection
 
@@ -462,13 +469,11 @@ FluxCD: Detects drift, scales back to 3
 
 ### Manual Drift Detection
 
-**Command:** `opencenter cluster drift`
+**Command:** `opencenter cluster drift detect <cluster>` (also `drift reconcile`, `drift schedule`).
 
-**Purpose:** Compare configuration file vs actual infrastructure.
+**Purpose:** Compare configuration file vs actual infrastructure state through `internal/operations.DriftDetector` and a provider's `internal/cloud.CloudProvider` implementation.
 
-**Use Case:** Detect infrastructure drift (VMs deleted, networks changed) before reconciliation.
-
-**Evidence:** `cmd/cluster_drift.go`, Session 1 A8
+**Use Case:** Detect infrastructure drift (VMs deleted, networks changed) before reconciliation. This is a separate mechanism from FluxCD's own drift correction above — see [Infrastructure Drift Detection](drift-detection.md) for supported providers and reconciliation limits.
 
 ## Update Strategies
 
@@ -496,25 +501,6 @@ FluxCD: Detects drift, scales back to 3
 3. FluxCD: Reconciles previous state
 4. Services: Rolled back
 ```
-
-### Canary Deployments
-
-**Pattern:** Progressive delivery with Flagger (optional).
-
-**Workflow:**
-
-```
-1. User: Update image tag in Git
-2. Flagger: Detects change
-3. Flagger: Deploy canary (10% traffic)
-4. Flagger: Monitor metrics
-5. If metrics good:
-    Flagger: Increase traffic (50%, 100%)
-6. If metrics bad:
-    Flagger: Rollback to stable
-```
-
-**Evidence:** VERIFY: Check if Flagger is in gitops-base
 
 ### Blue-Green Deployments
 
@@ -551,8 +537,6 @@ kubectl describe gitrepository <name> -n flux-system
 
 **Solution:** Recreate SSH key secret, verify Git URL, check branch exists.
 
-**Evidence:** Session 3 troubleshooting guide
-
 ### Kustomization Failing
 
 **Symptom:** `kubectl get kustomizations -n flux-system` shows reconciliation error.
@@ -573,8 +557,6 @@ kubectl logs -n flux-system deployment/kustomize-controller
 
 **Solution:** Verify path, check SOPS key, validate manifests, check pod status.
 
-**Evidence:** Session 3 troubleshooting guide
-
 ### HelmRelease Failing
 
 **Symptom:** `kubectl get helmreleases -A` shows failed status.
@@ -593,8 +575,6 @@ kubectl logs -n flux-system deployment/helm-controller
 * Dependency not ready
 
 **Solution:** Verify HelmRepository, check values, wait for dependencies.
-
-**Evidence:** Session 3 troubleshooting guide
 
 ## Best Practices
 
@@ -716,9 +696,8 @@ flux logs --follow
 
 This explanation is based on:
 
-* GitOps workflow: Ecosystem.md GitOps flow
-* Repository structure: `internal/gitops/`, Ecosystem.md
-* FluxCD integration: `.kiro/steering/gitops-manifest-standards.md`
-* SOPS integration: `internal/sops/manager.go`, Ecosystem.md
-* Reconciliation: Session 1 A8
-* Troubleshooting: Session 3 troubleshooting guide
+* Repository/rendering structure: `internal/gitops/` (`copy.go`, `source_auth.go`, `ownership.go`, `render_catalog.go`), `internal/gitops/templates/cluster-apps-base/`
+* GitOps auth flag and defaults: `cmd/cluster_generate.go`, `internal/config/v2/defaults.go`
+* Bootstrap/Flux bootstrap: `internal/cluster/bootstrap_provider_infra.go`, `internal/cluster/openstack_flux_bootstrap.go`, `internal/cluster/kind_bootstrap_provider.go`
+* SOPS integration: `internal/sops/`, `internal/config/v2/config.go` (`SOPSConfig`)
+* Drift detection: `internal/operations/`, [Infrastructure Drift Detection](drift-detection.md)

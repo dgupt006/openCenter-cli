@@ -151,11 +151,11 @@ That simplicity is the main design tradeoff: easy to extend, but limited to comm
 
 External plugins can be verified with a checksum allowlist:
 
-* store checksums in `<config-dir>/plugins/checksums.txt`
+* store checksums in `<config-dir>/plugins/checksums.txt` (the path is `filepath.Join(config.GetPluginsDir(), "checksums.txt")`)
 * use standard `sha256sum` formatting: `<sha256>  <filename>`
 * entries are matched by plugin basename
-* unverified plugins emit a warning when executed
-* checksum mismatches block execution
+* unverified plugins emit a warning when executed (`internal/plugins/loader.go` prints it to the command's stderr)
+* checksum mismatches refuse execution outright; a verification error (for example, an unreadable checksum file) also refuses execution rather than silently skipping the check
 
 ## Related Reading
 

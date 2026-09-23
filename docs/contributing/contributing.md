@@ -13,359 +13,129 @@ tags: [contributing]
 
 ## Prerequisites
 
-Before contributing, you need:
+* Git installed and configured, with a GitHub account and SSH key.
+* [mise](https://mise.jdx.dev/) installed -- see [Development Environment Setup](development-setup.md).
+* Familiarity with Go and with the concepts this CLI orchestrates (Kubernetes, GitOps/FluxCD, OpenTofu/Terraform).
 
-* Git installed and configured
-* GitHub account with SSH key configured
-* Mise installed (see [Development Setup](development-setup.md))
-* Familiarity with Go and Kubernetes concepts
+There is no `CONTRIBUTING.md` at the repository root and no `CHANGELOG.md` -- this page and the rest of `docs/contributing/` are the canonical contributor documentation, and per-version release notes live under `docs/release/`.
 
-## Fork and Clone
-
-1. Fork the repository on GitHub:
-
-   ```bash
-   # Navigate to https://github.com/opencenter-cloud/openCenter-cli
-   # Click "Fork" button
-   ```
-2. Clone your fork:
-
-   ```bash
-   git clone git@github.com:YOUR-USERNAME/openCenter-cli.git
-   cd openCenter-cli
-   ```
-3. Add upstream remote:
-
-   ```bash
-   git remote add upstream git@github.com:opencenter-cloud/openCenter-cli.git
-   ```
-4. Install development tools:
-
-   ```bash
-   mise install
-   ```
-5. Build the project:
-
-   ```bash
-   mise run build
-   ```
-
-## Making Changes
-
-### Create a Branch
-
-Always create a feature branch for your changes:
+## Fork, clone, and build
 
 ```bash
-# Update your fork
+git clone git@github.com:YOUR-USERNAME/openCenter-cli.git
+cd openCenter-cli
+git remote add upstream git@github.com:opencenter-cloud/openCenter-cli.git
+
+mise install
+mise run build
+```
+
+## Create a branch
+
+```bash
 git fetch upstream
 git checkout main
 git merge upstream/main
-
-# Create feature branch
-git checkout -b feat/my-feature
+git checkout -b <type>/<short-description>
 ```
 
-Branch naming conventions:
+The repository's actual commit history mixes two conventions -- use whichever fits the change, but keep the type prefix:
 
-* `feat/` - New features
-* `fix/` - Bug fixes
-* `docs/` - Documentation changes
-* `refactor/` - Code refactoring
-* `test/` - Test additions or fixes
+* Conventional-Commits-style: `feat: ...`, `fix: ...`, `fix(gitops): ...`, `chore(schema): ...`, `docs: ...`, `test: ...`.
+* Ticket-referenced: `fix(OCTR-724): pin storageClass on kube-prometheus-stack and kafka-cluster PVCs`, `OCTR-749: support GitHub as a GitOps provider on Kind clusters`.
 
-### Write Code
+Common types seen in `git log`: `feat`, `fix`, `chore`, `docs`, `test`. Scope in parentheses (a package or service name, or a ticket ID) is common but optional. Keep the subject line short and imperative; put rationale in the body if it is not obvious from the subject.
 
-Follow the coding standards defined in `.kiro/steering/tech.md`:
+## Write code
 
-1. **Formatting**: Code must be formatted with `gofmt`
+* **Formatting:** `mise run fmt` (`gofmt -w .`) before committing.
+* **Linting:** `mise run lint` (`golangci-lint run ./...`).
+* **Import order:** standard library, then external modules, then this module's own `internal/...` packages, each group separated by a blank line.
+* **Naming:** exported identifiers `CamelCase`, unexported `mixedCase`, test functions `TestXxx`, new Cobra command constructors `newCluster<Action>Cmd`.
+* **Errors:** wrap with context using `fmt.Errorf("...: %w", err)`.
 
-   ```bash
-   mise run fmt
-   ```
-2. **Import organization**: Standard library → External → Internal
+See [Codebase Organization](code-structure.md) for package boundaries and where new code belongs.
 
-   ```go
-   import (
-       "fmt"
-       "os"
+## Write tests
 
-       "github.com/spf13/cobra"
-       "gopkg.in/yaml.v3"
+All behavior changes need tests. See [Testing Guide](testing-guide.md) for the full matrix. At minimum:
 
-       "github.com/opencenter-cloud/opencenter-cli/internal/config"
-   )
-   ```
-3. **Naming conventions**:
-   * Exported: `CamelCase`
-   * Unexported: `mixedCase`
-   * Test functions: `TestXxx`
-   * Commands: `newCluster<Action>Cmd()`
-4. **Error handling**: Always wrap errors with context
-
-   ```go
-   if err != nil {
-       return fmt.Errorf("failed to load config: %w", err)
-   }
-   ```
-
-### Write Tests
-
-All behavior changes require tests. See [Testing Guide](testing-guide.md) for details.
-
-**Required tests:**
-
-* Unit tests for new functions (`*_test.go`)
-* BDD tests for user-facing features (`tests/features/*.feature`)
-* Property tests for critical logic (`*_property_test.go`)
-
-**Run tests before committing:**
+* Unit tests (`*_test.go`) for new functions.
+* BDD scenarios (`tests/features/*.feature`) for new user-facing CLI behavior.
+* Property tests (`*_property_test.go`) for logic with a clear invariant (validation, encoding round-trips, config merging).
 
 ```bash
-# Unit tests
 mise run test
-
-# BDD tests
 mise run godog
-
-# All tests
-mise run test && mise run godog
+mise run test-race
 ```
 
-### Update Documentation
+## Update documentation
 
-Documentation changes are required for:
+Documentation changes are required for new commands/flags, configuration schema changes, new or changed workflows, and breaking changes. Update the relevant tree:
 
-* New commands or flags
-* Configuration schema changes
-* New features or workflows
-* Breaking changes
+* `docs/getting-started/` -- tutorials (`doc_type: tutorial`)
+* `docs/operations/` -- day-2 how-to guides (`doc_type: how-to`)
+* `docs/reference/` -- information-oriented specs (`doc_type: reference`); `docs/reference/opencenter/` is auto-generated by `mise run docs-gen` -- edit the command's `Long`/`Example` text in `cmd/`, not the generated Markdown.
+* `docs/concepts/` -- understanding-oriented explanations (`doc_type: explanation`)
+* `docs/contributing/` -- this tree
 
-Update relevant files in `docs/`:
+Every page needs the frontmatter block described in `docs/README.md` (`id`, `title`, `sidebar_label`, `description`, `doc_type`, `audience`, `tags`). `mise run test-docs-frontmatter` enforces this in CI-equivalent form locally.
 
-* `docs/getting-started/` - Learning-oriented guides
-* `docs/operations/` - Task-oriented guides
-* `docs/reference/` - Information-oriented specs
-* `docs/concepts/` - Understanding-oriented concepts
-
-## Pre-Commit Checklist
-
-Before committing, always run:
+## Pre-commit checklist
 
 ```bash
-# 1. Build to verify compilation
 mise run build
-
-# 2. Format code
 mise run fmt
-
-# 3. Run tests
 mise run test
-
-# 4. Run BDD tests
 mise run godog
-
-# 5. Tidy dependencies (if you added/removed imports)
-mise run tidy
+mise run tidy        # if you added/removed imports
+mise run schema-verify   # if you touched internal/config/v2 or the JSON schema
 ```
 
-If you modified configuration schema:
+The repository's own `.pre-commit-config.yaml` runs a single hook -- `gitleaks/gitleaks` (secret scanning) -- against changed files; `mise run install-hooks` wires that up as a local git pre-commit hook. `.github/workflows/pre-commit.yaml` runs the same hook set in CI on every pull request.
 
-```bash
-# Comprehensive schema verification
-mise run schema-verify
-```
+## Submit a pull request
 
-## Commit Messages
+There is no `.github/pull_request_template.md` in this repository, so structure the description yourself. Include, at minimum:
 
-Use Conventional Commits format:
+* what changed and why
+* the test commands you ran and their result
+* any documentation you added or updated
+* whether the change is breaking, and what migration it needs
+* the issue/ticket it closes, if any
 
-```
-<type>: <description>
+### What CI checks
 
-[optional body]
+Every pull request runs, per `.github/workflows/*.yml` (see [GitHub Actions Workflows](../reference/github-actions-workflows.md) for full detail):
 
-[optional footer]
-```
+* `test.yml` -- unit tests with the race detector, `go vet`, and the property-test suite.
+* `pre-commit.yaml` -- gitleaks on changed files.
+* `vulncheck.yml` -- `govulncheck ./...`.
+* `docs-p0.yml` -- when Markdown files change.
 
-**Types:**
+CI does **not** run the BDD suite, `mise run integration`, or `mise run test:all` -- run those locally before pushing when your change touches the relevant area.
 
-* `feat:` - New feature
-* `fix:` - Bug fix
-* `docs:` - Documentation changes
-* `refactor:` - Code refactoring
-* `test:` - Test additions or fixes
-* `chore:` - Build process or tooling changes
+### Review
 
-**Examples:**
+At least one maintainer approval is required before merge. Address feedback with additional commits on the same branch (`git commit -m "..." && git push`); there is no requirement to squash or force-push during review unless a maintainer asks for it.
 
-```
-feat: add support for AWS provider
+## Common contribution types
 
-Implements AWS provider with EC2 instance provisioning,
-VPC configuration, and IAM role management.
+**New command:** create `cmd/cluster_<action>.go`, implement `newCluster<Action>Cmd()`, register it in `cmd/cluster.go`, add BDD coverage, run `mise run docs-gen` to refresh the generated reference page.
 
-Closes #123
-```
+**New infrastructure provider:** see [Adding New Infrastructure Providers](adding-providers.md) -- `internal/cloud/magnum/` is the current worked example.
 
-```
-fix: correct VRRP validation logic
+**New platform service:** see [Adding New Platform Services](adding-services.md).
 
-When use_octavia=false and vrrp_enabled=true, vrrp_ip
-must be set. Previous validation was too permissive.
+**Bug fix:** write a failing test that reproduces the bug first, fix it, confirm the test passes, and keep the test as a regression guard.
 
-Fixes #456
-```
+**Documentation fix:** follow the [Diátaxis](https://diataxis.fr/) framework already used across `docs/` (tutorial/how-to/reference/explanation) and verify every technical claim against the actual source before writing it down -- do not carry forward unverified claims from an older revision of the same page.
 
-```
-docs: add tutorial for VMware deployment
+## Getting help
 
-Adds step-by-step guide for deploying clusters on
-pre-provisioned VMware VMs.
-```
-
-## Submit Pull Request
-
-1. Push your branch to your fork:
-
-   ```bash
-   git push origin feat/my-feature
-   ```
-2. Create pull request on GitHub:
-   * Navigate to https://github.com/opencenter-cloud/openCenter-cli
-   * Click "New Pull Request"
-   * Select your fork and branch
-   * Fill in PR template
-3. PR description must include:
-   * What changed and why
-   * Test commands run
-   * Documentation updates
-   * Breaking changes (if any)
-   * Related issues
-
-**Example PR description:**
-
-```markdown
-## Changes
-
-Adds support for AWS provider with EC2 provisioning.
-
-## Testing
-
-- `mise run test` - All unit tests pass
-- `mise run godog` - All BDD tests pass
-- Manual testing with AWS account in us-east-1
-
-## Documentation
-
-- Added `docs/getting-started/aws-deployment.md`
-- Updated `docs/reference/providers.md`
-- Updated `docs/reference/configuration-schema.md`
-
-## Breaking Changes
-
-None
-
-## Related Issues
-
-Closes #123
-```
-
-## Code Review Process
-
-1. **Automated checks**: CI runs tests and linting
-2. **Maintainer review**: At least one maintainer approval required
-3. **Address feedback**: Make requested changes
-4. **Merge**: Maintainer merges when approved
-
-**Responding to feedback:**
-
-```bash
-# Make requested changes
-git add .
-git commit -m "fix: address review feedback"
-git push origin feat/my-feature
-```
-
-## Common Contribution Types
-
-### Adding a New Command
-
-See [Code Structure](code-structure.md) for details.
-
-1. Create `cmd/cluster_<action>.go`
-2. Implement `newCluster<Action>Cmd()` function
-3. Register in `cmd/cluster.go`
-4. Add BDD tests in `tests/features/`
-5. Update `docs/reference/cli-commands.md`
-
-### Adding a New Provider
-
-See [Adding Providers](adding-providers.md) for details.
-
-1. Create `internal/cloud/<provider>/` directory
-2. Implement preflight checks
-3. Add provider defaults in `internal/config/defaults.go`
-4. Add provider validation
-5. Update documentation
-
-### Adding a New Service
-
-See [Adding Services](adding-services.md) for details.
-
-1. Add service to `internal/config/defaults.go`
-2. Create templates in `internal/gitops/gitops-base-dir/`
-3. Add service validation
-4. Update `docs/reference/platform-services.md`
-
-### Fixing a Bug
-
-1. Create failing test that reproduces bug
-2. Fix the bug
-3. Verify test now passes
-4. Add regression test if needed
-
-### Improving Documentation
-
-1. Identify documentation gap or error
-2. Update relevant documentation files
-3. Follow Diátaxis framework (tutorial/how-to/reference/explanation)
-4. Include evidence citations where applicable
-
-## Getting Help
-
-**Questions about contributing:**
-
-* Open a discussion on GitHub
-* Ask in pull request comments
-* Review existing issues and PRs
-
-**Found a bug:**
-
-* Search existing issues first
-* Open new issue with reproduction steps
-* Include version: `opencenter version`
-
-**Feature requests:**
-
-* Open issue with "enhancement" label
-* Describe use case and proposed solution
-* Discuss before implementing large features
+Open a GitHub issue or discussion, or ask in the pull request thread. When filing a bug, include `opencenter version` output and exact reproduction steps.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same license as the project (check LICENSE file in repository root).
-
----
-
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Contributing guide: `CONTRIBUTING.md:1-82`
-* Development workflow: `.kiro/steering/tech.md:103-118`
-* Coding standards: `.kiro/steering/tech.md:5-24`
-* Commit conventions: `.kiro/steering/tech.md:26-29`
-* Project structure: `.kiro/steering/structure.md:1-128`
-* Build system: `.mise.toml:1-961` (mise tasks)
-* Command structure: `cmd/` directory (70+ command files)
+By contributing, you agree your contribution is licensed under the project's license (see `LICENSE` at the repository root).

@@ -263,3 +263,7 @@ The export uses file mode `0600`. Export failures become warnings rather than co
 `--manifests` exits the normal config-readiness path and calls `runClusterValidateManifests`. That mode validates generated GitOps manifests rather than the cluster config itself.
 
 Manifest validation should not be treated as a substitute for config readiness validation. Use both when checking a deployment pipeline end to end.
+
+## See also
+
+For the full checklist of what each readiness check enforces (provider-by-provider, service-by-service), plus how this pipeline relates to the separate generic `internal/core/validation` engine (used only for `cluster-name`/`organization-name`/`config`/`file`/`security` checks during `cluster init`), see [Validation Rules](../reference/validation-rules.md).

@@ -49,9 +49,11 @@ opencenter cluster generate [name] [flags]
 ### Options
 
 ```
+      --adopt-generated      claim differing planned files after creating backups
       --force                overwrite existing GitOps repository
       --gitops-auth string   GitOps authentication method for base repo sources (ssh, token); defaults to cluster_defaults.gitops_auth_method
   -h, --help                 help for generate
+      --prune                remove stale generated files (use --prune=false to report but retain them) (default true)
       --render-only          render templates without running repository setup
       --skip-validation      skip configuration validation before generation
 ```

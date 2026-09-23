@@ -2,76 +2,82 @@
 id: reference-architecture
 title: "Reference Architecture"
 sidebar_label: Reference Architecture
-description: Baseline infrastructure architecture, networking, security, and identity for openCenter deployments across bare metal, OpenStack, VMware, and Kind.
+description: Baseline infrastructure architecture, networking, security, and identity for openCenter deployments across OpenStack, VMware, bare metal, Kind, and Magnum.
 doc_type: explanation
 audience: "architects, platform engineers, operators"
-tags: [architecture, networking, security, identity, baseline, reference]
+tags: [architecture, networking, security, identity, baseline, reference, magnum]
 ---
 # Reference Architecture
 
-**Purpose:** For architects and platform engineers, explains the baseline infrastructure architecture required to deploy openCenter, covering network topology, security, identity, storage, and operational concerns across bare metal, OpenStack, VMware, and Kind targets.
+**Purpose:** For architects and platform engineers, explains the baseline infrastructure architecture required to deploy openCenter, covering network topology, security, identity, storage, and operational concerns across the supported infrastructure targets: OpenStack, VMware, bare metal, Kind, and Magnum.
 
-This document describes the recommended infrastructure foundation for openCenter deployments. It does not cover workload-specific architecture. Application teams should layer their own patterns on top of this baseline.
+This document describes the recommended infrastructure foundation for openCenter deployments. It does not cover workload-specific architecture. Application teams should layer their own patterns on top of this baseline. For the authoritative provider support matrix, see [Infrastructure Providers Reference](../reference/providers.md) and [Providers](../CODEMAPS/providers.md); this document stays consistent with those but does not repeat every detail.
 
 ## Architecture
 
-openCenter deploys a production-grade Kubernetes platform through a layered architecture. Each layer has a clear owner and a defined interface to the layer above it.
+openCenter deploys a Kubernetes platform through a layered architecture. Each layer has a clear owner and a defined interface to the layer above it. The exact mechanics differ by provider: OpenStack, VMware, and bare metal share a Kubespray-driven bootstrap (with Kamaji available as an alternative hosted-control-plane deployment method); Magnum instead delegates cluster creation to the OpenStack Magnum service and does not use OpenTofu.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Layer 5: Platform Services (GitOps-managed)            │
-│  cert-manager · Keycloak · Kyverno · Prometheus · Loki  │
-│  Velero · Gateway API · RBAC Manager · Headlamp         │
+│  Layer 5: Platform Services (GitOps-managed)             │
+│  cert-manager · Keycloak · Kyverno · kube-prometheus-    │
+│  stack · Loki · Tempo · Velero · Gateway API · RBAC      │
+│  Manager · Headlamp · OLM · PostgreSQL Operator          │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 4: GitOps Engine (FluxCD)                        │
-│  source-controller · kustomize-controller               │
-│  helm-controller · notification-controller              │
+│  Layer 4: GitOps Engine (FluxCD)                         │
+│  source-controller · kustomize-controller                │
+│  helm-controller · notification-controller               │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 3: Kubernetes Cluster (Kubespray)                │
-│  Control plane (3 nodes) · Workers (2+ nodes)           │
-│  ContainerD · Calico/Cilium · CoreDNS                   │
+│  Layer 3: Kubernetes Cluster                              │
+│  Kubespray (OpenStack/VMware/bare metal) or Kamaji         │
+│  (hosted control plane) or Magnum (OpenStack-managed)      │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 2: Infrastructure (OpenTofu / pre-provisioned)   │
-│  Compute · Networking · Storage · Bastion               │
+│  Layer 2: Infrastructure (OpenTofu / pre-provisioned;      │
+│  not applicable to Magnum)                                 │
+│  Compute · Networking · Storage · Bastion                  │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 1: Provider (OpenStack / VMware / Bare Metal)    │
-│  Hypervisor · Physical network · Block storage          │
+│  Layer 1: Provider (OpenStack / VMware / bare metal /       │
+│  Kind / Magnum)                                              │
+│  Hypervisor or physical network · Block storage             │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Evidence:** `docs/reference/providers.md`, `docs/CODEMAPS/providers.md`, `internal/cluster/provider/openstack/`, `internal/cluster/magnum_bootstrap_provider.go`, `internal/config/v2/deployment_validator.go` (Kamaji constraints)
 
 ### Design Principles
 
 These principles shaped every architectural decision:
 
-* **Configuration as code.** A single YAML file defines the entire cluster. No manual steps between configuration and deployment.
+* **Configuration as code.** A single YAML file (validated against `schema/opencenter-v2.schema.json`) defines the cluster. No manual steps between configuration and deployment for the Kubespray/Kamaji path.
 * **GitOps as the operational model.** Git is the source of truth. FluxCD reconciles desired state continuously. Changes flow through commits, not `kubectl apply`.
-* **Defense in depth.** Security controls exist at every layer independently. Compromise of one layer does not compromise others.
-* **Provider abstraction.** The same configuration structure works across OpenStack, VMware, bare metal, and Kind. Provider-specific details are isolated behind a unified interface.
-* **Composition over duplication.** Base manifests live in `openCenter-gitops-base`. Clusters consume them via Kustomize overlays, adding only what differs.
-* **Fail fast.** Multi-layered validation (schema → business rules → provider constraints → connectivity) catches errors before any infrastructure is provisioned.
-* **Explicit dependencies.** Every service declares its dependencies. The platform deploys them in the correct order. No implicit coupling.
+* **Defense in depth.** Security controls exist at multiple layers (CLI input validation, secrets encryption, cluster admission, platform policy). See [Security Model](security-model.md).
+* **Provider abstraction, with one exception.** The same configuration structure works across OpenStack, VMware, bare metal, and Kind. Magnum is deliberately different: it is backed by the OpenStack Magnum service rather than OpenTofu, and image/network/COE choices come from the Magnum cluster template rather than from openCenter's own infrastructure fields.
+* **Composition over duplication.** Some platform-service manifests (etcd-backup, Calico, cert-manager, Keycloak, FluxCD, Harbor, Kafka, OLM, sources) are templated from `internal/gitops/templates/cluster-apps-base/` in this repository; others (for example Kyverno's policy set and Velero's manifests) are pulled from the separate `openCenter-gitops-base` repository via FluxCD. This document does not restate that external repository's contents.
+* **Fail fast.** Configuration passes through a multi-stage pipeline (schema → business rules → provider/deployment-method validation → readiness checks) before any infrastructure is provisioned. See [Configuration Lifecycle](configuration-lifecycle.md).
+* **Explicit dependencies.** Kind, for example, force-enables OLM and postgres-operator because Keycloak depends on them (`internal/config/v2/defaults.go`).
 
 ### Minimum Recommended Baseline
 
-Most openCenter deployments should start with:
+The `opencenter cluster init` defaults for OpenStack, VMware, and bare metal are:
 
-| Component | Recommendation |
+| Component | Default |
 | --- | --- |
-| Control plane nodes | 3 (HA with VRRP or load balancer) |
-| Worker nodes | 2 minimum, 3+ for production |
-| Bastion host | 1 (SSH jump host, required) |
-| CNI | Calico with VXLAN encapsulation |
-| Load balancer | MetalLB (bare metal/VMware) or Octavia (OpenStack) |
-| Ingress | Gateway API with Envoy |
-| Identity | Keycloak with OIDC |
-| Secrets | SOPS Age encryption + Kubernetes encryption at rest |
-| Monitoring | kube-prometheus-stack + Loki + Tempo |
-| Backup | Velero + etcd snapshots |
-| Policy | Kyverno (17 default ClusterPolicies) |
-| Storage | Provider CSI driver + Longhorn (optional) |
-| Certificate management | cert-manager with Let’s Encrypt |
+| Control plane nodes | 3 (`master_count: 3`) |
+| Worker nodes | 3 (`worker_count: 3`) |
+| Bastion host | Enabled for OpenStack/VMware; disabled by default for bare metal (`infrastructure.bastion.enabled`) |
+| CNI | Calico (`cluster.kubernetes.network_plugin.calico`); Cilium and Kube-OVN are also schema-supported but are not part of the default service set |
+| Control-plane HA | Both `vrrp_enabled` and `kube_vip_enabled` default to `true` for OpenStack/VMware/bare metal (`false` for Kind) |
+| Load balancer provider | `infrastructure.networking.loadbalancer_provider` defaults to `"ovn"`; valid values are `ovn`, `octavia`, `metallb`, `cloud-native` |
+| Ingress | Gateway API (`services.gateway`, `services.gateway-api`), enabled by default |
+| Identity | Keycloak (`services.keycloak`), enabled by default |
+| Secrets | SOPS/Age encryption for the GitOps tree; see [Security Model](security-model.md) |
+| Monitoring | kube-prometheus-stack, Loki, Tempo — all enabled by default |
+| Backup | etcd-backup and Velero exist as services, but **Velero defaults to enabled only for OpenStack** and etcd-backup defaults to disabled for every provider; see [Business Continuity Decisions](#business-continuity-decisions) |
+| Policy | Kyverno (`services.kyverno`), enabled by default; its policy content is not in this repository — see [Policy Management](#policy-management) |
+| Storage | Provider CSI plugin selected automatically by `cluster.kubernetes.storage_plugin` (Cinder for OpenStack, vSphere for VMware); Longhorn (`services.longhorn`) exists but defaults to disabled |
+| Certificate management | cert-manager (`services.cert-manager`), enabled by default, `letsencrypt_server` defaults to the public Let's Encrypt ACME endpoint |
 
-**Evidence:** `internal/config/defaults.go`, `docs/reference/platform-services.md`
+**Evidence:** `internal/config/v2/defaults.go` (`applyProviderBehaviorDefaults`, `NewDefaultServiceConfig`, `defaultServiceMap`), `schema/opencenter-v2.schema.json`
 
 ### Target-Specific Architecture
 
@@ -115,14 +121,16 @@ OpenStack is the most automated provider. openCenter provisions all infrastructu
 
 Key characteristics:
 
-* Automated VM provisioning via OpenTofu
-* Cinder CSI for persistent volumes (default storage class: `csi-cinder-sc-delete`)
-* Octavia load balancer or VRRP for API HA
-* Optional Designate DNS integration
-* Server group affinity policies (anti-affinity recommended for HA)
-* Boot-from-volume with configurable size and type
+* Automated VM provisioning via OpenTofu, or via Kamaji as an alternative hosted-control-plane method (Kamaji requires `master_count: 0`, `vrrp_enabled: false`, and `kube_vip_enabled: false` — `internal/config/v2/deployment_validator.go`)
+* Cinder CSI for persistent volumes; default storage class is `csi-cinder-sc-delete` and default boot-volume type is `HA-Standard` (`internal/config/v2/defaults.go`)
+* `loadbalancer_provider` defaults to `"ovn"` (Neutron/OVN load balancer); `octavia` is also a supported value for API/service load balancing, and `vrrp_enabled`/`kube_vip_enabled` both default to `true` for VIP-based API HA
+* Optional Designate DNS integration (`infrastructure.networking.use_designate`)
+* `infrastructure.server_group_affinity` defaults to `["anti-affinity"]`
+* Boot-from-volume: `infrastructure.storage.worker_volume_size`/`master_volume_size` default to 40 GB each, with `worker_volume_destination_type: "volume"` and `worker_volume_source_type: "image"`
+* Region-specific defaults (image IDs, flavors, DNS/NTP servers) are looked up from a provider-defaults registry (`internal/config/defaults/openstack.go`); for example the SJC3 and DFW3 regions both default to flavors `gp.5.2.4` (bastion), `gp.5.4.8` (master), and `gp.5.4.16` (worker)
+* Windows worker pools are supported (`flavor_worker_windows`, `image_id_windows`, `additional_server_pools_worker_windows`), with OpenStack-specific readiness checks requiring `image_id_windows` or a per-pool image
 
-**Evidence:** `internal/config/types_infrastructure.go`, `internal/config/types_cluster.go`
+**Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/defaults.go`, `internal/config/defaults/openstack.go`, `internal/config/v2/deployment_validator.go`, `internal/config/v2/readiness.go`
 
 #### VMware (vSphere)
 
@@ -164,18 +172,18 @@ VMware uses pre-provisioned VMs. The infrastructure team owns VM lifecycle; open
 
 Key characteristics:
 
-* VMs pre-provisioned by infrastructure team (static IPs in config)
-* vSphere CSI driver for persistent volumes
-* MetalLB for LoadBalancer services (no cloud LB)
-* VRRP or kube-vip for API server HA
-* Node IPs defined explicitly in `master_nodes` and `worker_nodes` arrays
-* Drift detection available (detect only, no auto-reconcile)
+* VMs pre-provisioned by the infrastructure team; canonical provider name is `vmware` (`vsphere` continues to load as a compatibility alias — `docs/reference/providers.md`)
+* vSphere CSI driver for persistent volumes; the in-cluster plugin is enabled automatically (`cluster.kubernetes.storage_plugin.vsphere_csi`), and the default storage class is `vsphere-csi` (not a fixed `vsphere-sc` name — `internal/config/v2/defaults.go`)
+* MetalLB (`services.metallb`) is available for LoadBalancer services but defaults to **disabled**; it must be explicitly enabled
+* `vrrp_enabled` and `kube_vip_enabled` both default to `true` for API server HA
+* Shares the same OpenTofu/Kubespray bootstrap provider as OpenStack and bare metal (`internal/cluster/provider/openstack` bootstrap path is reused across these three — `docs/CODEMAPS/providers.md`)
+* Has a real drift implementation (`internal/cloud/vmware`) — detect only, no auto-reconcile, consistent with `docs/reference/providers.md`
 
-**Evidence:** `docs/providers/vmware.md`, `internal/config/types_kubernetes.go` NodeConfig
+**Evidence:** `internal/cloud/vmware/`, `internal/config/v2/defaults.go`, `docs/reference/providers.md`, `docs/CODEMAPS/providers.md`
 
 #### Bare Metal
 
-Bare metal follows the same model as VMware: pre-provisioned hosts with static IP assignments.
+Bare metal is a real, GA-supported target for configuration, generation, and bootstrap/deploy (`docs/reference/providers.md`, `docs/CODEMAPS/providers.md`) — it follows the same pre-provisioned-host model as VMware. There is, however, no dedicated `internal/cloud/baremetal` package: `internal/cloud/` only contains `openstack`, `vmware`, `kind`, and `magnum`, because bare metal has no cloud-state drift/reconciliation interface to implement (`internal/cloud.CloudProvider`). Bare metal's config/generate and bootstrap/deploy support instead comes from the shared `openstackBootstrapProvider` bootstrap path in `internal/cluster/` (reused across OpenStack, VMware, and bare metal) plus static-node validation — it does not use OpenStack or vSphere credentials.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -209,12 +217,16 @@ Bare metal follows the same model as VMware: pre-provisioned hosts with static I
 
 Key characteristics:
 
-* Hardware lifecycle managed outside openCenter
-* Longhorn recommended for persistent storage (no cloud CSI available)
-* MetalLB required for LoadBalancer services
-* VRRP for API server HA
-* Calico BGP mode available for direct routing (no encapsulation overhead)
-* Node IPs defined explicitly in configuration
+* Hardware lifecycle managed outside openCenter; `infrastructure.bastion.enabled` defaults to `false` for bare metal (no automated bastion provisioning)
+* No cloud CSI driver — `services.longhorn` exists and is a reasonable choice for persistent storage, but it defaults to **disabled** and must be explicitly enabled
+* `services.metallb` also defaults to **disabled**; it is the practical choice for LoadBalancer services since there is no cloud LB, but nothing enables it automatically
+* `vrrp_enabled`/`kube_vip_enabled` default to `true`, same as OpenStack/VMware
+* Calico's `ipip_mode`/`vxlan_mode`/`encapsulation_type` fields (`cluster.kubernetes.network_plugin.calico`) allow selecting a BGP-style "Never" encapsulation mode for direct routing, but this is a general Calico option, not bare-metal-specific
+* Windows worker pools have a bare-metal-specific readiness check: `worker_count_windows > 0` requires a non-empty `windows_nodes` list of static nodes (`internal/config/v2/readiness.go`)
+* No OpenStack-CCM/CSI services are enabled for this provider (`applyProviderBehaviorDefaults` disables them)
+* No cloud-state drift detection is available (consistent with `docs/reference/providers.md`)
+
+**Evidence:** `internal/config/v2/defaults.go`, `internal/config/v2/readiness.go`, `docs/CODEMAPS/providers.md`
 
 #### Kind (Local Development)
 
@@ -234,25 +246,52 @@ Kind runs Kubernetes inside Docker containers on a single host. It is not a prod
 │  │  └──────────┘  └──────────┘  └──────────┘         │  │
 │  │                                                    │  │
 │  │  ┌──────────┐                                      │  │
-│  │  │ Registry │  (optional, port 5000)               │  │
+│  │  │ Registry │  (optional, disabled by default,     │  │
+│  │  │          │   default port 5001)                 │  │
 │  │  └──────────┘                                      │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
-│  API: localhost:<api_server_port>                         │
-│  Ingress: extra_port_mappings (80, 443)                  │
+│  API: localhost:<api_server_port> (default 6443)          │
+│  Ingress: extra_port_mappings                              │
 └──────────────────────────────────────────────────────────┘
 ```
 
 Key characteristics:
 
-* Single-host, containerized nodes (not VMs)
-* No bastion, no VRRP, no external load balancer
-* Optional local container registry
-* Extra port mappings for ingress testing
-* Default CNI or Calico (configurable via `disable_default_cni`)
+* Single-host, containerized nodes (not VMs); defaults to 1 control-plane and 2 worker containers (`kindDefaultControlPlaneCount`/`kindDefaultWorkerCount`)
+* No bastion, no VRRP, no kube-vip: `bastion.enabled`, `kube_vip_enabled`, and `vrrp_enabled` are all forced to `false`/empty for Kind
+* Kind's pod/service subnets default differently from the other providers: `10.244.0.0/16` (pods) and `10.96.0.0/16` (services), not the `10.42.0.0/16`/`10.43.0.0/16` used elsewhere
+* Optional local container registry (`infrastructure.kind.registry`, disabled by default, default port 5001, default name `kind-registry`)
+* `extra_port_mappings` for host-to-node port forwarding
+* CNI selectable via `disable_default_cni` (defaults to `false`, i.e. kindnet)
 * Disposable: create and destroy in minutes
 
-**Evidence:** `internal/config/types_infrastructure.go` KindConfig
+**Evidence:** `internal/config/v2/infrastructure.go` (`KindConfig`, `KindRegistryConfig`), `internal/config/v2/defaults.go`
+
+#### Magnum (Managed OpenStack Kubernetes)
+
+Magnum is architecturally different from the other four targets: it is a thin client over the OpenStack Magnum API (`internal/cloud/magnum`), not an OpenTofu/Kubespray deployment. There is no "infrastructure layer" to plan in the OpenCenter sense — image, network, and COE (container orchestration engine) choices are all owned by a pre-existing Magnum cluster template.
+
+```
+┌────────────────────────────────────────────────────────┐
+│  OpenStack Region                                        │
+│                                                            │
+│  Magnum Cluster Template (owns image, network, COE)         │
+│         │                                                   │
+│         ▼                                                   │
+│  Magnum-managed Kubernetes cluster                            │
+│  (Magnum provisions and manages control plane + workers)      │
+└────────────────────────────────────────────────────────┘
+```
+
+Key characteristics:
+
+* Configuration lives under `opencenter.infrastructure.cloud.magnum`: required fields are `auth_url`, `cluster_template`, `project_id`, and `region`; optional fields include `application_credential_id`/`application_credential_secret`, `domain`, `ca`, `insecure`, `keypair`, `labels`, `master_flavor_id`, `master_lb_enabled`, `node_flavor_id`, and `create_timeout`
+* `cluster deploy` creates a Magnum cluster from the cluster template, polls Magnum until ready, and securely writes the resulting kubeconfig (`internal/cluster/magnum_bootstrap_provider.go`); `cluster destroy` deletes it (`internal/cluster/magnum_destroy_provider.go`)
+* No OpenTofu step, and no drift detection — Magnum is not in the `opencenter cluster drift` provider set (`docs/reference/providers.md`)
+* Gophercloud v1's Magnum client calls don't accept a `context.Context`, so `internal/cloud/magnum` checks cancellation before/after each call and re-authenticates its own `ProviderClient` per request group (`docs/CODEMAPS/providers.md`)
+
+**Evidence:** `internal/cloud/magnum/`, `internal/cluster/magnum_bootstrap_provider.go`, `internal/cluster/magnum_configure_orchestrator.go`, `schema/opencenter-v2.schema.json` (`opencenter.infrastructure.cloud.magnum`)
 
 ## Network Topology
 
@@ -275,66 +314,69 @@ External Traffic
       │
       ▼
 ┌─────────────┐
-│ Gateway API │  (Envoy, port 80/443)
-│ + MetalLB   │  or Octavia LB
+│ Gateway API │  (services.gateway-api namespace defaults to
+│             │   "envoy-gateway-system"); LB per
+│             │   loadbalancer_provider (ovn/octavia/metallb/
+│             │   cloud-native)
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│ Service     │  ClusterIP (10.43.x.x)
+│ Service     │  ClusterIP (10.43.x.x default)
 │ Network     │
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│ Pod Network │  Pod IPs (10.42.x.x)
-│ (Calico)    │  VXLAN/IPIP/BGP encapsulation
+│ Pod Network │  Pod IPs (10.42.x.x default)
+│ (Calico by default) │  VXLAN/IPIP/no-encapsulation, per network_plugin.calico
 └─────────────┘
 ```
 
 ### Control Plane Access
 
-The Kubernetes API server is exposed through one of these mechanisms (provider-dependent):
+The Kubernetes API server's HA mechanism is provider-dependent. Note that `vrrp_enabled` and `kube_vip_enabled` are independent booleans and both default to `true` for OpenStack, VMware, and bare metal simultaneously — the schema does not enforce that only one is set:
 
-| Provider | API HA Mechanism | Configuration |
+| Provider | API HA options | Configuration |
 | --- | --- | --- |
-| OpenStack (with Octavia) | Octavia load balancer | `use_octavia: true` |
-| OpenStack (without Octavia) | VRRP virtual IP | `vrrp_enabled: true`, `vrrp_ip: <IP>` |
-| VMware | VRRP or kube-vip | `vrrp_enabled: true` or `kube_vip_enabled: true` |
-| Bare metal | VRRP | `vrrp_enabled: true`, `vrrp_ip: <IP>` |
-| Kind | localhost port mapping | `api_server_port: <port>` |
+| OpenStack | Neutron/OVN LB (default), Octavia LB, and/or VRRP/kube-vip VIP | `infrastructure.networking.loadbalancer_provider` (`ovn`\|`octavia`\|`metallb`\|`cloud-native`), `infrastructure.networking.use_octavia`, `infrastructure.networking.vrrp_enabled`/`vrrp_ip`, `cluster.kubernetes.kube_vip_enabled` |
+| VMware | VRRP and/or kube-vip VIP | `infrastructure.networking.vrrp_enabled`/`vrrp_ip`, `cluster.kubernetes.kube_vip_enabled` |
+| Bare metal | VRRP and/or kube-vip VIP | Same fields as VMware |
+| Kind | Docker-to-host port mapping | `infrastructure.kind.api_server_port` (default `6443`) via `infrastructure.kind.api_server_address` (default `127.0.0.1`) |
+| Magnum | Owned by the Magnum cluster template | Not configured through openCenter's networking fields |
 
-**Evidence:** `internal/config/types_cluster.go` ClusterNetworkingConfig
+**Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/defaults.go`
 
 ## Plan the IP Addresses
 
-Careful IP planning prevents conflicts and simplifies troubleshooting. Use this worksheet as a starting point.
+Careful IP planning prevents conflicts and simplifies troubleshooting. The defaults below apply to OpenStack, VMware, and bare metal (Kind uses its own Docker-network defaults; Magnum has no node-network fields).
 
 ### Node Network Allocation
 
-For a `/22` node network (`10.2.128.0/22`, 1,024 addresses):
+The default node network is `10.2.128.0/22`. Within it, the individual defaults are **not** contiguous in the way a single allocation-pool worksheet would suggest — the gateway, VRRP VIP, and allocation-pool start are three distinct, independently configurable addresses:
 
-| Range | Purpose | Example |
+| Field | Default | Purpose |
 | --- | --- | --- |
-| `.1` | Network gateway | `10.2.128.1` |
-| `.2–.9` | Infrastructure (DNS, NTP, bastion) | `10.2.128.2` (bastion) |
-| `.10` | Kubernetes API VIP (VRRP) | `10.2.128.10` |
-| `.20–.22` | Control plane nodes | `10.2.128.20–22` |
-| `.23–.25` | Worker nodes (initial pool) | `10.2.128.23–25` |
-| `.26–.99` | Additional worker pools / future growth | Reserved |
-| `.100–.200` | MetalLB address pool (LoadBalancer services) | `10.2.128.100–200` |
-| `.201–.254` | Reserved | Future use |
+| `infrastructure.networking.subnet_nodes` | `10.2.128.0/22` | Node network CIDR |
+| `infrastructure.networking.gateway` | `10.2.128.1` | Network gateway |
+| `infrastructure.networking.vrrp_ip` | `10.2.128.5` | Kubernetes API VIP (when `vrrp_enabled: true`) |
+| `infrastructure.networking.allocation_pool_start` | `10.2.128.10` | Start of the DHCP/allocation range used for node IPs |
+| `infrastructure.networking.allocation_pool_end` | `10.2.131.250` | End of the allocation range |
 
-Configure the allocation pool to match:
+Control plane and worker node counts (`master_count: 3`, `worker_count: 3` by default) draw their addresses from within the allocation pool; for VMware and bare metal, node IPs are instead defined explicitly as static nodes.
+
+Example, keeping the defaults:
 
 ```yaml
 opencenter:
-  cluster:
+  infrastructure:
     networking:
       subnet_nodes: "10.2.128.0/22"
+      gateway: "10.2.128.1"
+      vrrp_ip: "10.2.128.5"
       allocation_pool_start: "10.2.128.10"
       allocation_pool_end: "10.2.131.250"
-      vrrp_ip: "10.2.128.10"
+      vrrp_enabled: true
 ```
 
 ### Pod and Service Networks
@@ -375,142 +417,147 @@ opencenter:
         - "0.pool.ntp.org"   # Fallback
 ```
 
-Use internal DNS and NTP servers when available. Public servers are acceptable for development but introduce an external dependency in production.
+Use internal DNS and NTP servers when available. Public servers are acceptable for development but introduce an external dependency in production. `dns_nameservers` requires at least one entry validated as IPv4; both fields live under `opencenter.infrastructure.networking`, not under `cluster`.
 
-**Evidence:** `docs/operations/configure-networking.md`, `internal/config/types_cluster.go`
+**Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/defaults/openstack.go` (region-specific NTP/DNS defaults)
 
-## Add-ons and Preview Features
+## Add-ons and Default Service Set
 
-### GA Platform Services
+openCenter ships roughly 30 schema-defined services (`opencenter.services.*`). At `cluster init` time, `internal/config/v2/defaults.go` materializes a subset of these with real defaults; the rest exist in the schema but are not part of the generated default set. The table below is split by that real distinction rather than by an unverified "GA vs. preview" maturity label.
 
-These services are production-supported and enabled by default:
+### Enabled by default (OpenStack / VMware / bare metal)
 
-| Service | Category | Purpose |
+| Service | Purpose | Notes |
 | --- | --- | --- |
-| cert-manager | Security | Automated TLS certificate lifecycle |
-| Keycloak | Identity | OIDC provider, user federation, MFA |
-| Kyverno | Policy | 17 ClusterPolicies for baseline security |
-| RBAC Manager | Access | Declarative RBAC from Keycloak groups |
-| kube-prometheus-stack | Observability | Prometheus, Grafana, Alertmanager |
-| Loki | Observability | Log aggregation with LogQL |
-| Tempo | Observability | Distributed tracing |
-| Gateway API + Envoy | Networking | Modern ingress with HTTPRoute |
-| Calico | Networking | CNI with network policy support |
-| MetalLB | Networking | Bare metal load balancer |
-| Velero | Backup | Application backup and restore |
-| etcd-backup | Backup | Cluster state snapshots to S3 |
-| FluxCD | GitOps | Continuous reconciliation engine |
-| Headlamp | Management | Kubernetes dashboard with OIDC |
-| OLM | Management | Operator lifecycle management |
-| PostgreSQL Operator | Management | Database for Keycloak and other services |
+| calico | CNI, network policy | Default CNI |
+| cert-manager | TLS certificate lifecycle | `letsencrypt_server` defaults to the public Let's Encrypt ACME endpoint |
+| external-snapshotter | VolumeSnapshot CRDs | Works with CSI drivers that support snapshots |
+| fluxcd, sources | GitOps reconciliation engine | |
+| gateway, gateway-api | Gateway API ingress (Envoy) | |
+| headlamp | Kubernetes dashboard | Has real OIDC fields (`oidc_client_id`, `oidc_issuer_url`) |
+| keycloak | OIDC identity provider | |
+| postgres-operator | Database operator (used by Keycloak) | |
+| rbac-manager | Converts Keycloak groups to cluster RBAC | Policy content not in this repository (see below) |
+| kube-prometheus-stack | Prometheus, Grafana, Alertmanager | |
+| kyverno | Policy engine | Policy content not in this repository (see below) |
+| loki | Log aggregation | |
+| tempo | Distributed tracing | |
+| olm | Operator Lifecycle Manager | |
+| openstack-ccm, openstack-csi | OpenStack cloud provider integration | Enabled only for `openstack`; explicitly disabled by defaults for `kind`, `baremetal`, `vmware` |
+| velero | Application backup | **Enabled by default only for OpenStack** — disabled by default for `kind`, `baremetal`, and `vmware` |
 
-### Preview / Optional Services
+### Present in the schema but disabled by default everywhere
 
-| Service | Status | Notes |
-| --- | --- | --- |
-| Cilium CNI | Preview | eBPF-based networking, kube-proxy replacement |
-| Kube-OVN | Preview | Software-defined networking with Cilium integration |
-| Istio | Optional | Service mesh with mTLS (for zero-trust requirements) |
-| Weave GitOps | Optional | Web UI for FluxCD |
-| Windows workers | Informational | Not a supported deployment target at GA |
-| Talos Linux | Preview | Immutable OS with disk encryption, WireGuard, vTPM |
+These require an explicit `enabled: true` after `cluster init`:
 
-**Evidence:** `docs/reference/platform-services.md`, `docs/concepts/provider-comparison.md`
+| Service | Purpose |
+| --- | --- |
+| etcd-backup | etcd snapshot CronJob (see [Business Continuity Decisions](#business-continuity-decisions)) |
+| metallb | Load balancer for environments without a cloud LB |
+| longhorn | Distributed block storage |
+| harbor | Self-hosted container registry |
+| vsphere-csi | vSphere CSI platform-service entry (distinct from the automatically-enabled `cluster.kubernetes.storage_plugin.vsphere_csi` in-cluster plugin) |
+| weave-gitops | Web UI for FluxCD |
+| mimir | Metrics long-term storage |
+| opentelemetry-kube-stack | OpenTelemetry Collector |
+| sealed-secrets | Alternative secret sealing |
+| kafka-cluster | Kafka cluster operator |
+
+### CNI alternatives (Calico is default)
+
+Cilium and Kube-OVN are real, schema-backed CNI options — see `internal/services/plugins/cilium.go`, `kube_ovn.go`, and `cluster.kubernetes.network_plugin.{cilium,kube-ovn}` — but neither has a service plugin comment or config flag marking it "preview," and neither is part of `defaultServiceMap`/`NewDefaultServiceConfig`'s default set. In practice this means: Calico is what a new cluster gets unless you explicitly configure a different CNI plugin.
+
+### Not implemented in this codebase
+
+A grep of this repository found no trace of the following, so they are omitted rather than described as roadmap items: Istio, Talos Linux (in fact, `opencenter.talos` is explicitly rejected — `internal/config/v2/validator.go`: `"opencenter.talos is not supported in v2; remove the opencenter.talos section"` — and `internal/gitops/copy.go` skips any `talos/` template directory with the comment "Talos is no longer supported"), `openCenter-AirGap`, and `openCenter-customer-app-example`. Windows worker pools, by contrast, **are** real and implemented (see [Configure Compute for the Base Cluster](#configure-compute-for-the-base-cluster)) — only the separate `opencenter-windows` Ansible-collection repository referenced by some historical docs has no trace in this codebase.
+
+**Evidence:** `internal/config/v2/defaults.go` (`NewDefaultServiceConfig`, `defaultServiceMap`, `applyProviderBehaviorDefaults`), `internal/services/plugins/cilium.go`, `internal/services/plugins/kube_ovn.go`, `internal/config/v2/validator.go`, `internal/gitops/copy.go`
 
 ## Container Image Reference
 
-All platform service images are pulled from public registries by default. For air-gapped deployments, `openCenter-AirGap` mirrors all images to a local bastion registry.
+Each service in the schema has a generic `image: {repository, tag}` override (for example `opencenter.services.calico.image.repository`), but this repository does not contain the default repository/tag values themselves, nor any registry-mirroring or air-gap tooling. Concretely:
 
-### Registry Sources
+* A repo-wide search found no `registry.k8s.io`/`ghcr.io`/`quay.io`/`docker.io` image defaults hardcoded in `internal/config/services/` or `internal/gitops/templates/` — actual default images and version pins live in the external `openCenter-gitops-base` repository that FluxCD pulls from, not in this CLI.
+* There is no `openCenter-AirGap` reference, no bastion-registry-mirroring code, and no `image_repository`/`image_tag` flat fields (the real shape is the nested `image.repository`/`image.tag` object shown above).
+* The one registry that does exist in this repository is Kind's own optional local registry (`infrastructure.kind.registry`, disabled by default, default port `5001`) — this is for local development, not air-gapped production mirroring.
 
-| Registry | Services |
-| --- | --- |
-| `registry.k8s.io` | Kubernetes components, vSphere CSI |
-| `ghcr.io` | FluxCD, openCenter services, alert-proxy |
-| `docker.io` | Calico, Longhorn, various Helm charts |
-| `quay.io` | cert-manager, Prometheus, OLM |
-
-### Image Pinning
-
-Service versions are pinned in `openCenter-gitops-base` via Git tags. Clusters reference a specific tag:
-
-```yaml
-# GitRepository source in customer overlay
-spec:
-  ref:
-    tag: v1.0.0  # Pinned version
-```
-
-Individual service images can be overridden per-cluster:
+Example of the real per-service override shape (values below are illustrative, not verified defaults):
 
 ```yaml
 opencenter:
   services:
-    vsphere-csi:
-      image_repository: "registry.k8s.io/csi-vsphere"
-      image_tag: "v3.3.0"
+    calico:
+      image:
+        repository: "<your-mirror>/calico/node"
+        tag: "<pinned-version>"
 ```
 
-### Air-Gap Image Mirroring
-
-For disconnected environments, the bastion host serves as a local registry on port 5000. All images are rewritten to pull from `bastion:5000/` instead of public registries.
-
-**Evidence:** `internal/config/types_services.go` ServiceCfg, Ecosystem.md air-gap section
+**Evidence:** `schema/opencenter-v2.schema.json` (per-service `image` object), `internal/config/v2/infrastructure.go` (`KindRegistryConfig`)
 
 ## Configure Compute for the Base Cluster
 
 ### Node Sizing
 
-openCenter uses "flavors" (instance types) to define compute resources. The minimum recommended sizes:
+openCenter uses provider "flavors" (instance types), configured under `opencenter.infrastructure.compute.{flavor_master,flavor_worker,flavor_bastion}` — not under `cluster.kubernetes`. For OpenStack, the region-defaults registry names its flavors with an implied vCPU/RAM shape (`internal/config/defaults/openstack.go`), for example both the `sjc3` and `dfw3` regions default to:
 
-| Role | vCPUs | RAM | Disk | Config Field |
-| --- | --- | --- | --- | --- |
-| Control plane | 4 | 8 GB | 40 GB | `flavor_master` |
-| Worker | 4 | 16 GB | 100 GB | `flavor_worker` |
-| Bastion | 2 | 4 GB | 20 GB | `flavor_bastion` |
+| Role | Default flavor | Implied sizing |
+| --- | --- | --- |
+| Bastion | `gp.5.2.4` | 2 vCPU / 4 GB (naming convention) |
+| Control plane | `gp.5.4.8` | 4 vCPU / 8 GB |
+| Worker | `gp.5.4.16` | 4 vCPU / 16 GB |
+| Windows worker | `gp.5.4.16` | 4 vCPU / 16 GB |
 
-Production clusters should use larger flavors for workers depending on workload density.
+Boot volume size defaults to 40 GB for both control plane and worker nodes (`infrastructure.storage.master_volume_size`/`worker_volume_size`); there is no separate bastion volume-size field. VMware and bare metal have no numeric vCPU/RAM defaults in this repository — their flavor/image fields are free strings supplied by the operator (VMware defaults to placeholder names like `vmware-master`/`vmware-worker`; bare metal has no default bastion flavor since `bastion.enabled` defaults to `false`).
 
 ### Node Counts
 
-| Role | Minimum | Recommended | Maximum |
-| --- | --- | --- | --- |
-| Control plane | 1 (dev) | 3 (HA) | 100 |
-| Workers | 1 | 2--3 | 1,000 |
-| Windows workers | 0 | 0 | 100 |
+`master_count`, `worker_count`, and `worker_count_windows` (`opencenter.infrastructure.compute`) are all validated with `min=0` only — the schema and Go validation tags define no maximum:
+
+| Role | Schema minimum | `cluster init` default |
+| --- | --- | --- |
+| Control plane | 0 | 3 |
+| Workers | 0 | 3 |
+| Windows workers | 0 | 0 |
+
+A `master_count: 0` configuration is valid but only for the Kamaji hosted-control-plane deployment method, which requires it (`internal/config/v2/deployment_validator.go`).
 
 ### Additional Worker Pools
 
-For heterogeneous workloads, define additional worker pools with different flavors, images, or affinity rules:
+`opencenter.infrastructure.compute.additional_server_pools_worker` is an array whose items require `name` and `flavor`; the other real fields are `count`, `image`, `labels` (map of strings), `taints` (each with required `key`/`effect`), `boot_volume` (with required `size`, plus `destination_type`/`source_type`/`type`/`delete_on_termination`), and `additional_volumes`. There is **no** `worker_count`, `flavor_worker`, `node_worker`, `server_group_affinity`, or `worker_node_bfv_volume_size` field on this object — those names do not exist in `schema/opencenter-v2.schema.json`:
 
 ```yaml
 opencenter:
-  cluster:
-    kubernetes:
+  infrastructure:
+    compute:
       additional_server_pools_worker:
         - name: gpu-workers
-          worker_count: 2
-          flavor_worker: "gpu.large"
-          node_worker: "gpu"
-          server_group_affinity: "soft-anti-affinity"
-          worker_node_bfv_volume_size: 200
+          flavor: "gpu.large"
+          count: 2
+          boot_volume:
+            size: 200
+          labels:
+            workload: gpu
+          taints:
+            - key: "nvidia.com/gpu"
+              effect: "NoSchedule"
 ```
 
-Each pool gets its own naming convention, flavor, and optional subnet placement.
+The Windows-specific equivalent, `additional_server_pools_worker_windows`, has the same shape plus a per-pool `server_group_affinity` string (`affinity`\|`anti-affinity`\|`soft-affinity`\|`soft-anti-affinity`) — that field exists only on the Windows pool item, not on the regular worker pool item.
 
 ### Server Group Affinity
 
-For HA, use anti-affinity to spread nodes across physical hosts:
+The cluster-wide default is set at the top level, not per pool:
 
 ```yaml
 opencenter:
   infrastructure:
     server_group_affinity:
-      - "anti-affinity"  # Hard: fail if same host
-      # or "soft-anti-affinity"  # Best-effort spread
+      - "anti-affinity"   # cluster init default
 ```
 
-**Evidence:** `internal/config/types_kubernetes.go` KubernetesConfig, AdditionalServerPool
+`infrastructure.server_group_affinity` is a `[]string`; `cluster init` sets it to `["anti-affinity"]` by default for OpenStack/VMware/bare metal.
+
+**Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/defaults.go`, `internal/config/defaults/openstack.go`, `schema/opencenter-v2.schema.json`
 
 ## Integrate OIDC for the Cluster
 
@@ -526,140 +573,112 @@ User → Keycloak (authenticate) → ID Token (JWT)
 
 ### Kubernetes API Server OIDC Configuration
 
+The API-server-facing OIDC fields live at `opencenter.cluster.kubernetes.oidc` (not under `opencenter.oidc` — there is no such top-level block):
+
 ```yaml
 opencenter:
   cluster:
     kubernetes:
       oidc:
         enabled: true
-        kube_oidc_url: "https://auth.<org>.<cluster>.<region>.k8s.opencenter.cloud/realms/opencenter"
+        kube_oidc_url: "https://auth.<cluster>.<region>.k8s.opencenter.cloud/realms/opencenter"
         kube_oidc_client_id: "kubernetes"
         kube_oidc_username_claim: "preferred_username"
         kube_oidc_username_prefix: "oidc:"
         kube_oidc_groups_claim: "groups"
         kube_oidc_groups_prefix: "oidc:"
+        kube_oidc_ca_file: "/etc/kubernetes/pki/oidc-ca.pem"
 ```
 
-This configures the API server flags:
+The same `oidc` object also carries a second, generic set of fields (`client_id`, `client_secret`, `issuer_url`, `username_claim`, `groups_claim`) alongside the `kube_oidc_*` fields — both live in the single `OIDCConfig` struct (`internal/config/v2/cluster.go`).
 
-* `--oidc-issuer-url` → Keycloak realm URL
-* `--oidc-client-id` → Client registered in Keycloak
-* `--oidc-username-claim` → JWT claim for username
-* `--oidc-groups-claim` → JWT claim for group membership
+### Keycloak Groups and RBAC
 
-### Default RBAC Policies
+Keycloak's realm template provisions a `cluster-admins` group (`internal/gitops/templates/cluster-apps-base/services/keycloak/20-keycloak/opencenter-realm.yaml.tpl`). RBAC Manager (`services.rbac-manager`, enabled by default) is described as converting Keycloak groups into cluster RBAC, but this repository contains no RBAC Manager templates or CRD definitions to verify the specific mapping mechanism or additional default groups (for example a `viewers`/`view` mapping) — that content, if it exists, lives outside this codebase. Treat `cluster-admins` as the one verifiable default group.
 
-RBAC Manager converts Keycloak groups to Kubernetes RoleBindings:
-
-| Keycloak Group | Kubernetes Role | Scope |
-| --- | --- | --- |
-| `cluster-admins` | `cluster-admin` | Cluster-wide |
-| `viewers` | `view` | Cluster-wide |
-
-Custom groups can be added via RBACDefinition CRDs in the GitOps repository.
-
-**Evidence:** `internal/config/types_kubernetes.go` OIDCConfig, `docs/reference/platform-services.md` keycloak/rbac-manager
+**Evidence:** `internal/config/v2/cluster.go` (`OIDCConfig`), `internal/gitops/templates/cluster-apps-base/services/keycloak/20-keycloak/opencenter-realm.yaml.tpl`
 
 ## Integrate OIDC for the Workload
 
-Platform services that expose web UIs also authenticate through Keycloak OIDC. This provides single sign-on across the platform.
+There is no top-level `opencenter.oidc` block with `client_id`/`secret_name`/`scopes`/`logout_path` fields — that path does not exist in the schema. The real, verifiable workload-OIDC surface is smaller:
 
-### Services with OIDC Integration
+* `opencenter.identity.oidc` — `enabled` (bool), `provider` (`keycloak`\|`entra`\|`generic`), `source` (`internal`\|`external`). This is the platform-wide identity provider selection, not a per-service SSO block.
+* `opencenter.services.headlamp.oidc_client_id` / `oidc_issuer_url` — Headlamp is the one service in the schema with its own OIDC fields.
 
-| Service | OIDC Config Location | Purpose |
-| --- | --- | --- |
-| Headlamp | `services.headlamp.oidc_*` | Kubernetes dashboard SSO |
-| Grafana | kube-prometheus-stack values | Monitoring dashboard SSO |
-| Weave GitOps | `services.weave-gitops` | GitOps UI SSO |
-
-### Global OIDC Configuration
-
-A global OIDC block configures shared settings for all services:
+No other service in `schema/opencenter-v2.schema.json` (including `kube-prometheus-stack`/Grafana, `weave-gitops`, and `gateway`) has an `oidc_*` field, so claims of Grafana SSO via kube-prometheus-stack values, Weave GitOps OIDC, or Gateway-API-enforced OIDC authentication are not verifiable in this repository and have been removed rather than asserted.
 
 ```yaml
 opencenter:
-  oidc:
-    enabled: true
-    client_id: "opencenter"
-    secret_name: "gateway-oidc-secret"
-    scopes:
-      - openid
-      - profile
-      - email
-      - groups
-    logout_path: "/logout"
+  identity:
+    oidc:
+      enabled: true
+      provider: keycloak
+      source: internal
+  services:
+    headlamp:
+      oidc_client_id: "headlamp"
+      oidc_issuer_url: "https://auth.<cluster>.<region>.k8s.opencenter.cloud/realms/opencenter"
 ```
 
-Individual services reference this global configuration. The Gateway API can enforce OIDC authentication at the ingress layer, so services behind the gateway inherit authentication without implementing it themselves.
-
-**Evidence:** `internal/config/types_opencenter.go` GlobalOIDCConfig, GatewayGlobalConfig
+**Evidence:** `schema/opencenter-v2.schema.json` (`opencenter.identity.oidc`, `opencenter.services.headlamp`), `internal/config/v2/readiness.go` (`cfg.OpenCenter.Identity.OIDC`)
 
 ## Select a Networking Model
 
 ### CNI Selection
 
-openCenter supports three CNI plugins. Only one can be active per cluster.
+`opencenter.cluster.kubernetes.network_plugin` has three sub-objects — `calico`, `cilium`, `kube-ovn` — each independently toggled by its own `enabled` flag. Calico is the only one materialized into the default config; Cilium and Kube-OVN have real, tunable configuration (see below) but are not part of `cluster init`'s generated defaults, so selecting either is an explicit operator choice, not a documented "preview" tier:
 
-| CNI | Encapsulation | kube-proxy | Best For |
+| CNI | Config path | Tunable fields | kube-proxy |
 | --- | --- | --- | --- |
-| Calico (default) | VXLAN, IPIP, or None (BGP) | Standard | Most deployments. Mature, well-understood, strong network policy support. |
-| Cilium (preview) | VXLAN or native | Replaceable (eBPF) | Teams wanting eBPF observability and kube-proxy replacement. |
-| Kube-OVN (preview) | Geneve | Standard | Software-defined networking with subnet isolation. Optional Cilium integration. |
+| Calico (default) | `network_plugin.calico` | `ipip_mode`/`vxlan_mode` (`Always`\|`CrossSubnet`\|`Never`), `encapsulation_type`, `cni_iface`, `nat_outgoing` | Standard |
+| Cilium | `network_plugin.cilium` | `tunnel_mode` (`vxlan`\|`geneve`\|`disabled`), `hubble`, `operator_enabled`, `kube_proxy_replacement` | Replaceable via `kube_proxy_replacement` |
+| Kube-OVN | `network_plugin.kube-ovn` | `cilium_integration`, `network_policy` | Standard |
 
-### Calico Encapsulation Trade-offs
+Separately, `opencenter.services.calico`/`cilium`/`kube-ovn` are platform-service entries (enable/version/namespace) distinct from this per-CNI tuning object; only `services.calico` is in the default service set.
 
-| Mode | Overhead | Requirements | Use When |
-| --- | --- | --- | --- |
-| VXLAN | ~50 bytes/packet | None | Default. Works everywhere. |
-| IPIP | ~20 bytes/packet | IP-in-IP protocol allowed | Lower overhead than VXLAN, but some clouds block it. |
-| None (BGP) | Zero | BGP-capable network fabric | Bare metal with ToR switches that peer BGP. Best performance. |
+### Calico Encapsulation Modes
 
-### Load Balancer Selection
+`ipip_mode`/`vxlan_mode` each accept `Always`, `CrossSubnet`, or `Never` — setting both to `Never` (with an appropriate `encapsulation_type`) is how a BGP/no-encapsulation setup is expressed. There is no separate boolean "BGP mode" flag; it falls out of the IPIP/VXLAN mode combination.
 
-| Provider | Type | Use When |
-| --- | --- | --- |
-| MetalLB | L2 ARP or BGP | Bare metal, VMware, any environment without cloud LB |
-| Octavia | Cloud LB | OpenStack with Octavia service available |
-| OVN | Cloud LB | OpenStack with OVN networking |
-| cloud-native | Provider LB | AWS (not GA for cluster provisioning, but usable for services) |
+### Load Balancer Provider
 
-**Evidence:** `internal/config/types_kubernetes.go` NetworkPlugin, `docs/operations/configure-networking.md`
+`infrastructure.networking.loadbalancer_provider` is a single enum field, not an independent per-environment choice — valid values are `ovn` (default), `octavia`, `metallb`, and `cloud-native`. Whichever value is set there is orthogonal to whether the `services.metallb` platform service is enabled (it defaults to `disabled` and must be turned on explicitly if `metallb` is the chosen load-balancer provider).
+
+**Evidence:** `internal/config/v2/cluster.go` (`NetworkPluginConfig`, `CalicoConfig`, `CiliumConfig`, `KubeOVNConfig`), `internal/config/v2/infrastructure.go` (`LoadbalancerProvider`), `internal/services/plugins/cilium.go`, `kube_ovn.go`
 
 ## Deploy Ingress Resources
 
 ### Gateway API (Recommended)
 
-openCenter uses Gateway API as the standard ingress model. It replaces the older Ingress resource with a more expressive, role-oriented API.
+openCenter uses Gateway API as the standard ingress model. Two related services exist: `services.gateway` (namespace `gateway`, has `default_issuer`/`gateway_class`/`gateway_name`/`gateway_namespace`/`listeners` fields) and `services.gateway-api` (namespace `envoy-gateway-system`). Both default to enabled.
 
 ```
-Internet → LoadBalancer (MetalLB/Octavia)
-              → Gateway (Envoy, namespace: rackspace-system)
+Internet → LoadBalancer (per loadbalancer_provider)
+              → Gateway (namespace: gateway)
                   → HTTPRoute (per-service routing)
                       → Service → Pods
 ```
 
 ### Hostname Convention
 
-Services follow a predictable hostname pattern:
+Several services derive their hostname from `cluster_fqdn` directly, for example Headlamp defaults to `dashboard.<cluster_fqdn>` and Keycloak to `auth.<cluster_fqdn>` (`internal/config/v2/defaults.go`). `cluster_fqdn` itself defaults to:
 
 ```
-<service>.<org>.<cluster>.<region>.<base_domain>
+<cluster-name>.<region>.k8s.opencenter.cloud
 ```
 
-Example: `auth.my-org.production.sjc3.k8s.opencenter.cloud`
-
-Configure the base domain and cluster FQDN:
+(`defaultBaseDomain = "k8s.opencenter.cloud"`; there is no separate "org" segment baked into the default — `base_domain`/`cluster_fqdn` are both free-form FQDN-validated strings that can be fully customized):
 
 ```yaml
 opencenter:
   cluster:
     base_domain: "k8s.opencenter.cloud"
-    cluster_fqdn: "production.sjc3.k8s.opencenter.cloud"
+    cluster_fqdn: "my-cluster.sjc3.k8s.opencenter.cloud"
 ```
 
 ### TLS Certificates
 
-cert-manager automatically provisions TLS certificates for HTTPRoute hostnames using Let’s Encrypt (or a custom ACME server):
+cert-manager provisions TLS certificates and defaults to the public Let's Encrypt ACME endpoint:
 
 ```yaml
 opencenter:
@@ -669,40 +688,26 @@ opencenter:
       letsencrypt_server: "https://acme-v02.api.letsencrypt.org/directory"
 ```
 
-For internal CAs, provide a custom CA certificate:
+For DNS-01 ACME challenges, `cert-manager` has real `dns_provider` (`route53`\|`designate`\|`cloudflare`\|`clouddns`\|`azuredns`) and `dns_zones` fields — OpenStack Designate is one of the supported DNS-01 providers, consistent with the optional Designate DNS integration mentioned for OpenStack above. There is no `ca_certificates` field anywhere in the schema for supplying a custom internal CA bundle to cert-manager; that specific capability is not verifiable in this repository.
 
-```yaml
-opencenter:
-  cluster:
-    networking:
-      security:
-        ca_certificates: |
-          -----BEGIN CERTIFICATE-----
-          ...
-          -----END CERTIFICATE-----
-```
-
-**Evidence:** `docs/reference/platform-services.md` gateway-api/gateway/cert-manager
+**Evidence:** `internal/config/services/cert_manager.go`, `internal/config/v2/defaults.go`, `schema/opencenter-v2.schema.json` (`opencenter.services.gateway`, `gateway-api`)
 
 ## Secure the Network Flow
 
+This section summarizes the cluster- and platform-layer controls also covered in [Security Model](security-model.md); see that document for the full layered model and for what is and is not verifiable in this repository.
+
 ### Layer 1: Pod Security Admission (Cluster-Level)
 
-Kubespray configures the API server with Pod Security Admission:
+`opencenter.cluster.kubernetes.security.pod_security_standards` is a single string field with values `privileged`, `baseline`, or `restricted` (`cluster init` defaults to `"baseline"`). There is no separate enforce/audit/warn matrix in this schema — that would be a Kubernetes-native Pod Security Admission behavior layered on top of a single configured level, not something this field itself encodes.
 
-| Level | Mode | Effect |
-| --- | --- | --- |
-| Baseline | Enforce | Blocks known privilege escalations (no privileged containers, no host namespaces) |
-| Restricted | Audit | Logs violations of restricted policy |
-| Restricted | Warn | Warns users about restricted violations |
-
-Specific namespaces can be exempted:
+Namespaces can be exempted via `pod_security_exemptions`; when left unset, the generated Terraform/Ansible inputs default the exemption list to `["trivy-temp"]` (`internal/gitops/templates/infrastructure-cluster-template/main-default.tf.tpl` and the VMware/bare-metal variants):
 
 ```yaml
 opencenter:
   cluster:
     kubernetes:
       security:
+        pod_security_standards: "baseline"
         k8s_hardening: true
         pod_security_exemptions:
           - "kube-system"
@@ -711,35 +716,17 @@ opencenter:
 
 ### Layer 2: Kyverno Policies (Resource-Level)
 
-17 ClusterPolicies enforce baseline security across all namespaces:
-
-* `disallow-privileged-containers`
-* `disallow-host-namespaces`
-* `disallow-host-path`
-* `require-run-as-nonroot`
-* `restrict-seccomp`
-* `restrict-volume-types`
-* `disallow-capabilities` (and 10 more)
-
-Kyverno operates independently of Pod Security Admission, providing a second enforcement layer.
+Kyverno (`services.kyverno`) is enabled by default, but this repository contains no Kyverno `ClusterPolicy` templates — there is no `internal/gitops/templates/.../kyverno/` directory. Policy content is deployed from the separate `openCenter-gitops-base` repository. This document does not assert a specific policy count or list; see [Security Model](security-model.md) for the same caveat applied consistently.
 
 ### Layer 3: NetworkPolicies
 
-Platform services (FluxCD, OLM) ship with NetworkPolicies that restrict traffic to known peers. Application teams should add their own NetworkPolicies following the patterns in `openCenter-customer-app-example`.
+Calico, Cilium, and Kube-OVN each have a real `network_policy` boolean field (`internal/config/v2/cluster.go`), so NetworkPolicy enforcement is CNI-level and configurable. Specific NetworkPolicy manifests for platform services are not verifiable in this repository; this document does not claim which services ship with them.
 
 ### Layer 4: OS Hardening
 
-When `os_hardening: true`, Kubespray applies kernel-level security:
+`infrastructure.networking.security.os_hardening` (bool, default `true` in the generated Terraform) is passed into the bare-metal and VMware bootstrap templates as `os_hardening_enabled` (`internal/gitops/templates/infrastructure-cluster-template/main-baremetal.tf.tpl`, `main-vmware.tf.tpl`, `main-default.tf.tpl`). The specific hardening actions it triggers (firewall rules, sysctl settings, SSH policy) are implemented in the Kubespray/Ansible layer invoked by these templates, not in this CLI's Go code, so this document does not enumerate them as verified facts.
 
-* Firewall rules
-* Sysctl hardening (IP forwarding, source routing)
-* SSH hardening
-
-### Layer 5: Optional Service Mesh
-
-For zero-trust or multi-tenant environments, Istio provides mTLS between all pods. This is not enabled by default because it adds operational complexity.
-
-**Evidence:** `internal/config/types_security.go`, `docs/concepts/security-model.md`
+**Evidence:** `internal/config/v2/cluster.go`, `internal/gitops/templates/infrastructure-cluster-template/`, `docs/concepts/security-model.md`
 
 ## Add Secret Management
 
@@ -755,20 +742,23 @@ Developer writes secret → SOPS encrypts (Age key) → Git commit (ciphertext)
 
 ### SOPS Age Key Lifecycle
 
-| Key Type | Rotation Period | Storage |
+| Key Type | Default expiration | Local storage |
 | --- | --- | --- |
-| Age encryption key | 90 days | `secrets/age/<cluster>_keys.txt` |
-| SSH deploy key | 180 days | `secrets/ssh/` |
+| Age encryption key | 90 days | `~/.config/opencenter/clusters/<cluster>/secrets/age/<cluster>_keys.txt` |
+| SSH deploy key | 180 days | `~/.config/opencenter/clusters/<cluster>/secrets/ssh/` |
 
-Rotation uses a dual-key strategy: the new key encrypts new secrets while the old key remains valid for decryption, ensuring zero-downtime rotation.
+Rotation uses a dual-key strategy: the new key encrypts new secrets while the old key remains valid for decryption, ensuring zero-downtime rotation. See [Security Model](security-model.md) for the full key-registry and rotation-state model.
 
 ### Configuration
 
+The cluster-config SOPS block lives at `opencenter.secrets.sops`, not at a top-level `secrets:` key, and does not take an `age_keys` list — it references a single key file:
+
 ```yaml
-secrets:
-  sops:
-    age_keys:
-      - age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+opencenter:
+  secrets:
+    sops:
+      enabled: true
+      age_key_file: "/path/to/age-key.txt"
 ```
 
 ### Key Management Commands
@@ -786,51 +776,53 @@ opencenter secrets sync my-cluster                      # Synchronize secrets
 
 ### CSI Driver Selection
 
-The storage driver depends on the infrastructure provider:
+There are two distinct storage-plugin surfaces: `cluster.kubernetes.storage_plugin` (the in-cluster CSI plugin, enabled automatically based on provider) and `opencenter.infrastructure.storage.default_storage_class` (the default `StorageClass` name). Neither is named `storage_plugin.longhorn` — Longhorn is a separate top-level platform service (`opencenter.services.longhorn`), not a `storage_plugin` entry; `storage_plugin`'s real children are `aws_ebs_csi`, `azure_disk_csi`, `ceph`, `cinder_csi`, `gcp_compute_csi`, `trident`, and `vsphere_csi`.
 
-| Provider | CSI Driver | Default Storage Class | Dynamic Provisioning |
-| --- | --- | --- | --- |
-| OpenStack | Cinder CSI | `csi-cinder-sc-delete` | Yes |
-| VMware | vSphere CSI | `vsphere-sc` | Yes |
-| Bare metal | Longhorn | `longhorn` | Yes |
-| Kind | Local path | `standard` | Yes (host path) |
+| Provider | In-cluster CSI plugin | Default storage class |
+| --- | --- | --- |
+| OpenStack | `storage_plugin.cinder_csi` (auto-enabled) | `csi-cinder-sc-delete` |
+| VMware | `storage_plugin.vsphere_csi` (auto-enabled) | `vsphere-csi` |
+| Bare metal | None auto-enabled; `services.longhorn` is a reasonable choice but defaults to disabled | `standard` |
+| Kind | Kind's built-in local-path provisioner | `standard` |
 
 ### Longhorn (Distributed Storage)
 
-Longhorn provides replicated block storage for environments without a cloud storage backend. It runs on worker nodes and replicates data across them.
-
-Enable Longhorn:
+Longhorn provides replicated block storage for environments without a cloud storage backend. It is a platform service (`opencenter.services.longhorn`) with real fields `enabled`, `hostname`, `default_data_path`, `default_replica_count`, `storage_over_provisioning_percentage`, `storage_minimal_available_percentage`, `backup_target`, and `backup_target_credential_secret`. It defaults to **disabled** for every provider and must be explicitly enabled:
 
 ```yaml
 opencenter:
-  cluster:
-    kubernetes:
-      storage_plugin:
-        longhorn:
-          enabled: true
+  services:
+    longhorn:
+      enabled: true
 ```
-
-Longhorn is recommended for bare metal and can supplement cloud CSI drivers for workloads that need cross-node replication.
 
 ### Volume Snapshots
 
-The `external-snapshotter` service provides VolumeSnapshot CRDs. It works with any CSI driver that supports snapshots (Cinder, vSphere, Longhorn).
+The `external-snapshotter` service (enabled by default) provides VolumeSnapshot CRDs. It works with any CSI driver that supports snapshots.
 
 ### Boot Volume Configuration
 
-Node boot volumes are configurable per provider:
+Node boot volumes are configured under `opencenter.infrastructure.storage`, and the fields are separate per node role (`worker_*` and `master_*`), not shared:
 
 ```yaml
 opencenter:
-  storage:
-    default_storage_class: "csi-cinder-sc-delete"
-    worker_volume_size: 100          # GB
-    worker_volume_destination_type: "volume"
-    worker_volume_source_type: "image"
-    worker_volume_type: "HA-Standard"
+  infrastructure:
+    storage:
+      default_storage_class: "csi-cinder-sc-delete"   # provider-specific default; see table above
+      worker_volume_size: 40                            # GB, cluster init default
+      worker_volume_destination_type: "volume"          # volume|local
+      worker_volume_source_type: "image"                # image|volume|snapshot
+      worker_volume_type: "HA-Standard"                  # provider-specific default; free-text, not an enum
+      worker_volume_delete_on_termination: false
+      master_volume_size: 40
+      master_volume_destination_type: "volume"
+      master_volume_source_type: "image"
+      master_volume_type: "HA-Standard"
 ```
 
-**Evidence:** `internal/config/types_storage.go`, `internal/config/types_kubernetes.go` StoragePlugin
+`worker_volume_type`'s `cluster init` default is `"HA-Standard"` for OpenStack, `"vsphere-default"` for VMware, `"local-path"` for Kind, and `"Performance"` for bare metal — it is a free-text field validated only as `required`, not a fixed enum, so other values (like a hypothetical `"HA-Performance"`) are not schema-enforced defaults, just whatever your provider's catalog offers.
+
+**Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/cluster.go` (`StoragePluginConfig`), `internal/config/v2/defaults.go` (`defaultStorageClass`, `defaultStorageType`), `schema/opencenter-v2.schema.json`
 
 ## Policy Management
 
@@ -838,136 +830,117 @@ opencenter:
 
 openCenter enforces policy at two independent layers:
 
-| Layer | Engine | Scope | Action |
+| Layer | Engine | Scope | Notes |
 | --- | --- | --- | --- |
-| Cluster | Pod Security Admission | Namespace-level | Enforce/Audit/Warn |
-| Resource | Kyverno | Resource-level | Validate/Mutate/Generate |
+| Cluster | Pod Security Admission | Namespace-level | Configured via the single `pod_security_standards` field (`privileged`\|`baseline`\|`restricted`) |
+| Resource | Kyverno | Resource-level | `services.kyverno` is enabled by default, but its `ClusterPolicy` content is not in this repository |
 
-### Kyverno Default Ruleset
+### Kyverno Policy Content
 
-The 17 default ClusterPolicies cover the Kubernetes Pod Security Standards baseline:
-
-* Disallow privileged containers, host namespaces, host paths, host ports
-* Require non-root execution, read-only root filesystem
-* Restrict seccomp profiles, volume types, capabilities, sysctls
-* Disallow privilege escalation, default service accounts
-
-These policies are deployed via FluxCD from `openCenter-gitops-base` and apply to all namespaces except those explicitly exempted.
+This repository has no Kyverno `ClusterPolicy` templates and no count of default policies to verify — there is no `.../kyverno/` template directory anywhere under `internal/gitops/templates/`. Whatever baseline ruleset is deployed comes from the external `openCenter-gitops-base` repository that FluxCD reconciles from. This document intentionally does not restate a specific policy list or count; see [Security Model](security-model.md) for the same treatment.
 
 ### Custom Policies
 
-Add custom Kyverno policies in the cluster overlay:
-
-```
-applications/overlays/<cluster>/services/kyverno/custom-policies/
-├── require-labels.yaml
-└── restrict-registries.yaml
-```
+Per-cluster overlays follow the pattern `applications/overlays/<cluster>/services/<service>/...` (confirmed for Calico's Helm-values override, `internal/cluster/openstack_network_plugin.go`; the general glob `applications/overlays/[^/]+/(managed-services|services)/.*/.*\.ya?ml$` is used for SOPS encryption-path matching in `internal/core/validation/validators/gitops.go` and `internal/config/flags/sops_integration.go`). Following that same convention, a `kyverno` service overlay would live under `applications/overlays/<cluster>/services/kyverno/`, but this repository does not itself define or ship any Kyverno policy files there — that content is external.
 
 ### Policy Exemptions
 
-Namespaces that need elevated privileges (e.g., `kube-system`, `flux-system`) are exempted at the Pod Security Admission level via `pod_security_exemptions` in the cluster configuration.
+Namespaces that need elevated privileges are exempted at the Pod Security Admission level via `pod_security_exemptions`; when left unset, the generated infrastructure templates default this list to `["trivy-temp"]`.
 
-**Evidence:** `docs/concepts/security-model.md`, `docs/reference/platform-services.md` kyverno
+**Evidence:** `internal/config/v2/cluster.go`, `internal/gitops/templates/infrastructure-cluster-template/`, `internal/cluster/openstack_network_plugin.go`, `internal/core/validation/validators/gitops.go`, `docs/concepts/security-model.md`
 
 ## Node and Pod Scalability
 
 ### Horizontal Scaling
 
-Add workers by updating the configuration and re-running setup:
+`worker_count` lives under `opencenter.infrastructure.compute`, not `opencenter.cluster.kubernetes`:
 
 ```yaml
 opencenter:
-  cluster:
-    kubernetes:
-      worker_count: 5  # Increase from 3
+  infrastructure:
+    compute:
+      worker_count: 5  # increase from the cluster init default of 3
 ```
 
-For OpenStack, new VMs are provisioned automatically. For VMware and bare metal, pre-provision the hosts and add their IPs to the `worker_nodes` array.
+For OpenStack, new VMs are provisioned automatically through OpenTofu. For VMware and bare metal, pre-provision the hosts and add them as static nodes in configuration.
 
 ### Additional Worker Pools
 
-Separate pools allow different instance types for different workloads:
+Separate pools allow different flavors, images, labels, and taints for different workloads — using the real field names (`name`, `flavor`, `count`; see [Configure Compute for the Base Cluster](#configure-compute-for-the-base-cluster) for the full shape):
 
 ```yaml
 opencenter:
-  cluster:
-    kubernetes:
+  infrastructure:
+    compute:
       additional_server_pools_worker:
         - name: memory-optimized
-          worker_count: 3
-          flavor_worker: "m1.xlarge"
-          node_worker: "mem"
+          flavor: "m1.xlarge"
+          count: 3
 ```
 
-### Validated Limits
+### Scaling Limits
 
-| Dimension | Validated Maximum |
-| --- | --- |
-| Control plane nodes | 100 |
-| Worker nodes (per pool) | 1,000 |
-| Windows workers (per pool) | 100 |
-| Additional worker pools | No hard limit (validated per pool) |
+`master_count`, `worker_count`, and `worker_count_windows` are each validated only with `min=0` in both the Go struct tags and the JSON schema — there is **no** schema-enforced maximum (no "100 control plane / 1,000 workers / 100 Windows workers" cap exists in this codebase). Practical ceilings come from your provider's quotas and from Kubespray/etcd scaling characteristics, not from openCenter's own validation.
 
 ### Pod Density
 
-Pod density depends on the CNI and node size. Calico and Cilium both support the Kubernetes default of 110 pods per node. Adjust via Kubespray if needed.
+Pod-per-node density is a general Kubernetes/kubelet concern (the upstream default is 110 pods per node) rather than something this repository configures directly; adjusting it would go through the Kubespray/Ansible layer this CLI's bootstrap templates invoke, which is out of scope for this repository's Go code.
 
-**Evidence:** `internal/config/types_kubernetes.go` KubernetesConfig validation tags
+**Evidence:** `internal/config/v2/infrastructure.go`, `schema/opencenter-v2.schema.json`
 
 ## Business Continuity Decisions
 
 ### Backup Strategy
 
-openCenter provides two complementary backup mechanisms:
+openCenter provides two backup mechanisms, and **neither is enabled by default for every provider**:
 
-| Mechanism | What It Backs Up | Schedule | Retention |
-| --- | --- | --- | --- |
-| etcd snapshots | Cluster state (all API objects) | Every 6h (prod) | 30 days |
-| Velero | Application resources + persistent volumes | Daily (prod) | 90 days |
+| Mechanism | What It Backs Up | Default enablement | Schedule | Retention |
+| --- | --- | --- | --- | --- |
+| etcd-backup (`services.etcd-backup`) | etcd snapshot via `etcdctl snapshot save`, uploaded to S3-compatible storage | Disabled by default for every provider | `"0 1 * * *"` (daily at 01:00), hardcoded in the CronJob template — not user-configurable | Not managed by this repository's template; the CronJob only uploads a dated snapshot file, with no pruning step visible in `internal/gitops/templates/cluster-apps-base/services/etcd-backup/` |
+| Velero (`services.velero`) | Application resources + persistent volumes | **Enabled by default only for OpenStack**; explicitly disabled by default for `kind`, `baremetal`, and `vmware` (`internal/config/v2/defaults.go`) | Not defined in this repository — Velero's manifests live in the external `openCenter-gitops-base` repo | Not defined in this repository |
 
-### Recovery Scenarios
+Both services require S3 (or, for Loki/Tempo elsewhere, Swift) credentials configured through their respective `s3_*`/`backup_bucket` schema fields before they can actually run.
 
-| Scenario | Recovery Method | RTO |
-| --- | --- | --- |
-| Single pod failure | Kubernetes self-healing | Seconds |
-| Node failure | Kubernetes reschedules pods | Minutes |
-| etcd corruption | Restore from etcd snapshot | 30--60 minutes |
-| Application deletion | Velero restore | 15--30 minutes |
-| Full cluster loss | Rebuild from GitOps repo + restore data | 1--2 hours |
-| Cross-cluster migration | Velero backup/restore to new cluster | 1--2 hours |
+### Recovery Mechanisms
+
+This document does not assert specific recovery-time figures (RTOs), since none are defined anywhere in this repository. The verifiable mechanisms are:
+
+* **Pod/node failure** — handled by ordinary Kubernetes scheduling and self-healing; no openCenter-specific mechanism.
+* **etcd loss** — restorable from an etcd-backup snapshot, if the service was enabled and credentials were configured before the loss occurred.
+* **Application-data loss** — restorable via Velero, if enabled (OpenStack only, by default) and configured.
+* **Full cluster loss** — rebuildable from the GitOps repository plus whatever backups were actually running; see below.
 
 ### GitOps as Disaster Recovery
 
-Because all cluster configuration lives in Git, a full cluster rebuild is deterministic:
+Because cluster configuration lives in Git, a rebuild follows the same steps as an initial deploy:
 
-1. Provision new infrastructure (OpenTofu)
-2. Deploy Kubernetes (Kubespray)
-3. Bootstrap FluxCD (points to same Git repo)
+1. Provision infrastructure (OpenTofu, for OpenStack/VMware/bare metal) or recreate the Magnum cluster
+2. Deploy Kubernetes (Kubespray, Kamaji, or Magnum, depending on the chosen path)
+3. Bootstrap FluxCD, pointing at the same Git repository
 4. FluxCD reconciles all services and applications
-5. Restore persistent data from Velero backups
+5. Restore persistent data from etcd-backup/Velero backups, if those were enabled and running
 
-The Git repository is the recovery artifact. Protect it accordingly.
+The Git repository is the recovery artifact for configuration; it is not, by itself, a backup of application data unless a backup mechanism was actually enabled.
 
 ### Multi-Region Considerations
 
-For multi-region deployments, each region gets its own cluster with its own GitOps overlay. Shared configuration lives in `openCenter-gitops-base`. Region-specific overrides live in the cluster overlay.
+For multi-region deployments, each region gets its own cluster. Shared platform-service content is pulled from the external `openCenter-gitops-base` repository at a pinned release (`defaultGitBaseRepoURL`/`defaultGitBaseRepoRelease` in `internal/config/v2/defaults.go`); region-specific configuration lives in each cluster's own generated overlay.
 
-**Evidence:** `docs/operations/backup-and-restore.md`, `docs/reference/platform-services.md` velero/etcd-backup
+**Evidence:** `internal/config/v2/defaults.go`, `internal/gitops/templates/cluster-apps-base/services/etcd-backup/cronjob.yaml`, `internal/config/services/velero.go`
 
 ## Monitor and Collect Logs and Metrics
 
 ### Observability Stack
 
-openCenter deploys a complete observability pipeline:
+kube-prometheus-stack, Loki, and Tempo are all part of the default service set (enabled by default for OpenStack/VMware/bare metal):
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │ Prometheus   │    │ Loki         │    │ Tempo        │
 │ (Metrics)    │    │ (Logs)       │    │ (Traces)     │
 │              │    │              │    │              │
-│ Scrapes pods │    │ Receives     │    │ Receives     │
-│ every 30s    │    │ from agents  │    │ OTLP spans   │
+│ kube-prometheus- │ S3 or Swift  │    │ OTLP spans,  │
+│ stack service │  │ storage      │    │ S3/Swift     │
 └──────┬───────┘    └──────┬───────┘    └──────┬───────┘
        │                   │                   │
        └───────────┬───────┘───────────────────┘
@@ -975,54 +948,48 @@ openCenter deploys a complete observability pipeline:
             ┌──────▼───────┐
             │   Grafana    │
             │ (Dashboards) │
-            │ OIDC SSO     │
             └──────────────┘
 ```
 
+No scrape-interval, retention-period, or Grafana-OIDC-SSO field was found in the `kube-prometheus-stack` schema entry, so this document does not assert defaults for those.
+
 ### Metrics (kube-prometheus-stack)
 
-Components: Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics.
-
-Configure storage:
+Real fields (`opencenter.services.kube-prometheus-stack`): `enabled`, `prometheus_hostname`/`grafana_hostname`/`alertmanager_hostname`, `prometheus_volume_size`/`grafana_volume_size`/`alertmanager_volume_size`, `prometheus_storage_class`/`grafana_storage_class`/`alertmanager_storage_class`, and `webhook_url` (for Alertmanager's generic webhook receiver):
 
 ```yaml
 opencenter:
   services:
     kube-prometheus-stack:
       enabled: true
-      prometheus_volume_size: 50       # GB
+      prometheus_volume_size: 50       # GB — illustrative, not a verified default
       prometheus_storage_class: "csi-cinder-sc-delete"
       grafana_volume_size: 10
       alertmanager_volume_size: 10
-```
-
-Alertmanager supports webhook integration for external alerting systems:
-
-```yaml
-opencenter:
-  services:
-    kube-prometheus-stack:
       webhook_url: "https://alerts.example.com/webhook"
 ```
 
 ### Logs (Loki)
 
-Loki supports two storage backends:
+The real field is `storage_type` (not `loki_storage_type`), with values `s3` or `swift` plus matching `s3_*`/`swift_*` credential fields:
 
-| Backend | Use When | Configuration |
-| --- | --- | --- |
-| Swift (OpenStack) | OpenStack deployments | `loki_storage_type: "swift"` |
-| S3 | AWS or S3-compatible storage | `loki_storage_type: "s3"` |
+```yaml
+opencenter:
+  services:
+    loki:
+      storage_type: "swift"   # or "s3"
+      volume_size: 50
+```
 
 ### Traces (Tempo)
 
-Tempo receives OpenTelemetry (OTLP) spans and stores them in S3-compatible storage. Grafana queries Tempo for trace visualization.
+Tempo (`opencenter.services.tempo`) has the same `storage_type`/`s3_*`/`swift_*` shape as Loki, for receiving and storing OTLP spans.
 
 ### OpenTelemetry
 
-The OpenTelemetry Collector can be enabled to receive, process, and export telemetry data (metrics, logs, traces) in a vendor-neutral format.
+`opentelemetry-kube-stack` is a real service (`enabled`, `collector_mode`, `collector_replicas`, `exporters`, `processors`) but defaults to **disabled**.
 
-**Evidence:** `docs/reference/platform-services.md` kube-prometheus-stack/loki/tempo
+**Evidence:** `schema/opencenter-v2.schema.json` (`opencenter.services.kube-prometheus-stack`, `loki`, `tempo`, `opentelemetry-kube-stack`)
 
 ## Cluster and Workload Operations
 
@@ -1040,33 +1007,34 @@ The OpenTelemetry Collector can be enabled to receive, process, and export telem
 
 ### Drift Detection
 
-openCenter can detect configuration drift between the desired state (Git) and actual state (cluster/infrastructure):
+`opencenter cluster drift` is a command group with `detect`, `reconcile`, and `schedule` subcommands:
 
 ```bash
-opencenter cluster drift my-cluster
+opencenter cluster drift detect my-cluster
 ```
 
 | Provider | Drift Detection | Auto-Reconcile |
 | --- | --- | --- |
-| OpenStack | Yes | Limited |
+| OpenStack | Yes | Limited (per `docs/reference/providers.md`) |
 | VMware | Yes | No |
-| Bare metal | No | No |
-| Kind | No | No |
+| Magnum | No | No |
+| Bare metal | No (no cloud-state drift backend) | No |
+| Kind | Not applicable | Not applicable |
 
-FluxCD handles application-level drift automatically by continuously reconciling Git state to the cluster.
+FluxCD handles application-level drift automatically by continuously reconciling Git state to the cluster; this is separate from the infrastructure-level drift command above.
 
 ### Day-2 Operations
 
 | Operation | Method |
 | --- | --- |
-| Upgrade Kubernetes | Update `version` in config, re-run setup, Kubespray handles rolling upgrade |
-| Add workers | Update `worker_count`, re-run setup |
-| Enable/disable services | Toggle `enabled` flag, commit, FluxCD reconciles |
+| Upgrade Kubernetes | Update `cluster.kubernetes.version`, re-run `cluster generate`/`cluster deploy` |
+| Add workers | Update `infrastructure.compute.worker_count`, re-run `cluster generate`/`cluster deploy` |
+| Enable/disable services | Toggle a service's `enabled` flag, commit, FluxCD reconciles |
 | Rotate secrets | `opencenter secrets keys rotate --cluster <cluster> --type age` |
-| Backup | Automated via etcd-backup and Velero schedules |
-| Restore | `velero restore create --from-backup <name>` |
+| Backup | Only runs if `services.etcd-backup` and/or `services.velero` were explicitly enabled and configured with storage credentials — see [Business Continuity Decisions](#business-continuity-decisions) |
+| Restore | Upstream `velero restore create --from-backup <name>` (Velero's own CLI, not an `opencenter` subcommand) |
 
-**Evidence:** `docs/reference/cli-commands.md`, `docs/concepts/drift-detection.md`
+**Evidence:** `cmd/cluster_init.go`, `cmd/cluster_edit.go`, `cmd/cluster_validate.go`, `cmd/cluster_generate.go`, `cmd/cluster_deploy.go`, `cmd/cluster_status.go`, `cmd/cluster_destroy.go`, `cmd/cluster_drift.go`
 
 ## Cost Management
 
@@ -1076,12 +1044,12 @@ openCenter does not include built-in cost management tooling. Cost optimization 
 
 | Provider | Cost Lever | Approach |
 | --- | --- | --- |
-| OpenStack | Instance flavors | Right-size flavors for workload. Use smaller flavors for dev/staging. |
-| OpenStack | Storage | Use `HA-Standard` volumes for non-critical workloads, `HA-Performance` for databases. |
-| VMware | VM sizing | Align VM resources with actual utilization. Monitor via Prometheus. |
-| Bare metal | Hardware utilization | Maximize pod density per node. Use additional worker pools for burst capacity. |
-| All | Observability storage | Set appropriate retention periods for Prometheus (15d default), Loki, and Tempo. |
-| All | Backup retention | Match retention to compliance requirements, not "just in case." |
+| OpenStack | Instance flavors | Right-size `flavor_master`/`flavor_worker`/`flavor_bastion` for the workload; smaller custom flavors for dev/staging |
+| OpenStack | Storage | Choose `worker_volume_type`/`master_volume_type` from your OpenStack catalog to match performance needs — this is a free-text field, not a fixed `HA-Standard`/`HA-Performance` enum in the schema |
+| VMware | VM sizing | Align VM resources with actual utilization; monitor via kube-prometheus-stack, if enabled |
+| Bare metal | Hardware utilization | Maximize pod density per node; use additional worker pools for burst capacity |
+| All | Observability storage | Size `prometheus_volume_size`/`grafana_volume_size`/`alertmanager_volume_size`/Loki's `volume_size`/Tempo's storage deliberately — this repository does not set a default retention period for any of them |
+| All | Backup | Only pay for etcd-backup/Velero storage if you actually enable them; neither is on by default outside OpenStack's Velero default |
 
 ### Resource Monitoring
 
@@ -1107,13 +1075,11 @@ Right-size nodes and storage based on observed utilization, not initial estimate
 
 ## Related Resources
 
-* `openCenter-gitops-base` -- Base manifests for all platform services
-* `openCenter-customer-app-example` -- Reference patterns for application deployment
-* `openCenter-AirGap` -- Packaging for disconnected environments
-* `opencenter-windows` -- Windows worker node support (Ansible collection)
+* `openCenter-gitops-base` -- external repository providing base platform-service manifests (Kyverno policy content, Velero manifests, and other content not present in this repository) that FluxCD reconciles from
 * [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) -- Upstream PSS documentation
 * [FluxCD Documentation](https://fluxcd.io/docs/) -- GitOps toolkit reference
-* [Kyverno Policies](https://kyverno.io/policies/) -- Policy library and examples
+
+This repository has no `.kiro/steering/` directory and no trace of `openCenter-AirGap`, `openCenter-customer-app-example`, or `opencenter-windows` — those repository names are not cited as evidence anywhere in this document.
 
 ---
 
@@ -1121,12 +1087,12 @@ Right-size nodes and storage based on observed utilization, not initial estimate
 
 This document is based on:
 
-* Configuration types: `internal/config/types*.go`
-* Provider implementations: `internal/cloud/factory.go`
-* GitOps generation: `internal/gitops/generator.go`
-* SOPS management: `internal/sops/manager.go`
-* Existing documentation: `docs/concepts/architecture.md`, `docs/concepts/security-model.md`, `docs/concepts/gitops-workflow.md`, `docs/concepts/provider-comparison.md`
-* Platform services: `docs/reference/platform-services.md`
-* Networking guide: `docs/operations/configure-networking.md`
-* Backup guide: `docs/operations/backup-and-restore.md`
-* Ecosystem architecture: `.kiro/steering/ecosystem.md`
+* Configuration types and validation: `internal/config/v2/*.go` (`cluster.go`, `infrastructure.go`, `defaults.go`, `validator.go`, `deployment_validator.go`, `readiness.go`)
+* Configuration schema: `schema/opencenter-v2.schema.json`
+* Provider-region defaults: `internal/config/defaults/openstack.go`, `interfaces.go`
+* Provider implementations and boundaries: `internal/cloud/{openstack,vmware,kind,magnum}/`, `internal/cluster/provider/openstack/`, `internal/cluster/magnum_bootstrap_provider.go`
+* CNI/service plugins: `internal/services/plugins/cilium.go`, `kube_ovn.go`
+* GitOps templates: `internal/gitops/templates/cluster-apps-base/`, `internal/gitops/templates/infrastructure-cluster-template/`, `internal/gitops/copy.go`
+* SOPS/secrets management: `internal/sops/manager.go`, `internal/secrets/registry.go`, `rotation.go`
+* CLI commands: `cmd/cluster_*.go`, `cmd/secrets_*.go`
+* Sibling documentation (already verified this session, treated as consistent context): `docs/reference/providers.md`, `docs/CODEMAPS/providers.md`, `docs/concepts/security-model.md`, `docs/concepts/gitops-workflow.md`

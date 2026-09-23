@@ -168,9 +168,9 @@ The cert-manager templates live in `openCenter-cli/internal/gitops/templates/clu
 
 #### Category 1: GitRepository Source
 
-Template: `services/sources/opencenter-cert-manager.yaml.tpl`
+Template: `services/sources/opencenter-cert-manager.yaml.tpl`, which delegates to `sourceAuthBlockForService "cert-manager"` (`internal/gitops/copy.go`).
 
-All base-service source templates call one shared renderer. It preserves any service-level `source.repo`, `source.branch`, or `source.release` override while rendering both authentication variants. `--gitops-auth` selects the active block for this generation only; the other block remains commented so an operator can inspect or deliberately change it.
+All base-service source templates (cert-manager, calico, etcd-backup, fluxcd, harbor, kafka-cluster, keycloak, olm) call this one shared renderer. It preserves any service-level `source.repo`, `source.branch`, or `source.release` override while rendering both authentication variants as an active block plus a fully commented alternative. `--gitops-auth` selects which block is active for this generation run only; the other block remains commented so an operator can inspect or deliberately switch it later.
 
 Rendered output with the default token method:
 
@@ -186,26 +186,22 @@ spec:
   # --- token auth (active) ---
   url: https://github.com/opencenter-cloud/openCenter-gitops-base.git
   ref:
-    tag: 2026.01
-  secretRef:
-    name: opencenter-base
+    tag: "2026.01"
   # --- ssh auth (alternative) ---
   # url: ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git
   # ref:
-  #   tag: 2026.01
-  # secretRef:
-  #   name: opencenter-base
+  #   tag: "2026.01"
 ```
 
-Use `opencenter cluster generate <cluster> --gitops-auth=ssh` to make the SSH block active. The source uses the stable `opencenter-base` Secret in either mode. `cluster deploy` reconciles that Secret directly into `flux-system` from local Git credentials; credentials are not committed to the GitOps repository.
+Use `opencenter cluster generate <cluster> --gitops-auth=ssh` to make the SSH block active. **There is no `secretRef` here.** `openCenter-gitops-base` is a public repository, so `sourceAuthBlockForService` renders base-service sources through `sourceAuthBlockAnonymous`, which omits `secretRef` entirely (`internal/gitops/copy.go`, `internal/gitops/source_auth.go`). Attaching a credential Secret here would make Flux try to authenticate to public GitHub with the wrong credential — the source code comments explicitly call out the failure mode (HTTP 401) this is guarding against. Bootstrap explicitly does **not** create an `opencenter-base` credential Secret (see the comments in `internal/cluster/bootstrap_provider_infra.go` and `internal/cluster/kind_bootstrap_provider.go`).
 
-`opencenter-keycloak-config` is intentionally different: it sources the customer GitOps repository and continues to reference the Flux bootstrap Secret (`flux-system`), although it uses the same active/commented rendering convention.
+`opencenter-keycloak-config` is genuinely different: it sources the *customer* GitOps repository (not the public base repo) through `sourceAuthBlockCustomerRepository`, which does attach `secretRef: name: flux-system` — the credential Secret that the `flux bootstrap` CLI itself creates when bootstrapping FluxCD against the customer repository.
 
 #### Category 2: FluxCD Kustomizations (The Wiring)
 
 Template: `services/fluxcd/cert-manager.yaml.tpl`
 
-This is the most important template. It generates two FluxCD Kustomization resources that implement the base+overlay pattern:
+This is the most important template. It generates two FluxCD Kustomization resources that implement the base+overlay pattern (fields shown are the actual current template, not simplified):
 
 ```yaml
 # Kustomization 1: Deploy base from gitops-base repo
@@ -216,19 +212,31 @@ metadata:
   namespace: flux-system
 spec:
   dependsOn:
-    - name: sources          # Wait for GitRepository sources to be ready
+    - name: sources
+      namespace: flux-system
+  interval: 15m
+  retryInterval: 1m
+  timeout: 10m
   sourceRef:
     kind: GitRepository
     name: opencenter-cert-manager    # Points to gitops-base
+    namespace: flux-system
   path: applications/base/services/cert-manager  # Path INSIDE gitops-base
   targetNamespace: cert-manager
   prune: true
   wait: true
+  force: {{ adoptionForce "cert-manager" }}
+  suspend: {{ adoptionSuspend "cert-manager" }}
   healthChecks:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: cert-manager
       namespace: cert-manager
+  commonMetadata:
+    labels:
+      app.kubernetes.io/part-of: cert-manager
+      app.kubernetes.io/managed-by: flux
+      opencenter/managed-by: opencenter
 ---
 # Kustomization 2: Apply cluster-specific overrides
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -239,6 +247,10 @@ metadata:
 spec:
   dependsOn:
     - name: cert-manager-base    # Wait for base to be healthy
+      namespace: flux-system
+  interval: 15m
+  retryInterval: 1m
+  timeout: 10m
   decryption:
     provider: sops
     secretRef:
@@ -246,32 +258,40 @@ spec:
   sourceRef:
     kind: GitRepository
     name: flux-system            # Points to THIS customer repo
+    namespace: flux-system
   path: ./applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/cert-manager
   targetNamespace: cert-manager
   prune: true
   wait: true
+  force: {{ adoptionForce "cert-manager" }}
+  suspend: {{ adoptionSuspend "cert-manager" }}
+  healthChecks:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: cert-manager
+      namespace: cert-manager
 ```
 
-The `{{ .OpenCenter.Cluster.ClusterName }}` token is the only dynamic part. It resolves to the cluster name from config (e.g., `k8s-dev`, `dev`, `k8s-sandbox`).
+`adoptionForce` and `adoptionSuspend` (`internal/gitops/copy.go`) are template functions, not literal service fields — they let generation control Flux's adoption/suspend behavior per service. The `{{ .OpenCenter.Cluster.ClusterName }}` token resolves to the cluster name from config (e.g., `k8s-dev`, `dev`, `k8s-sandbox`).
 
 The dependency chain is: `sources` → `cert-manager-base` → `cert-manager-override`. This ordering guarantees the base HelmRelease is healthy before overrides are applied.
 
 #### Category 3: Service Overlay Resources
 
-These templates generate the cluster-specific resources that live in the overlay directory:
+The literal files under `internal/gitops/templates/cluster-apps-base/services/cert-manager/` are:
 
-| Template | Output | Purpose |
+| File | Kind | Purpose |
 | --- | --- | --- |
-| `rackspace-selfsigned-issuer.yaml` | Static copy | Creates a self-signed Issuer for bootstrapping the CA chain |
-| `rackspace-selfsigned-ca.yaml.tpl` | Rendered | Certificate resource for the internal CA; `commonName` set from `.OpenCenter.Cluster.BaseDomain` |
-| `rackspace-ca-issuer.yaml` | Static copy | ClusterIssuer that uses the self-signed CA |
-| `letsencrypt-issuer.yaml.tpl` | Rendered | ClusterIssuer for Let’s Encrypt with Route53 DNS-01 validation |
-| `opencenter-aws-credentials-secret.yaml.tpl` | Rendered + SOPS encrypted | AWS credentials for Route53 access |
+| `rackspace-selfsigned-issuer.yaml` | Static copy | Self-signed `Issuer` for bootstrapping the internal CA chain |
+| `rackspace-selfsigned-ca.yaml.tpl` | Rendered | `Certificate` resource for the internal CA; `commonName` set from `.OpenCenter.Cluster.BaseDomain` |
+| `rackspace-ca-issuer.yaml` | Static copy | `ClusterIssuer` that uses the self-signed CA |
+| `opencenter-openstack-designate-credentials-secret.yaml.tpl` | Rendered + SOPS encrypted | Designate credentials, only emitted when `DNSProvider: designate` |
 | `helm-values/override-values.yaml` | Static copy (empty) | Placeholder for Helm value overrides |
-| `kustomization.yaml.tpl` | Rendered | Kustomize manifest listing all overlay resources |
 | `README.md` | Static copy | Service documentation placeholder |
 
-The self-signed CA template shows how config values flow into resources:
+**Everything else — the per-credential AWS/Cloudflare `Secret` and `ClusterIssuer` objects, the optional Designate `ClusterIssuer`, and the overlay's own `kustomization.yaml` — is generated by Go code, not `.tpl` files.** `planCertManagerDynamicActions` in `internal/gitops/cert_manager_renderer.go` reads `cfg.Secrets.CertManager.AWS` and `cfg.Secrets.CertManager.Cloudflare` (each a map of named credentials) and, for each enabled entry, emits a `Secret` plus a matching `ClusterIssuer` from Go string templates embedded in that file. If `DNSProvider: designate` is set on the cert-manager service config, it also emits a Designate `ClusterIssuer`. It then emits `kustomization.yaml` itself, listing exactly the files it just planned. There is no `letsencrypt-issuer.yaml.tpl` or `kustomization.yaml.tpl` on disk for cert-manager — this is a deliberate design change from AWS-Route53-only to a multi-credential, multi-provider (AWS Route53, Cloudflare, OpenStack Designate) model.
+
+The self-signed CA template shows how config values still flow into the file-walk-rendered resources:
 
 ```yaml
 # rackspace-selfsigned-ca.yaml.tpl
@@ -293,41 +313,43 @@ spec:
     kind: Issuer
 ```
 
-The Let’s Encrypt issuer template pulls multiple config fields:
+An AWS-backed Let's Encrypt issuer, generated inline by `cert_manager_renderer.go` (not a `.tpl` file), looks like this once rendered for a named credential `route53-prod`:
 
 ```yaml
-# letsencrypt-issuer.yaml.tpl
+# services/cert-manager/letsencrypt-route53-prod-issuer.yaml (generated)
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: letsencrypt-{{ .OpenCenter.Cluster.ClusterName }}
+  name: letsencrypt-route53-prod
 spec:
   acme:
-    server: {{ (index .OpenCenter.Services "cert-manager").LetsEncryptServer | default "https://acme-v02.api.letsencrypt.org/directory" }}
-    email: {{ (index .OpenCenter.Services "cert-manager").Email | default "mpk-support@rackspace.com" }}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: mpk-support@rackspace.com
     privateKeySecretRef:
-      name: letsencrypt-dns01
+      name: letsencrypt-dns01-route53-prod
     solvers:
       - dns01:
           route53:
-            region: {{ (index .OpenCenter.Services "cert-manager").Region }}
+            region: us-east-1
             accessKeyIDSecretRef:
-              name: "opencenter-aws-credentials-secret"
+              name: "opencenter-aws-credentials-secret-route53-prod"
               key: access-key-id
             secretAccessKeySecretRef:
-              name: "opencenter-aws-credentials-secret"
+              name: "opencenter-aws-credentials-secret-route53-prod"
               key: secret-access-key
         selector:
           dnsZones:
-            - {{ .OpenCenter.Cluster.ClusterFQDN }}
+            - example.com
 ```
+
+The ACME server and email above are the fallback values `extractCertManagerConfig` applies when the cert-manager service config leaves `LetsEncryptServer`/`Email` empty — they are not stored defaults (see [Plugin Internal Services](plugin-internal-services.md)).
 
 ### The Kustomization Manifest (Overlay Glue)
 
-The overlay `kustomization.yaml.tpl` ties all overlay resources together and creates a Kubernetes Secret from the Helm override values:
+`kustomization.yaml` for cert-manager is generated by `renderInlineTemplateContent(kustomizationTemplate, ...)` in `internal/gitops/cert_manager_renderer.go` — not by a `.tpl` file. It lists exactly the bootstrap files plus whatever credentials/issuers were planned for this cluster, and creates a Kubernetes Secret from the Helm override values:
 
 ```yaml
-# Rendered output for Example Platform k8s-dev
+# Generated for a cluster with one AWS credential named "route53-prod"
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: cert-manager
@@ -335,11 +357,10 @@ resources:
   - "./rackspace-selfsigned-issuer.yaml"
   - "./rackspace-selfsigned-ca.yaml"
   - "./rackspace-ca-issuer.yaml"
-  - "./opencenter-aws-credentials-secret.yaml"
-  - "./letsencrypt-k8s-dev.yaml"
+  - "./opencenter-aws-credentials-secret-route53-prod.yaml"
+  - "./letsencrypt-route53-prod-issuer.yaml"
 secretGenerator:
   - name: cert-manager-values-override
-    type: Opaque
     files: [override.yaml=helm-values/override-values.yaml]
     options:
       disableNameSuffixHash: true
@@ -349,33 +370,29 @@ The `secretGenerator` creates a Kubernetes Secret named `cert-manager-values-ove
 
 ### Conditional Rendering
 
-The `sources/kustomization.yaml.tpl` and `fluxcd/kustomization.yaml.tpl` templates use Go conditionals to include only enabled services:
+The literal `sources/kustomization.yaml.tpl` and `fluxcd/kustomization.yaml.tpl` templates use Go conditionals for the handful of services that still have explicit `.tpl` source/Flux files (cert-manager, harbor, kafka-cluster, keycloak, olm, plus an aggregate `opencenter-observability.yaml` entry gated on any of kube-prometheus-stack/loki/tempo/mimir/opentelemetry-kube-stack being enabled):
 
 ```yaml
 # sources/kustomization.yaml.tpl (excerpt)
 resources:
+{{- $services := .OpenCenter.Services }}
 {{- if (index $services "cert-manager").Enabled }}
   - "opencenter-cert-manager.yaml"
 {{- end }}
-{{- if (index $services "kyverno").Enabled }}
-  - "opencenter-kyverno.yaml"
+{{- if (index $services "harbor").Enabled }}
+  - "opencenter-harbor.yaml"
+{{- end }}
+{{- range autoServices }}
+{{- $srcName := autoServiceSourceName . }}
+{{- if eq $srcName (printf "opencenter-%s" .) }}
+  - "{{ $srcName }}.yaml"
+{{- end }}
 {{- end }}
 ```
 
-The `ServiceStage` also supports render conditions evaluated at the template level. Conditions can check infrastructure provider, service enablement, or arbitrary config fields:
+Everything else — kyverno, gateway, loki, tempo, velero, metallb, and the rest of the immutable-catalog services — is not listed with a per-service `if` block at all. `autoServices` (`internal/gitops/copy.go`) returns, sorted, every enabled service that has no explicit descriptor but is owned by the immutable `RenderCatalog`; `autoServiceSourceName` resolves each one's catalog-declared `SourceName`. Adding a new catalog entry does not require touching this template file.
 
-```go
-// From service_stage.go
-switch condition.Type {
-case template.ConditionTypeEquals:
-    return fieldValue == condition.Value
-case template.ConditionTypeExists:
-    return fieldValue != nil && fieldValue != ""
-// ...
-}
-```
-
-This allows templates to be conditionally rendered based on provider type (e.g., vSphere CSI templates only render when `provider: vmware`).
+The staged `ServiceStage` (`internal/gitops/stages/service_stage.go`) — the supporting, non-live pipeline API described above — has its own, separate render-condition mechanism keyed on provider/enablement/field checks; it is unrelated to the `autoServices` loop used by the live path.
 
 ### Service Plugin Validation
 
@@ -399,7 +416,7 @@ func (p *CertManagerPlugin) validate(config interface{}) error {
 }
 ```
 
-Validation runs before rendering. If it fails, the pipeline stops and no files are written.
+This validator is registered on the shared validation engine as `service:cert-manager` (`internal/services/plugins/registry.go`) and runs as part of configuration validation (`cluster validate`, and the readiness checks `SetupService` runs before rendering) — not as a step inside the GitOps render pipeline itself. If validation fails, generation stops before any files are written.
 
 ## Generated Output Structure
 
@@ -414,7 +431,7 @@ applications/overlays/<cluster>/
 ├── services/
 │   ├── sources/
 │   │   ├── kustomization.yaml                  # Lists all GitRepository sources
-│   │   └── opencenter-cert-manager.yaml        # GitRepository → gitops-base
+│   │   └── opencenter-cert-manager.yaml        # GitRepository → gitops-base (anonymous, no secretRef)
 │   │
 │   ├── fluxcd/
 │   │   ├── kustomization.yaml                  # Lists all FluxCD Kustomizations
@@ -422,15 +439,17 @@ applications/overlays/<cluster>/
 │   │   └── cert-manager.yaml                   # cert-manager-base + cert-manager-override
 │   │
 │   └── cert-manager/
-│       ├── kustomization.yaml                  # Lists overlay resources + secretGenerator
+│       ├── kustomization.yaml                  # Generated: lists resources + secretGenerator
 │       ├── rackspace-selfsigned-issuer.yaml    # Issuer (self-signed bootstrap)
 │       ├── rackspace-selfsigned-ca.yaml        # Certificate (internal CA)
 │       ├── rackspace-ca-issuer.yaml            # ClusterIssuer (CA-based)
-│       ├── letsencrypt-<cluster>.yaml          # ClusterIssuer (Let's Encrypt + Route53)
-│       ├── opencenter-aws-credentials-secret.yaml  # SOPS-encrypted AWS creds
+│       ├── letsencrypt-<credential-name>-issuer.yaml       # Generated per named AWS/Cloudflare credential
+│       ├── opencenter-aws-credentials-secret-<credential-name>.yaml     # Generated, SOPS-encrypted
+│       ├── opencenter-openstack-designate-credentials-secret.yaml  # Only when DNSProvider: designate
 │       ├── helm-values/
 │       │   └── override-values.yaml            # Helm value overrides (empty by default)
 │       └── README.md
+├── .opencenter-generated.json                  # Ownership manifest (sha256 per generated file)
 ```
 
 ## FluxCD Reconciliation Flow
@@ -480,10 +499,10 @@ Once cert-manager is running, other services reference its Issuers and ClusterIs
 
 ### Gateway / Ingress
 
-The gateway service creates Gateway resources that reference cert-manager for TLS:
+`gateway` is one of the immutable-catalog services (`internal/gitops/render_catalog.go`; `EmitSource: true`, no `.tpl` directory), so its Gateway resource is generated by Go code, not by a template file. Conceptually it still creates a Gateway resource that references cert-manager for TLS:
 
 ```yaml
-# From a gateway template
+# Illustrative — generated, not a template file
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -523,33 +542,28 @@ The kube-prometheus-stack overlay creates HTTPRoutes for Grafana, Prometheus, an
 
 The cluster UI (Headlamp) uses an HTTPRoute that relies on the same Gateway + cert-manager chain for HTTPS access.
 
-## The Pattern Applied to All Services
+## Two Rendering Mechanisms, Not One Pattern
 
-Every service in the template directory follows the same three-file pattern:
-
-| File | Location | Role |
-| --- | --- | --- |
-| `opencenter-<service>.yaml.tpl` | `services/sources/` | GitRepository pointing to gitops-base |
-| `<service>.yaml.tpl` | `services/fluxcd/` | Two Kustomizations: base + override |
-| `services/<service>/` directory | `services/<service>/` | Overlay resources, Helm overrides, secrets |
-
-The full list of services using this pattern:
+Only a small, fixed set of services still has an on-disk `services/<service>/` template directory under `internal/gitops/templates/cluster-apps-base/services/`. As of this writing, that directory contains exactly:
 
 ```
-openCenter-cli/internal/gitops/templates/cluster-apps-base/services/
-├── calico/              ├── loki/
-├── cert-manager/        ├── longhorn/
-├── etcd-backup/         ├── metallb/
-├── gateway/             ├── olm/
-├── gateway-api/         ├── openstack-ccm/
-├── headlamp/            ├── openstack-csi/
-├── keycloak/            ├── opentelemetry-kube-stack/
-├── kube-prometheus-stack/├── postgres-operator/
-├── kyverno/             ├── sealed-secrets/
-├── fluxcd/              ├── tempo/
-├── sources/             ├── velero/
-                         └── vsphere-csi/
+internal/gitops/templates/cluster-apps-base/services/
+├── calico/
+├── cert-manager/
+├── etcd-backup/
+├── fluxcd/
+├── harbor/
+├── kafka-cluster/
+├── keycloak/
+├── olm/
+└── sources/
 ```
+
+Each of these follows (or approximates) the three-file pattern: a `services/sources/opencenter-<service>.yaml.tpl` GitRepository source, a `services/fluxcd/<service>.yaml.tpl` with base+override Kustomizations, and a `services/<service>/` directory of overlay resources. `sources/` and `fluxcd/` themselves hold the two aggregate `kustomization.yaml.tpl` files described above, not a service.
+
+**Every other built-in service — gateway, gateway-api, headlamp, kube-prometheus-stack, kyverno, loki, longhorn, metallb, mimir, olm-config, openstack-ccm, openstack-csi, opentelemetry-kube-stack, postgres-operator, rbac-manager, sealed-secrets, tempo, velero, vsphere-csi, weave-gitops, external-snapshotter, and more — has no `.tpl` directory at all.** They are entries in the immutable `RenderCatalog` (`internal/gitops/render_catalog.go`): a `RenderSpec` with direct Go field values (default namespace, source name, base path, dependencies, whether it emits a Helm-override secret, and so on) plus, where a service needs custom logic beyond the generic catalog behavior, a `catalogDynamicPlanner` (as cert-manager and etcd-backup use). `auto_descriptor.go` turns each catalog entry into GitRepository, Kustomization, namespace, and override-values actions without any embedded template file. See [GitOps Engine](../CODEMAPS/gitops-engine.md) and [Rendering Ownership and Secret Artifacts](../CODEMAPS/rendering-ownership-and-secret-artifacts.md) for the full planning/ownership model both mechanisms share.
+
+Do not assume a service you're extending has a `.tpl` directory — check `internal/gitops/render_catalog.go` first. If it is already a catalog entry, extend its `RenderSpec` or add a dynamic planner rather than creating template files that would never be read.
 
 ### Template File Types
 
@@ -571,9 +585,9 @@ All templates receive the full cluster configuration object. Common access patte
 | `.OpenCenter.Cluster.ClusterFQDN` | Full cluster domain |
 | `(index .OpenCenter.Services "cert-manager").Email` | Service-specific field |
 | `(index .OpenCenter.Services "cert-manager").Enabled` | Service enabled flag |
-| `.OpenCenter.GitOps.GitOpsBaseRepo` | gitops-base repository URL |
-| `.OpenCenter.GitOps.GitOpsBranch` | Git branch for base repo |
-| `.OpenCenter.Infrastructure.Provider` | Infrastructure provider (`vmware`, `openstack`, `aws`, `baremetal`) |
+| `.OpenCenter.GitOps.BaseRepo.URL` | gitops-base repository URL |
+| `.OpenCenter.GitOps.BaseRepo.Branch` / `.Release` | Git branch or tag for the base repo |
+| `.OpenCenter.Infrastructure.Provider` | Infrastructure provider (schema enum: `openstack`, `aws`, `gcp`, `azure`, `baremetal`, `vsphere`, `vmware`, `kind`, `magnum`; see [Providers](../CODEMAPS/providers.md) for which of these are actually implemented) |
 
 Sprig functions are available: `default`, `quote`, `upper`, `lower`, `trimSuffix`, `toYaml`, etc.
 
@@ -581,17 +595,19 @@ Sprig functions are available: `default`, `quote`, `upper`, `lower`, `trimSuffix
 
 The cert-manager overlay includes SOPS-encrypted secrets (AWS credentials for Route53). The encryption flow:
 
-1. The CLI renders `opencenter-aws-credentials-secret.yaml.tpl` with plaintext credentials from config.
-2. SOPS encrypts the `data` fields using the cluster’s Age key (stored in `secrets/age/`).
+1. `planCertManagerDynamicActions` generates each `opencenter-*-credentials-secret*.yaml` (or the Designate equivalent) with plaintext credentials from `cfg.Secrets.CertManager.*`.
+2. SOPS encrypts the fields matched by `encrypted_regex` using the cluster's Age key (stored under the secrets zone; see [Secret and Config Separation](security-update-design.md)).
 3. The encrypted file is committed to Git.
-4. FluxCD’s `cert-manager-override` Kustomization has `decryption.provider: sops` configured, referencing the `sops-age` Kubernetes Secret.
+4. FluxCD's `cert-manager-override` Kustomization has `decryption.provider: sops` configured, referencing the `sops-age` Kubernetes Secret.
 5. During reconciliation, FluxCD decrypts the secret on-the-fly and applies the plaintext Secret to the cluster.
 
-The `.sops.yaml` file at the overlay level controls which fields get encrypted:
+The `.sops.yaml` file at the overlay level (rendered from `internal/gitops/templates/cluster-apps-base/.sops.yaml.tpl`) controls which fields get encrypted. The built-in default (`internal/config/v2/defaults.go`) is:
 
 ```yaml
-encrypted_regex: ^(data|stringData|credentials|password|secret|key|token|cert|ca|crt|tls|clientSecret|accessKeyId|secretAccessKey)$
+encrypted_regex: ^(data|stringData|secret)$
 ```
+
+This is a per-cluster configuration value (`secrets.sops.encrypted_regex`, `internal/config/v2/config.go` `SOPSConfig`), so a given cluster's `.sops.yaml` may use a broader pattern than the default shown here.
 
 ## Customizing a Service After Generation
 
@@ -612,18 +628,9 @@ cainjector:
 
 ### Adding Custom Issuers
 
-Add a new YAML file to `services/cert-manager/` and reference it in `kustomization.yaml`:
+`services/cert-manager/kustomization.yaml` is generator-owned — `planCertManagerDynamicActions` regenerates it on every `opencenter cluster generate`, and the file is tracked in `.opencenter-generated.json`. Hand-editing it to add a resource line does not survive the next regeneration.
 
-```yaml
-# kustomization.yaml — add the new resource
-resources:
-  - "./rackspace-selfsigned-issuer.yaml"
-  - "./rackspace-selfsigned-ca.yaml"
-  - "./rackspace-ca-issuer.yaml"
-  - "./opencenter-aws-credentials-secret.yaml"
-  - "./letsencrypt-k8s-dev.yaml"
-  - "./my-custom-issuer.yaml"          # New
-```
+To add resources cert-manager's typed configuration doesn't model (a hand-authored issuer, for example), put them in `services/cert-manager/custom/` and reference them from that directory's own `kustomization.yaml`, which generation creates once and never overwrites. See [Rendering Ownership and Secret Artifacts](../CODEMAPS/rendering-ownership-and-secret-artifacts.md) for the ownership contract, and [Configuration Lifecycle](configuration-lifecycle.md) for `opencenter cluster migrate-layout --custom` if you have pre-existing hand-authored files under a generator-owned path.
 
 ### Pinning the Base Version
 

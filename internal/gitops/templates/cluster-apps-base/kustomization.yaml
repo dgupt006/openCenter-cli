@@ -2,6 +2,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  # Flux's own gotk-components + gotk-sync, written into flux-system/ by
+  # `flux bootstrap`. This entry MUST be present: the flux-system Kustomization
+  # reconciles this overlay path with prune enabled, so omitting flux-system
+  # here causes Flux to prune its own controllers (the flux-system namespace is
+  # wiped after the first reconcile). See docs/concepts/reference-architecture.md.
+  - ./flux-system
   - ./services/fluxcd
 {{- range $name, $service := .OpenCenter.ManagedServices }}
   {{- if $service.Enabled }}

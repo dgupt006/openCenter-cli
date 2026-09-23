@@ -2,17 +2,17 @@
 id: service-fluxcd
 title: "FluxCD"
 sidebar_label: FluxCD
-description: GitOps continuous delivery engine for Kubernetes.
+description: Core GitOps reconciliation service configuration and structural rendering.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [gitops, flux, continuous-delivery, core]
+tags: [gitops, flux, continuous-delivery, core, services]
 ---
 
-> **Purpose:** For platform engineers, documents the FluxCD core service that provides GitOps reconciliation for all cluster resources.
+> **Purpose:** For platform engineers, documents the FluxCD core service and how it is treated structurally by the renderer.
 
 ## Overview
 
-FluxCD is the core GitOps engine that reconciles cluster state with the generated GitOps repository. It manages GitRepository sources, Kustomization resources, and HelmRelease objects to ensure the cluster converges to the declared state. FluxCD is a foundational service—other services depend on it for deployment and lifecycle management. Disabling FluxCD breaks GitOps functionality for the entire cluster.
+FluxCD is the GitOps reconciliation engine. It has no service-specific configuration beyond the shared `BaseConfig` fields (`internal/config/services/default_services.go` registers it as `DefaultServiceConfig`).
 
 ## Configuration
 
@@ -20,28 +20,28 @@ FluxCD is the core GitOps engine that reconciles cluster state with the generate
 opencenter:
   services:
     fluxcd:
-      enabled: true
+      enabled: true             # default: true
+      namespace: flux-system     # default: flux-system
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable FluxCD (core service, always enabled) |
-
-> **Note:** FluxCD is a core service. Disabling it prevents GitOps reconciliation for all other services.
-
-### Secrets
-
-None.
+| `enabled` | bool | `true` | Whether FluxCD is deployed |
+| `namespace` | string | `flux-system` | Namespace for Flux controllers |
 
 ## Dependencies
 
-None.
+None enforced by `opencenter cluster service enable|disable`. Because almost every other service's generated Flux `Kustomization` depends on Flux itself being installed, disabling `fluxcd` in a generated cluster effectively breaks GitOps reconciliation cluster-wide, even though the CLI does not reject the change.
 
-## CLI Commands
+## Rendering
+
+`fluxcd` is treated as structural: `internal/gitops/auto_descriptor.go` special-cases `fluxcd` (alongside [sources](sources.md)) so it is never routed through the generic auto-descriptor or render-catalog lookup used by other services, even though the built-in render catalog also carries a `RenderSpec` entry for it. Its Flux self-management manifests come from the root/aggregate descriptors (`internal/services/descriptors/data/root-overlay.yaml` and the `*-fluxcd-aggregate.yaml` descriptors).
+
+## CLI commands
 
 ```bash
 opencenter cluster service enable fluxcd
 opencenter cluster service disable fluxcd
-opencenter cluster service status fluxcd
+opencenter cluster service status
 opencenter cluster service options fluxcd
 ```

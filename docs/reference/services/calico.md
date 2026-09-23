@@ -1,18 +1,18 @@
 ---
 id: service-calico
-title: "Calico CNI"
+title: "Calico"
 sidebar_label: Calico
-description: CNI plugin providing pod networking, network policies, and BGP routing.
+description: Calico CNI configuration fields, defaults, and rendering for pod networking and network policy.
 doc_type: reference
 audience: "platform engineers, operators"
-tags: [networking, cni, calico, network-policy]
+tags: [networking, cni, calico, services]
 ---
 
-> **Purpose:** For platform engineers and operators, documents the Calico CNI service configuration, covering networking modes, installation methods, and verification.
+> **Purpose:** For platform engineers and operators, documents the Calico service's configuration surface, default state, and how it is rendered.
 
 ## Overview
 
-Calico provides pod-to-pod networking and network policy enforcement for Kubernetes clusters. It supports VXLAN and IPIP encapsulation, BGP routing, IPv4/IPv6 dual-stack, and Kubernetes NetworkPolicy resources. Installation uses Helm (default) or kustomize-helm.
+Calico is a CNI plugin that provides pod-to-pod networking and Kubernetes `NetworkPolicy` enforcement. It is the default CNI in generated openCenter cluster configuration.
 
 ## Configuration
 
@@ -20,47 +20,41 @@ Calico provides pod-to-pod networking and network policy enforcement for Kuberne
 opencenter:
   services:
     calico:
-      enabled: true                    # default: true
-      kube_api_server: ""              # Kubernetes API server address
+      enabled: true                # default: true
+      namespace: calico-system     # default: calico-system
+      kube_api_server: ""          # optional
+      adoption_mode: managed       # managed | external | sync | deferred | takeover
+      source:
+        repo: ""
+        branch: ""
+        release: ""
+      image:
+        repository: ""
+        tag: ""
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable Calico CNI |
-| `kube_api_server` | string | `""` | Kubernetes API server address for Calico to connect to |
+| `enabled` | bool | `true` | Whether Calico is deployed (`internal/config/services/calico.go`) |
+| `namespace` | string | `calico-system` | Namespace for Calico resources |
+| `kube_api_server` | string | — | Calico Kubernetes API server address (`CalicoConfig.KubeAPIServer`) |
+| `adoption_mode` | string | `managed` | See [Platform services architecture](../platform-services.md#adoption_mode) |
+| `source.repo` / `source.branch` / `source.release` | string | — | GitOps source override |
+| `image.repository` / `image.tag` | string | — | Container image override |
 
 ## Dependencies
 
-None.
+None enforced by `opencenter cluster service enable|disable`.
 
-## Verification
+## Rendering
 
-```bash
-# Check Calico pods are running
-kubectl get pods -n calico-system
+Calico has a dedicated descriptor (`internal/services/descriptors/data/service-calico.yaml`, `service: calico`) that owns every file under the `services/calico` template root; it has no conditional (`when`) files and does not aggregate into the shared Flux/sources kustomizations.
 
-# Verify Calico node status
-kubectl get pods -n calico-system -l k8s-app=calico-node
-
-# Check network policies are enforced
-kubectl get networkpolicies --all-namespaces
-
-# Verify BGP peering (if using BGP mode)
-kubectl exec -n calico-system -l k8s-app=calico-node -- calicoctl node status
-```
-
-## CLI Commands
+## CLI commands
 
 ```bash
-# Enable Calico
 opencenter cluster service enable calico
-
-# Disable Calico
 opencenter cluster service disable calico
-
-# View Calico configuration options
-opencenter cluster service options calico
-
-# Check service status
 opencenter cluster service status
+opencenter cluster service options calico
 ```

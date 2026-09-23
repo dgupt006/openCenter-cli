@@ -1,650 +1,112 @@
 ---
 id: configuration-schema
 title: "Configuration Schema Reference"
-sidebar_label: Configuration Schema Reference
-description: Complete reference of cluster configuration file structure, fields, and validation rules.
+sidebar_label: Configuration Schema
+description: Structural reference for the v2 cluster configuration schema -- every top-level section, its key fields, types, and where the exhaustive machine-readable schema lives.
 doc_type: reference
-audience: "all users"
-tags: [schema, configuration, yaml, fields]
+audience: "operators, developers"
+tags: [configuration, schema, v2, reference]
 ---
 # Configuration Schema Reference
 
-**Purpose:** Complete reference of cluster configuration file structure, fields, and validation rules for quick lookup.
+**Purpose:** For operators and developers, documents the structure of a v2 cluster configuration file, verified against `internal/config/v2/*.go`. Only `schema_version: "2.0"` is supported by the current CLI.
 
-This reference documents the structure of the cluster configuration YAML file with all available fields and their constraints.
+The exhaustive, always-current, machine-readable schema is generated straight from these Go types:
 
-## Schema Version
-
-Current schema version: `2.0`
-
-```yaml
-schema_version: "2.0"
+```bash
+mise run schema-v2                               # regenerate schema/opencenter-v2.schema.json from the Go types
+opencenter settings ide                          # generate the schema plus editor (YAML Language Server) setup
 ```
 
-**📌 NOTE**\
-Only `schema_version: "2.0"` is supported. Any other schema version is invalid.
+...or read the checked-in copy at `schema/opencenter-v2.schema.json` (regenerate with `mise run schema-v2`; see [Mise Tasks Reference](mise-tasks.md)). This page is a structural map to navigate that schema, not a byte-for-byte transcription of it -- always trust the generated schema over this page for an exact enum list or a field you don't see below.
 
-## Top-Level Structure
+## Top level (`Config`)
 
-```yaml
-schema_version: "2.0"
-opencenter:      # Main configuration section
-opentofu:        # Infrastructure provisioning
-deployment:      # Deployment automation
-metadata:        # Configuration lifecycle tracking
-secrets:         # Encrypted secrets
-```
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `schema_version` | string | yes | Must equal `"2.0"`. |
+| `metadata` | object | no | System-managed (`created_at`, `updated_at`, `created_by`, `version`, `labels`, `annotations`). |
+| `opencenter` | object | yes | Everything else -- see below. |
+| `deployment` | object | no | Deployment method (see below). |
+| `opentofu` | object | yes | OpenTofu/Terraform backend config. |
+| `secrets` | object | yes | Secret values and secret-adjacent config (SOPS, overlay-unit secrets). See [GitOps Configuration Reference](gitops-configuration.md) for the overlay-unit half of this. |
 
-## opencenter Section
+## `opencenter` (`OpenCenterConfig`)
 
-Main configuration for cluster and services.
+| Field | Required | Notes |
+| --- | --- | --- |
+| `meta` | yes | Cluster identity: `name` (DNS-1123), `organization`, `env` (`dev`\|`staging`\|`production`), `region`, `stage`, `status`, `locked`, `lock_reason`. |
+| `cluster` | yes | Kubernetes-specific config, independent of infrastructure -- see below. |
+| `infrastructure` | yes | Provider selection and provider-specific config -- see below. |
+| `secrets` | no | `backend` selection plus `barbican` (OpenStack Key Manager client config: `auth_url`, `project_id`, `region`, `user_domain_name`, `project_domain_name`, `ca_cert`). |
+| `identity` | no | `oidc.enabled`, `oidc.source` (`internal`\|`external`), `oidc.provider` (`keycloak`\|`entra`\|`generic`). |
+| `services` | no | The canonical platform-services map (see below). |
+| `managed_services` | no | The canonical managed/customer-application-services map (see below). |
+| `managed-service` | no | **Legacy alias** for `managed_services` (Go field `LegacyManaged`) -- kept for backward compatibility with older config files, not the field new configs should use. |
+| `talos` | no | Legacy field (`LegacyTalos`, `map[string]any`), excluded from the generated JSON schema (`json:"-"`) -- present only for round-tripping old files. |
+| `gitops` | yes | See [GitOps Configuration Reference](gitops-configuration.md) for the complete field list. |
 
-### opencenter.meta
+### `opencenter.cluster` (`ClusterConfig`)
 
-Cluster metadata and identification.
+`cluster_name` (DNS-1123), `base_domain` (FQDN), `cluster_fqdn` (FQDN), `admin_email`, and `kubernetes`:
 
-```yaml
-opencenter:
-  meta:
-    name: "my-cluster"           # Cluster name (required)
-    env: "production"            # Environment (dev, staging, production)
-    region: "sjc3"               # Cloud region
-    status: ""                   # Cluster status
-    organization: "my-org"       # Organization name
-```
+| `kubernetes.*` field | Notes |
+| --- | --- |
+| `version` | Required, semver. |
+| `api_port` | Required, 1-65535. |
+| `kube_vip_enabled`, `kubelet_rotate_server_certs` | Booleans. |
+| `subnet_pods`, `subnet_services` | Required, IPv4 CIDR. |
+| `network_plugin` | Required; exactly one of `calico`, `cilium`, `kube-ovn` should be populated (enforced by readiness validation, not the struct itself). |
+| `storage_plugin`, `security`, `oidc` | Optional sub-blocks. |
 
-**Validation:**
+### `opencenter.infrastructure` (`InfrastructureConfig`)
 
-* `name`: 3-63 characters, lowercase alphanumeric and hyphens, must start/end with alphanumeric
-* `organization`: Same rules as name
-* `region`: Provider-specific region code
+| Field | Notes |
+| --- | --- |
+| `provider` | Required. One of `openstack`, `aws`, `gcp`, `azure`, `baremetal`, `vsphere`, `vmware`, `kind`, `magnum`. (`aws`/`gcp`/`azure` are accepted by the schema but currently rejected at the CLI level by `checkProviderAvailability` as "planned, not yet available".) |
+| `ssh` | Required. `authorized_keys` (min 1), `username`/`user`, `key_path`. |
+| `os_version` | Required string. |
+| `server_group_affinity`, `k8s_api_ip`, `node_naming`, `bastion` | Optional. `bastion.flavor`/`bastion.image` required only if `bastion.enabled`. |
+| `networking` | Required -- node subnet/allocation pool/gateway, VRRP (`vrrp_ip` required if `vrrp_enabled`), load-balancer provider (`ovn`\|`octavia`\|`metallb`\|`cloud-native`), Designate/DNS, NTP servers (min 1), VLAN. |
+| `compute` | Required -- flavors, `master_count`/`worker_count`/`worker_count_windows`, static node lists (baremetal/vmware), `additional_server_pools_worker[_windows]` for extra worker pools. |
+| `storage` | Required -- `default_storage_class`, worker/master volume size/type/source/destination, `additional_block_devices`. |
+| `cloud` | Required -- exactly one of the per-provider blocks below should be populated for the selected provider; every other provider's block must be empty (enforced by readiness validation). |
+| `kind` | Optional, Kind-specific settings that don't yet have a provider-agnostic home (`cluster_name`, `kubernetes_version`, `node_image`, node counts, API server address/port, pod/service subnet, `disable_default_cni`, ingress, runtime, registry, `extra_port_mappings`, `extra_mounts`). |
 
-### opencenter.secrets
+#### `infrastructure.cloud` (`CloudConfig`) -- one populated block per provider
 
-Secrets backend configuration.
+| Sub-block | Verified required fields |
+| --- | --- |
+| `openstack` | `auth_url` (URL), `region`, `project_id`; optional `project_name`, application credential pair, `insecure`, `domain`/`domain_name`, plus a nested `OpenStackNetworkingConfig` (`network_id`, `subnet_id`, `floating_ip_pool`/`floating_network_id`, `router_external_network_id`, `k8s_api_port_acl`, `designate`). |
+| `magnum` | `auth_url` (URL), `region`, `project_id`, `cluster_template`; `application_credential_id`/`application_credential_secret` required together (`validate:"required_with=..."` both ways); optional `insecure`, `domain`, `ca`, `labels`, `keypair`, `master_flavor_id`, `node_flavor_id`, `create_timeout`, `master_lb_enabled`. |
+| `aws`, `gcp`, `azure`, `vmware` | Exist as their own typed blocks; see [Providers](providers.md) for field-level detail (owned separately from this page). |
 
-```yaml
-opencenter:
-  secrets:
-    backend: "barbican"          # Secrets backend (barbican)
-    barbican:
-      auth_url: ""               # Barbican auth URL
-      project_id: ""             # OpenStack project ID
-      region: ""                 # Barbican region
-      user_domain_name: ""       # User domain
-      project_domain_name: ""    # Project domain
-      ca_cert: ""                # CA certificate
-```
+Every provider's config-level `ValidateConfig` explicitly rejects a populated `cloud.magnum` block unless `provider: magnum` (and analogous checks exist for the other blocks) -- these blocks are mutually exclusive by construction, not just convention.
 
-### opencenter.infrastructure
+### `opencenter.services` / `opencenter.managed_services` (`ServiceMap`)
 
-Infrastructure provider configuration.
+`ServiceMap` is `map[string]any` with **custom YAML unmarshaling**: the service registry (`internal/config/registry`) resolves each key to its registered typed Go struct at unmarshal time, so `services.cert-manager` in a config file becomes a real `*services.CertManagerConfig` in memory, not a loose map. Every service's typed config embeds `services.BaseConfig` (`enabled`, `namespace`, plus status fields). This makes the shape of any individual service field-by-field a per-service question -- see [Platform Services](platform-services.md) (owned separately) for the enabled service catalog, and [Adding New Platform Services](../contributing/adding-services.md) for the contract new service configs must follow (declarative fields only -- no rendering topology, no raw Helm override content).
 
-```yaml
-opencenter:
-  infrastructure:
-    provider: "openstack"        # Canonical GA providers: openstack, vmware, kind, baremetal
-    ssh_user: "ubuntu"           # SSH user for nodes
-    os_version: "24"             # OS version (Ubuntu)
-    server_group_affinity:       # Server group affinity
-      - "anti-affinity"
-    node_naming:
-      worker: "wn"               # Worker node prefix
-      master: "cp"               # Control plane prefix
-      worker_windows: "win"      # Windows worker prefix
-    bastion:
-      address: "localhost"       # Bastion host address
-    k8s_api_ip: ""               # Kubernetes API IP
-    cloud:                       # Provider-specific config
-      openstack: {}              # OpenStack configuration
-      vmware: {}                 # VMware configuration
-```
+Stability note (from `internal/config/v2/config.go`): the overlay-unit types referenced by `gitops.overlay_units` and `secrets.overlay_units` are stable as of schema version 2.0; `ServiceMap` itself keeps its `map[string]any` polymorphic shape by design.
 
-### opencenter.infrastructure.cloud.openstack
+## `opentofu` (`OpenTofuConfig`)
 
-OpenStack provider configuration.
+`enabled` (bool), `path`, `backend` (required): `backend.type` is one of `s3`\|`local`\|`remote`, with a matching `local`/`s3` sub-block.
 
-```yaml
-opencenter:
-  infrastructure:
-    cloud:
-      openstack:
-        auth_url: "https://identity.api.rackspacecloud.com/v3"
-        insecure: false
-        region: "sjc3"
-        application_credential_id: ""      # Required
-        application_credential_secret: ""  # Required
-        domain: "Default"
-        tenant_name: ""
-        availability_zone: "az1"
-        project_domain_name: "rackspace_cloud_domain"
-        user_domain_name: "rackspace_cloud_domain"
-        ca: ""
-        image_id: "799dcf97-3656-4361-8187-13ab1b295e33"
-        image_id_windows: "a2083759-f341-445b-b717-dafb5e31fa6b"
-        networking:
-          floating_ip_pool: "PUBLICNET"
-          floating_network_id: ""          # Required
-          network_id: ""
-          router_external_network_id: "723f8fa2-dbf7-4cec-8d5f-017e62c12f79"
-          subnet_id: ""
-          k8s_api_port_acl:
-            - "0.0.0.0/0"
-          designate:
-            dns_zone_name: ""
-          vlan:
-            id: ""
-            mtu: 0
-            provider: "physnet1"
-        modules:
-          openstack_nova:
-            source: "github.com/opencenter-cloud/opencenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=main"
-```
+## `deployment` (`DeploymentConfig`)
 
-**Required Fields:**
+`auto_deploy` (bool), `method` (required, one of `kubespray`\|`kamaji`\|`eks`\|`gke`\|`aks`\|`cluster-api`), plus a matching optional sub-block (`kubespray`, `kamaji`, or `cluster_api`). `kubespray.version` is required (semver) when the `kubespray` block is present; it also carries a `modules` map and a `kubespray_cluster` module config for enabling/version-pinning individual Kubespray roles.
 
-* `application_credential_id`
-* `application_credential_secret`
-* `floating_network_id`
+## `secrets` (`SecretsConfig`)
 
-### opencenter.infrastructure.cloud.aws
+Plaintext secret *values* referenced by services and infrastructure -- this is the section SOPS is expected to encrypt at rest. Notable fields: `sops_age_key_file`, `ssh_key` (`private`/`public`/`cypher`), `global` (cross-cutting AWS/OpenStack credentials), per-service secret blocks (`cert_manager`, `loki`, `mimir`, `keycloak`, `headlamp`, `weave_gitops`, `grafana`, `harbor`, `tempo`, `etcd_backup`, `velero`, `alert_proxy`, `vsphere_csi`), a catch-all `service_secrets` map, `sops` (SOPS encryption toggle + `age_key_file` + `encrypted_regex`), and `overlay_units` (the `secrets.overlay_units.customer_managed` block documented in [GitOps Configuration Reference](gitops-configuration.md)).
 
-AWS provider configuration.
+`cert_manager` secrets support **named, multi-credential** configuration -- `aws` and `cloudflare` are each `map[string]<credential>`, so a cluster can hold several named AWS Route53 or Cloudflare credentials scoped to different DNS zones, in addition to legacy flat fields kept only for migration compatibility.
 
-```yaml
-opencenter:
-  infrastructure:
-    cloud:
-      aws:
-        profile: ""              # AWS profile name
-        region: ""               # AWS region (e.g., us-east-1)
-        vpc_id: ""               # VPC ID
-        private_subnets: []      # Private subnet IDs
-        public_subnets: []       # Public subnet IDs
-```
+## Cross-references
 
-### opencenter.cluster
-
-Kubernetes cluster configuration.
-
-```yaml
-opencenter:
-  cluster:
-    cluster_name: "my-cluster"
-    aws_access_key: ""
-    aws_secret_access_key: ""
-    ssh_authorized_keys:
-      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplePublicKeyDataHere user@example.com"
-    base_domain: "k8s.opencenter.cloud"
-    cluster_fqdn: "my-cluster.sjc3.k8s.opencenter.cloud"
-    admin_email: "admin@example.com"
-    k8s_api_port_acl:
-      - "0.0.0.0/0"
-    networking: {}               # Network configuration
-    kubernetes: {}               # Kubernetes settings
-```
-
-### opencenter.cluster.networking
-
-Network configuration.
-
-```yaml
-opencenter:
-  cluster:
-    networking:
-      ntp_servers:
-        - "time.sjc3.rackspace.com"
-        - "time2.sjc3.rackspace.com"
-      dns_nameservers:
-        - "8.8.8.8"
-        - "8.8.4.4"
-      security:
-        ca_certificates: ""
-        os_hardening: true
-      subnet_nodes: "10.2.128.0/22"
-      allocation_pool_start: ""
-      allocation_pool_end: ""
-      vrrp_ip: "10.2.128.5"      # Required when use_octavia=false and vrrp_enabled=true
-      vrrp_enabled: true
-      use_octavia: false
-      loadbalancer_provider: "ovn"
-      use_designate: false
-      dns_zone_name: ""
-      vlan:
-        id: ""
-        mtu: 0
-        provider: "physnet1"
-```
-
-**Validation:**
-
-* `vrrp_ip` required when `use_octavia=false` and `vrrp_enabled=true`
-* `subnet_nodes` must be valid CIDR notation
-* `dns_nameservers` must be valid IP addresses
-
-### opencenter.cluster.kubernetes
-
-Kubernetes cluster settings.
-
-```yaml
-opencenter:
-  cluster:
-    kubernetes:
-      version: "1.33.5"          # Kubernetes version (required)
-      kubespray_version: "v2.31.0"
-      api_port: 443
-      kube_vip_enabled: true
-      kubelet_rotate_server_certs: false
-      flavor_bastion: "gp.0.2.2"
-      flavor_master: "gp.0.4.8"
-      flavor_worker: "gp.0.4.16"
-      flavor_worker_windows: "gp.5.4.16"
-      subnet_pods: "10.42.0.0/16"
-      subnet_services: "10.43.0.0/16"
-      loadbalancer_provider: "ovn"
-      master_count: 3            # 1-9
-      worker_count: 2            # 0-100
-      worker_count_windows: 0
-      dns_zone_name: ""
-      security:
-        k8s_hardening: true
-        pod_security_exemptions:
-          - "trivy-temp"
-          - "tigera-operator"
-          - "kube-system"
-      network_plugin: {}         # CNI configuration
-      oidc: {}                   # OIDC configuration
-      windows_workers: {}        # Windows configuration
-      master_nodes: []           # Pre-configured nodes
-      additional_server_pools_worker: []
-      additional_server_pools_worker_windows: []
-```
-
-**Validation:**
-
-* `version`: Semantic version format (e.g., "1.33.5")
-* `master_count`: 1-9
-* `worker_count`: 0-100
-* `subnet_pods` and `subnet_services` must not overlap
-
-### opencenter.cluster.kubernetes.network_plugin
-
-CNI plugin configuration. Only one plugin can be enabled.
-
-```yaml
-opencenter:
-  cluster:
-    kubernetes:
-      network_plugin:
-        calico:
-          enabled: true
-          version: "3.32.0"
-          install_method: helm
-          network_policy: true
-        cilium:
-          enabled: false
-          install_method: helm
-          operator_enabled: true
-          kube_proxy_replacement: true
-          modules:
-            cilium:
-              source: "github.com/opencenter-cloud/opencenter-gitops-base.git//iac/cni/cilium?ref=main"
-        kube-ovn:
-          enabled: false
-          install_method: helm
-          cilium_integration: true
-          modules:
-            kube_ovn:
-              source: "github.com/opencenter-cloud/opencenter-gitops-base.git//iac/cni/kube-ovn?ref=main"
-```
-
-**Validation:**
-
-* Only one CNI plugin can have `enabled: true`
-* For OpenStack, supported CNI `install_method` values are `helm` and `kustomize-helm`; `kubespray` is rejected with migration guidance.
-* For OpenStack, Calico uses bundled `v3.32.0` native `projectcalico.org/v3` CRDs and eBPF custom resources. Other Calico versions are rejected unless matching assets are added to the CLI.
-
-### opencenter.cluster.kubernetes.oidc
-
-OIDC authentication configuration.
-
-```yaml
-opencenter:
-  cluster:
-    kubernetes:
-      oidc:
-        enabled: false
-        kube_oidc_url: ""
-        kube_oidc_client_id: "kubernetes"
-        kube_oidc_ca_file: ""
-        kube_oidc_username_claim: "sub"
-        kube_oidc_username_prefix: "oidc:"
-        kube_oidc_groups_claim: "groups"
-        kube_oidc_groups_prefix: "oidc:"
-```
-
-### opencenter.cluster.kubernetes.windows_workers
-
-Windows worker node configuration.
-
-```yaml
-opencenter:
-  cluster:
-    kubernetes:
-      windows_workers:
-        enabled: false
-        windows_user: "Administrator"
-        windows_admin_password: ""
-        worker_node_bfv_size_windows: 0
-        worker_node_bfv_type_windows: ""
-```
-
-### opencenter.identity
-
-Identity provider configuration for services that consume OIDC.
-
-```yaml
-opencenter:
-  identity:
-    oidc:
-      enabled: true
-      source: internal      # internal or external
-      provider: keycloak    # keycloak, entra, or generic
-```
-
-When `source: internal` and `provider: keycloak`, OIDC client secrets are created by the OpenCenter Keycloak bootstrap flow and are not required before that bootstrap completes. `secrets.keycloak.admin_password` is still user-provided for now.
-
-### opencenter.gitops
-
-GitOps repository configuration.
-
-```yaml
-opencenter:
-  gitops:
-    git_dir: "./my-cluster-gitops"
-    git_url: "ssh://git@github.com/org/repo.git"
-    git_ssh_key: ""
-    git_ssh_pub: ""
-    git_branch: "main"
-    gitops_base_repo: "ssh://git@github.com/opencenter-cloud/opencenter-gitops-base.git"
-    gitops_base_release: "v0.1.0"
-    gitops_branch: "main"
-    flux:
-      interval: "15m"
-      prune: true
-```
-
-### opencenter.infrastructure.storage.profile
-
-Storage uses two independent contracts: PVCs and bulk object storage. A CSI driver or Longhorn satisfies only the PVC contract; it does **not** provide S3-compatible storage for Loki, Tempo, Mimir, Velero, Harbor, or etcd backups.
-
-```yaml
-opencenter:
-  infrastructure:
-    storage:
-      profile:
-        lifecycle: production             # production or non-production
-        pvc_provider: external            # external CSI or longhorn
-        object_storage_provider: external-s3  # external-s3 or rustfs
-```
-
-Production (including Edge Production), private-cloud production, disconnected production, and air-gapped production deployments must use `external-s3`. Supply each enabled bulk-data consumer with its external S3 endpoint, bucket, region, and applicable credentials. Ceph RGW is the reference self-hosted production option; it is not deployed or operated by openCenter.
-
-The only bundled S3 implementation is `rustfs`. It is supported only for `non-production` with `pvc_provider: longhorn` and the Longhorn service enabled. openCenter generates its internal credentials, endpoint, buckets, and consumer configuration. RustFS is not a production durability or recovery substitute for an externally managed S3 service.
-
-```yaml
-# Low-resource non-production profile only
-opencenter:
-  infrastructure:
-    storage:
-      profile:
-        lifecycle: non-production
-        pvc_provider: longhorn
-        object_storage_provider: rustfs
-  services:
-    longhorn:
-      enabled: true
-```
-
-Legacy Swift fields may remain readable only long enough for validation to report a migration error. Replace Swift endpoints, containers, and application credentials with S3-compatible endpoint, bucket, region, and credentials before generation.
-
-### opencenter.services
-
-Platform services configuration.
-
-```yaml
-opencenter:
-  services:
-    calico:
-      enabled: true
-      kube_api_server: "https://api.my-cluster.sjc3.k8s.opencenter.cloud:6443"
-    cert-manager:
-      enabled: true
-      email: "mpk-support@rackspace.com"
-      region: "us-east-1"
-      letsencrypt_server: "https://acme-v02.api.letsencrypt.org/directory"
-    etcd-backup:
-      enabled: true
-      s3_endpoint: "https://s3.example.com"
-      s3_bucket_name: "my-cluster-etcd-backups"
-      s3_region: "us-east-1"
-    keycloak:
-      enabled: true
-      hostname: "auth.my-org.my-cluster.sjc3.k8s.opencenter.cloud"
-      realm: "opencenter"
-      client_id: "kubernetes"
-      frontend_url: "https://auth.my-org.my-cluster.sjc3.k8s.opencenter.cloud"
-    kube-prometheus-stack:
-      enabled: true
-      prometheus_volume_size: 50
-      prometheus_storage_class: "csi-cinder-sc-delete"
-      grafana_volume_size: 10
-      grafana_storage_class: "csi-cinder-sc-delete"
-      alertmanager_volume_size: 10
-      alertmanager_storage_class: "csi-cinder-sc-delete"
-    loki:
-      enabled: true
-      volume_size: 20
-      storage_class: "csi-cinder-sc-delete"
-      bucket_name: "my-cluster-loki"
-      s3_endpoint: "https://s3.example.com"
-      s3_region: "us-east-1"
-      s3_force_path_style: false
-    # ... (20+ services total)
-```
-
-**Common service fields (`BaseConfig`):**
-
-Services that embed `BaseConfig` support these fields:
-
-* `enabled` (bool): Enable/disable service
-* `adoption_mode` (string): Flux ownership mode (`managed`, `external`, `sync`, `deferred`, or `takeover`)
-* `namespace` (string): Kubernetes namespace
-* `image.repository` (string): Container image repository
-* `image.tag` (string): Container image tag
-* `source.repo` (string): GitOps source repository
-* `source.branch` (string): Git branch to track
-* `source.release` (string): Pinned GitOps source release tag; mutually exclusive with `source.branch`
-
-The image and source fields are nested in the service configuration:
-
-```yaml
-opencenter:
-  services:
-    my-service:
-      enabled: true
-      image:
-        repository: "registry.example.com/my-service"
-        tag: "v1.2.3"
-      source:
-        repo: "ssh://git@github.com/example/platform-base.git"
-        branch: "main"
-```
-
-`hostname` is not a universal service field or part of `BaseConfig`. It is
-service-specific and is supported only by service configurations that declare
-it, such as Keycloak or Headlamp.
-
-**Rendering internals are not public configuration.** Renderer selection,
-descriptor or stage topology, generated-file ownership, and raw Helm override
-values are resolved internally from the immutable render catalog and explicit
-service descriptors. Do not add keys such as `renderer`, `single_stage`,
-`base_only`, `source_name`, `override_values_renderer`, or raw
-`override_values` to a cluster file. Legacy v2 renderer metadata is migration
-input only and is removed during the v2 load/normalize path; it is not part of
-the supported schema.
-
-For supported behavior, use the service's typed fields documented above. For
-manifests or values that are intentionally outside the typed service contract,
-use the service overlay's user-owned `custom/` directory. Generator-owned files
-and rendering topology must not be edited through configuration.
-
-## opentofu Section
-
-Infrastructure provisioning configuration.
-
-```yaml
-opentofu:
-  enabled: true
-  path: "opentofu"
-  backend:
-    type: "local"              # Backend type (local, s3)
-    local:
-      path: ".opentofu-local-my-cluster/terraform.tfstate"
-    s3:
-      bucket: ""
-      key: ""
-      region: ""
-```
-
-## deployment Section
-
-Deployment automation settings.
-
-```yaml
-deployment:
-  auto_deploy: true
-  method: kubespray
-```
-
-## metadata Section
-
-Configuration lifecycle tracking.
-
-```yaml
-metadata:
-  created_at: "2026-02-17T10:30:00Z"
-  created_by: "user@example.com"
-  updated_at: "2026-02-17T11:00:00Z"
-  tags:
-    environment: "production"
-    team: "platform"
-  annotations:
-    description: "Production cluster"
-```
-
-## secrets Section
-
-Encrypted secrets configuration.
-
-```yaml
-secrets:
-  sops_age_key_file: "~/.config/opencenter/clusters/my-org/secrets/age/my-cluster-key.txt"
-  ssh_key:
-    private: "./secrets/ssh/my-cluster"
-    public: "./secrets/ssh/my-cluster.pub"
-    cypher: "ed25519"
-  global:
-    aws:
-      infrastructure:
-        access_key: ""
-        secret_access_key: ""
-        region: "us-east-1"
-      application:
-        access_key: ""
-        secret_access_key: ""
-        region: ""
-    openstack:
-      application_credential_id: ""
-      application_credential_secret: ""
-  etcd_backup:
-    access_key_id: ""
-    secret_access_key: ""
-  cert_manager:
-    aws_access_key: ""
-    aws_secret_access_key: ""
-  loki:
-    swift_password: ""
-  keycloak:
-    client_secret: ""      # internal OIDC bootstrap may create this later
-    admin_password: ""     # user-provided for now
-  headlamp:
-    oidc_client_secret: "" # internal OIDC bootstrap may create this later
-  weave_gitops:
-    password: ""
-    password_hash: ""
-  grafana:
-    admin_password: ""
-  tempo:
-    access_key: ""
-    secret_key: ""
-  alert_proxy:
-    core_device_id: ""
-    account_service_token: ""
-    core_account_number: ""
-  vsphere_csi:
-    vcenter_host: ""
-    username: ""
-    password: ""
-    datacenters: ""
-    insecure_flag: "false"
-    port: "443"
-```
-
-## Validation Rules
-
-### Cross-Field Dependencies
-
-* `vrrp_ip` required when `use_octavia=false` and `vrrp_enabled=true`
-* Only one CNI plugin can be enabled
-* `subnet_pods` and `subnet_services` must not overlap
-* `subnet_nodes` must not overlap with pod or service subnets
-
-### Format Validation
-
-* Email addresses: RFC 5322 format
-* Hostnames: RFC 1123 format
-* CIDR ranges: Valid IPv4 CIDR notation
-* UUIDs: RFC 4122 format (for OpenStack IDs)
-* Semantic versions: `major.minor.patch` format
-
-### Range Validation
-
-* `master_count`: 1-9
-* `worker_count`: 0-100
-* `worker_count_windows`: 0-50
-* `api_port`: 1-65535
-* Volume sizes: 10-1000 GB
-
-## Configuration Precedence
-
-1. Command-line flags (the set override mechanism)
-2. Configuration file
-3. CLI defaults (`~/.config/opencenter/config.yaml`)
-4. Built-in defaults
-
-## Example Complete Configuration
-
-See [Getting Started Tutorial](../getting-started/getting-started.md#step-3-configure-your-cluster) for complete configuration examples.
-
----
-
-## Evidence
-
-This reference is based on:
-
-* Schema definition: `schema/cluster.schema.json:1-2382`
-* Configuration defaults: `internal/config/defaults.go:48-451`
-* Configuration types: `internal/config/types.go`
-* Validation rules: `internal/config/validator.go`
-* Session 2 facts inventory: B0 sections 3, 5
+* [GitOps Configuration Reference](gitops-configuration.md) -- full `opencenter.gitops.*` and `secrets.overlay_units.*` field list.
+* [Default Values](default-values.md) -- what `opencenter cluster init` actually populates before you touch the file.
+* [Configuration Precedence](configuration-precedence.md) -- how file, template, and CLI-flag values combine.
+* [Validation Rules](validation-rules.md) -- which of the fields above are actually enforced, and how.
+* [Providers](providers.md), [Platform Services](platform-services.md) -- per-provider and per-service field detail (owned separately).

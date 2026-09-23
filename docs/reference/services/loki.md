@@ -2,19 +2,17 @@
 id: service-loki
 title: "Loki"
 sidebar_label: Loki
-description: Log aggregation service with S3 and Swift storage backends.
+description: Log aggregation service configuration, S3 and Swift storage backends, and secret fallback.
 doc_type: reference
 audience: "operators, platform engineers"
-tags: [loki, logging, observability, s3, swift]
+tags: [loki, logging, observability, s3, swift, services]
 ---
 
-# Loki
-
-> **Purpose:** For operators and platform engineers, documents Loki configuration fields, storage backends, secrets, and credential fallback behavior.
+> **Purpose:** For operators and platform engineers, documents Loki's configuration fields, storage backends, secrets, and validation.
 
 ## Overview
 
-Loki is the log aggregation backend for openCenter clusters. It collects, indexes, and queries logs from all cluster workloads. Deployed as a scalable microservices architecture (write/read/backend) with Memcached caching.
+Loki is the log aggregation backend for openCenter clusters, with S3 or Swift object storage.
 
 ## Configuration
 
@@ -22,122 +20,86 @@ Loki is the log aggregation backend for openCenter clusters. It collects, indexe
 opencenter:
   services:
     loki:
-      enabled: true
-      storage_type: swift          # "s3" or "swift" (default: swift on OpenStack, s3 on AWS)
-      bucket_name: ""              # defaults to "<cluster_name>-loki"
-      volume_size: 20              # persistent volume size in GB
-      storage_class: ""            # PVC storage class (defaults to cluster default)
+      enabled: true                  # default: true
+      namespace: observability        # default: observability
+      storage_type: swift              # default: swift; s3 | swift
+      bucket_name:
+      volume_size:
+      storage_class:
 
-      # Swift backend fields
-      swift_auth_url: ""           # Keystone V3 URL (must end in /v3)
-      swift_region: ""             # defaults to cluster region
-      swift_auth_version: 3        # authentication version
-      swift_application_credential_id: ""  # app credential UUID
-      swift_container_name: ""     # defaults to bucket_name
-      swift_user_domain_name: ""   # Swift user domain
-      swift_domain_name: ""        # Swift domain
+      # Swift backend — authenticates with a Keystone username/password,
+      # NOT application credentials.
+      swift_auth_url:                  # must end in /v3
+      swift_region:
+      swift_auth_version: 3             # default: 3
+      swift_username:
+      swift_project_name:
+      swift_project_domain_name:        # defaults to swift_domain_name
+      swift_container_name:
+      swift_user_domain_name:
+      swift_domain_name:
+      swift_application_credential_id:  # deprecated: not honored by Loki's Swift driver
 
-      # S3 backend fields
-      s3_endpoint: ""              # S3-compatible endpoint URL
-      s3_region: ""                # defaults to cluster region
-      s3_force_path_style: false   # force path-style addressing
-      s3_insecure: false           # allow HTTP (not HTTPS)
+      # S3 backend
+      s3_endpoint:
+      s3_region:
+      s3_credential_id:
+      s3_force_path_style: false
+      s3_insecure: false
 ```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether Loki is deployed |
+| `namespace` | string | `observability` | Namespace for Loki resources |
+| `storage_type` | string | `swift` | `s3` or `swift` |
+| `bucket_name` | string | — | Storage bucket/container name |
+| `volume_size` | int | — | Persistent volume size in GB |
+| `storage_class` | string | — | PVC storage class |
+| `swift_auth_url` | string | — | Swift Keystone V3 auth URL (must end `/v3`) |
+| `swift_region` | string | — | Swift region name |
+| `swift_auth_version` | int | `3` | Swift auth version |
+| `swift_username` | string | — | Swift Keystone username for username/password auth (this is what Loki's driver actually honors) |
+| `swift_project_name` | string | — | Swift Keystone project name |
+| `swift_project_domain_name` | string | — | Defaults to `swift_domain_name` |
+| `swift_container_name` | string | — | Swift container for Loki logs |
+| `swift_user_domain_name` | string | — | Swift user domain name |
+| `swift_domain_name` | string | — | Swift domain name |
+| `swift_application_credential_id` | string | — | Deprecated: not honored by Loki's Swift driver; use `swift_username` + the `swift_password` secret instead |
+| `s3_endpoint` | string | — | S3 endpoint URL |
+| `s3_region` | string | — | S3 region |
+| `s3_credential_id` | string | — | OpenStack EC2 credential ID |
+| `s3_force_path_style` | bool | `false` | Force S3 path-style addressing |
+| `s3_insecure` | bool | `false` | Allow insecure (HTTP) S3 connections |
+
+### Validation
+
+`internal/services/plugins/loki.go` (dead-code validator; see [Platform services architecture](../platform-services.md)) requires `swift_auth_url` when `storage_type: swift` and `s3_endpoint` when `storage_type: s3`. The live path in `cmd/cluster_service.go` requires, for the resolved backend: a configured `s3_endpoint` plus matched S3 access/secret keys for `s3`, or a matched Swift application-credential ID/secret for `swift`.
 
 ## Secrets
 
-Secrets depend on the chosen `storage_type`.
-
-### Swift Backend (`storage_type: swift`)
-
 ```yaml
 secrets:
   loki:
-    swift_application_credential_secret: ""  # required
+    s3_access_key_id:
+    s3_secret_access_key:
+    swift_application_credential_secret:
+    swift_password:
 ```
-
-The `swift_application_credential_id` is a non-secret config field (UUID) stored under `opencenter.services.loki`. The guided configuration flow copies it from `opencenter.infrastructure.cloud.openstack.application_credential_id`.
-
-### S3 Backend (`storage_type: s3`)
-
-```yaml
-secrets:
-  loki:
-    s3_access_key_id: ""       # required (unless global fallback set)
-    s3_secret_access_key: ""   # required (unless global fallback set)
-```
-
-### Credential Fallback
-
-S3 credentials resolve in order:
-
-1. `secrets.loki.s3_access_key_id` / `s3_secret_access_key`
-2. `secrets.global.aws.application.access_key` / `secret_access_key`
-3. `secrets.global.aws.infrastructure.access_key` / `secret_access_key`
-
-Swift credential fallback:
-
-1. `secrets.loki.swift_application_credential_secret`
-2. `secrets.service_secrets.loki.swift_application_credential_secret`
-3. `secrets.service_secrets.loki.swift_password` (legacy)
 
 ## Dependencies
 
-None. Loki operates independently but integrates with:
-- **kube-prometheus-stack** — ServiceMonitor for Loki metrics
-- **Grafana** — log query datasource
+None enforced by `opencenter cluster service enable|disable`.
 
-## Storage Backends
+## Rendering
 
-### Swift (OpenStack)
+`loki` has no dedicated YAML descriptor; it is rendered through the built-in render catalog with extra rendering-order dependencies on the observability namespace/sources and an override dependency on `sources`.
 
-Default on OpenStack infrastructure. Uses the same application credential as infrastructure provisioning but stored separately for SOPS encryption isolation.
-
-The rendered Helm values configure Loki's `storage.swift` block with auth_url, region, application_credential_id, application_credential_secret, and container_name.
-
-### S3 (AWS/RadosGW)
-
-Default on AWS infrastructure. Compatible with any S3-compliant endpoint including OpenStack RadosGW.
-
-The rendered Helm values configure Loki's `storage.s3` block with endpoint, region, accessKeyId, secretAccessKey, and path style settings.
-
-## Architecture
-
-Loki deploys in microservices mode:
-- **write** — 3 replicas, 100Gi PVC
-- **read** — 3 replicas, 50Gi PVC
-- **backend** — 3 replicas, 50Gi PVC
-- **gateway** — 2 replicas (no PVC)
-- **chunksCache** — Memcached
-- **resultsCache** — Memcached
-
-Multi-tenancy is enabled (`auth_enabled: true`). Schema uses TSDB with v13 from 2025-01-01.
-
-## Verification
+## CLI commands
 
 ```bash
-# Check Loki pods
-kubectl get pods -n loki-system
-
-# Check Loki is receiving logs
-kubectl logs -n loki-system -l app.kubernetes.io/component=write --tail=10
-
-# Query via Grafana
-# Navigate to Explore > Loki datasource > Run query: {namespace="default"}
-```
-
-## CLI Commands
-
-```bash
-# Enable Loki
-opencenter cluster service enable loki
-
-# Disable Loki
+opencenter cluster service enable loki --param="storage_type=s3" --secret="s3_access_key_id=..." --secret="s3_secret_access_key=..."
 opencenter cluster service disable loki
-
-# View configuration options
+opencenter cluster service status
 opencenter cluster service options loki
-
-# Set storage type
-opencenter cluster set my-cluster opencenter.services.loki.storage_type=s3
 ```

@@ -400,9 +400,9 @@ kubectl run -it --rm debug --image=alpine --restart=Never -- \
 
 This how-to guide is based on:
 
-* GitOps configuration: `internal/config/types_gitops.go:17-23` (GitToken, GitTokenProvider, GitOwner fields)
-* Bootstrap implementation: `internal/localdev/flux/service.go:51-160` (provider-specific bootstrap commands)
-* URL parsing: `internal/localdev/flux/service.go:162-230` (parseGitHubURL, parseGitLabURL, parseGitURL)
+* GitOps configuration: `internal/config/v2/config.go:361-385` (`GitOpsTokenAuth`: Provider, Token, TokenFile, Owner, Organization, Personal fields)
+* Bootstrap implementation: `internal/localdev/flux/service.go:73-232` (`Service.Bootstrap`, provider-specific bootstrap commands)
+* URL parsing: `internal/localdev/flux/service.go:244-330` (parseGitHubURL, parseGitLabURL, parseGitURL, splitOwnerRepo)
 * SSH key generation: `internal/sops/manager.go`
 * Security model: `docs/concepts/security-model.md:104-108`
 * FluxCD documentation: https://fluxcd.io/docs/installation/bootstrap/

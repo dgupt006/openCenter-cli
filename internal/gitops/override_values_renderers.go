@@ -29,21 +29,7 @@ func templateRenderer(tmpl string) OverrideValuesRenderer {
 		funcMap["objectStorageBackend"] = func(serviceName string) string {
 			return v2.ResolveObjectStorageBackend(&cfg, serviceName)
 		}
-		funcMap["objectStorageEndpoint"] = func(serviceName string) string {
-			return objectStorageEndpoint(cfg, serviceName)
-		}
-		funcMap["objectStorageBucket"] = func(serviceName string) string {
-			return objectStorageBucket(cfg, serviceName)
-		}
-		funcMap["objectStorageRegion"] = func(serviceName string) string {
-			return objectStorageRegion(cfg, serviceName)
-		}
-		funcMap["objectStorageForcePathStyle"] = func(serviceName string) bool {
-			return objectStorageForcePathStyle(cfg, serviceName)
-		}
-		funcMap["objectStorageInsecure"] = func(serviceName string) bool {
-			return objectStorageInsecure(cfg, serviceName)
-		}
+		funcMap["fqdn"] = clusterFQDNFunc(cfg)
 		t, err := template.New("override-values").Funcs(funcMap).Parse(tmpl)
 		if err != nil {
 			return "", err
@@ -582,9 +568,9 @@ const headlampTemplate = `config:
             create: true
         clientID: opencenter
         clientSecret: {{ .Secrets.Headlamp.OIDCClientSecret }}
-        issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" .OpenCenter.Cluster.ClusterFQDN) }}/realms/opencenter
+        issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
         scopes: openid profile email groups
-        callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" .OpenCenter.Cluster.ClusterFQDN) }}/oidc-callback
+        callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
     pluginsDir: /build/plugins
 initContainers:
     - command:
@@ -612,7 +598,7 @@ volumes:
 
 const harborTemplate = `{{- $harbor := index .OpenCenter.Services "harbor" -}}
 {{- $storageClass := $harbor.StorageClass | default .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
-externalURL: https://{{ $harbor.Hostname | default (printf "harbor.%s" .OpenCenter.Cluster.ClusterFQDN) }}
+externalURL: https://{{ $harbor.Hostname | default (printf "harbor.%s" fqdn) }}
 logLevel: info
 expose:
     type: clusterIP
@@ -684,7 +670,7 @@ const kubePrometheusStackTemplate = `---
 {{- $webhookURL := $kps.WebhookURL | trim -}}
 alertmanager:
   alertmanagerSpec:
-    externalUrl: https://{{ $kps.AlertmanagerHostname | default (printf "alertmanager.%s" .OpenCenter.Cluster.ClusterFQDN) }}
+    externalUrl: https://{{ $kps.AlertmanagerHostname | default (printf "alertmanager.%s" fqdn) }}
     # Pin the PVC storage class (see prometheusSpec.storageSpec note).
     storage:
       volumeClaimTemplate:
@@ -735,7 +721,7 @@ alertmanager:
             send_resolved: true
 prometheus:
   prometheusSpec:
-    externalUrl: https://{{ $kps.PrometheusHostname | default (printf "prometheus.%s" .OpenCenter.Cluster.ClusterFQDN) }}
+    externalUrl: https://{{ $kps.PrometheusHostname | default (printf "prometheus.%s" fqdn) }}
     externalLabels:
       cluster: {{ .OpenCenter.Meta.Name }}
       region: {{ .OpenCenter.Meta.Region }}

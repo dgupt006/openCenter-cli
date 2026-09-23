@@ -86,8 +86,13 @@ The actual native config object is built in
 
 It then applies provider-specific defaults:
 
-* `applyProviderCloudDefaults` populates provider cloud blocks, currently
-OpenStack and VMware.
+* `applyProviderCloudDefaults` populates provider cloud blocks: OpenStack
+(auth URL, region, image IDs, networking placeholders), VMware (vCenter
+placeholders and three static master/worker node stubs), and Magnum
+(a minimal `cloud.magnum` block with only `region` set -- Magnum owns node
+images/networking through its cluster template, so credentials and the
+template are deliberately left for guided configuration to fill in). Every
+other provider gets an empty `Cloud` block.
 * `applyProviderBehaviorDefaults` mutates behavior for providers such as Kind.
 * `applyGitOpsAuthDefaults` chooses SSH or token Git auth defaults.
 

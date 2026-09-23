@@ -2,10 +2,10 @@
 id: code-structure
 title: "Codebase Organization"
 sidebar_label: Codebase Organization
-description: Map of the openCenter-cli repository: top-level layout, package boundaries, and where to find each subsystem.
+description: Map of the openCenter-cli repository -- top-level layout, package boundaries, and where to find each subsystem.
 doc_type: explanation
 audience: "developers"
-tags: [contributing]
+tags: [contributing, architecture]
 ---
 # Codebase Organization
 
@@ -15,408 +15,166 @@ tags: [contributing]
 
 ```
 openCenter-cli/
-├── cmd/                    # CLI commands (Cobra)
-├── internal/               # Internal packages
-├── docs/                   # Documentation
-├── tests/                  # BDD test scenarios
-├── schema/                 # JSON schema definitions
-├── testdata/               # Test fixtures
-├── hack/                   # Scripts and utilities
-├── bin/                    # Compiled binaries (gitignored)
-├── third-party/            # External dependencies
-├── main.go                 # Entry point
-├── go.mod                  # Go module definition
-└── .mise.toml              # Build tasks and tool versions
+├── cmd/                    # CLI commands (Cobra), one file per command/subcommand
+├── internal/                # All non-exported Go packages (the bulk of the codebase)
+├── docs/                     # Documentation (Markdown with YAML frontmatter)
+├── tests/features/           # BDD scenarios (Gherkin) and Godog step definitions
+├── schema/                   # Generated JSON Schema (opencenter-v2.schema.json, cluster.schema.json)
+├── testdata/                  # Test fixtures (sample orgs/clusters, config fixtures)
+├── hack/                      # Dev scripts: local Gitea, shell integration, doc audits
+├── bin/                       # Compiled binaries (gitignored)
+├── main.go                    # CLI entry point
+├── go.mod                      # Go module definition (module github.com/opencenter-cloud/opencenter-cli)
+└── .mise.toml                   # Tool versions and task definitions
 ```
 
-## Command Layer (cmd/)
+## Command layer (`cmd/`)
 
-Commands follow the pattern `cmd/<command>_<subcommand>.go`:
+Every CLI command is a `.go` file named `<noun>_<verb>.go`. There is no separate "cmd/cluster/" subpackage -- all command files live directly in `cmd/` as package `cmd`.
 
-**Cluster commands** (`cluster_*.go`):
+**Cluster commands** (`cluster_*.go`) -- the largest group, covering the full cluster lifecycle: `cluster_init.go`, `cluster_configure.go`, `cluster_validate.go`, `cluster_generate.go`, `cluster_render.go`, `cluster_deploy.go` (+ `cluster_deploy_plan.go` for `--dry-run` output), `cluster_destroy.go`, `cluster_list.go`, `cluster_use.go`, `cluster_active.go`, `cluster_describe.go`, `cluster_status.go` (+ `cluster_status_inventory.go`), `cluster_set.go`, `cluster_edit.go`, `cluster_normalize.go`, `cluster_export.go`, `cluster_import.go`, `cluster_template.go`, `cluster_service.go` (+ `cluster_service_storage.go`), `cluster_pool.go` (worker pools), `cluster_drift.go` (+ `cluster_drift_to_config.go`), `cluster_backup.go`, `cluster_lock.go`, `cluster_doctor.go`, `cluster_sync_status.go`, `cluster_migrate_layout.go`, `cluster_provider.go` (+ `cluster_provider_openstack.go`), `cluster_check_keys.go`, `cluster_rotate_keys.go`, `cluster_revoke_key.go`, `cluster_env.go`, `cluster_validate_manifests.go`.
 
-* `cluster_init.go` - Initialize cluster configuration
-* `cluster_validate.go` - Validate configuration
-* `cluster_generate.go` - Generate GitOps repository
-* `cluster_deploy.go` - Deploy cluster (no longer auto-commits)
-* `cluster_deploy_plan.go` - Deploy dry-run plan formatting
-* `cluster_edit.go` - Edit configuration interactively
-* `cluster_set.go` - Update configuration via dot-notation flags
-* `cluster_list.go` - List clusters
-* `cluster_use.go` - Set active cluster
-* `cluster_describe.go` - Show cluster details
-* `cluster_status.go` - Show cluster status with inventory
-* `cluster_destroy.go` - Destroy cluster
-* `cluster_render.go` - Render templates without deploying
-* `cluster_drift.go` - Infrastructure drift detection/reconciliation
-* `cluster_service.go` - Service enable/disable/status
-* `cluster_backup.go` - Backup/restore operations
+**Secrets commands** (`secrets_*.go`): `secrets.go` (parent + CRUD), `secrets_keys.go` / `secrets_keys_ops.go` / `secrets_keys_reconcile.go` / `secrets_keys_set_primary.go`, `secrets_sync.go`, `secrets_validate.go`, `secrets_sops.go` (+ `secrets_sops_helpers.go`), `secrets_router.go`, `secrets_login.go`, `secrets_file_backend.go`, `secrets_helpers.go`.
 
-**Secrets commands** (`secrets_*.go`):
+**Settings commands** (`config_*.go`, Cobra `Use: "settings"`): `config.go`, `config_edit.go`, `config_ide.go` (schema + editor setup), `config_explain.go`, `config_helpers.go`.
 
-* `secrets.go` - Secrets parent + CRUD subcommands
-* `secrets_keys.go` - Key lifecycle subcommands
-* `secrets_keys_ops.go` - Key operations (generate, rotate, backup, validate)
-* `secrets_sync.go` - Synchronize secrets to encrypted manifests
-* `secrets_validate.go` - Validate secrets encryption
-* `secrets_sops.go` - Encrypt/decrypt/status commands
+**Utility commands**: `version.go`, `shell_init.go`, `plugins.go`, `root.go` (root command, global flags), `global_options.go`, `output_helpers.go`, `provider_availability.go`, `exit_codes.go`, `doc.go`.
 
-**Configuration commands** (`config_*.go`):
+Tests follow the source 1:1: `cluster_init_integration_test.go`, `cluster_deploy_integration_test.go`, `ga_command_surface_test.go` (asserts on the full command tree), `ga_readiness_property_test.go`, etc.
 
-* `config.go` - Settings parent command
-* `config_edit.go` - Edit global configuration
-* `config_ide.go` - IDE schema generation
-* `config_explain.go` - Explain config effects
+## Internal packages (`internal/`)
 
-**Utility commands**:
+### Configuration (`internal/config/`)
 
-* `version.go` - Show version information
-* `shell_init.go` - Shell integration setup
-* `plugins.go` - Plugin management
+* Top level: `cli_settings.go` / `cli_settings_helpers.go` (user preferences, cluster defaults, plugin checksums, path resolution such as `ResolveClustersDir`), `manager.go` (global manager singleton, load/cache orchestration), `persistence.go` (config/state directory resolution), `status.go` (per-cluster stage/status tracking).
+* `defaults/` -- built-in default templates.
+* `flags/` -- CLI flag parsing and struct mutation via reflection (used for dotted override flags like `opencenter.infrastructure.compute.worker_count=5`).
+* `overlay/` -- shared overlay-unit types (`UnitsConfig`, `CustomerManagedConfig`, `SOPSGenerationConfig`, `Secrets`) used by both the active config model and v2.
+* `registry/` -- provider/service registry glue.
+* `services/` -- one file per platform service (`keycloak.go`, `cert_manager.go`, `prometheus_stack.go`, ...), plus `dependency_validator.go`, `provider_registry.go`, `provider_validator.go`, `secrets_validator.go`, `deprecations.go`, `default_services.go`.
+* `v2/` -- the authoritative v2 configuration model: struct definitions, loader, validator, defaults, cache, error types.
+* `v2schema/` -- the JSON Schema generator that produces `schema/opencenter-v2.schema.json` from the v2 Go structs.
+* `cache/` -- config load caching.
 
-**Command naming convention:**
+### GitOps rendering (`internal/gitops/`)
 
-```go
-// Function returns *cobra.Command
-func newCluster<Action>Cmd() *cobra.Command {
-    return &cobra.Command{
-        Use:   "action",
-        Short: "Brief description",
-        RunE:  runClusterAction,
-    }
-}
-```
+* `embed.go` -- `//go:embed all:gitops-base-dir all:templates`, exposing the embedded template filesystem as `Files`.
+* `copy.go` -- convention-based rendering helpers (`shouldSkipFile`, `RenderSingleService`, `RenderClusterAppsAtomic`); `shouldSkipFile` is deprecated in favor of descriptor-driven planning (see [Renderer Contract](rendering-contract.md)).
+* `descriptor_renderer.go` -- descriptor-driven rendering: `planClusterAppActions`, `validateDescriptorCoverage` (fails the build if an embedded template file has no descriptor owner).
+* `render_diagnostics.go` -- structured `RenderDiagnostics` / `DescriptorDecision` / `ActionDiagnostic` output.
+* `gitops-base-dir/` -- the embedded base repository skeleton (bootstrap-owned pieces such as `flux-system/`).
+* `templates/cluster-apps-base/` -- embedded per-service templates (`services/`, `managed-services/`, `customer-managed/`) plus the root `kustomization.yaml` template.
+* `templates/infrastructure-cluster-template/` -- OpenTofu template files (`main-default.tf.tpl`, `main-vmware.tf.tpl`, `main-baremetal.tf.tpl`, `variables.tf.tpl`, `Makefile.tpl`, `inventory/`).
+* `templates/cluster-flux-bridge/`, `templates/kind-config.yaml.tpl` -- Flux bridge manifest and Kind cluster config templates.
+* `stages/` -- per-stage rendering helpers.
 
-## Internal Packages (internal/)
+### Service plugin registry (`internal/services/`)
 
-### Configuration (internal/config/)
+* `plugin.go` -- `ServicePluginManifest` type (service metadata: name, dependencies, template refs, validation rules).
+* `registry.go` -- plugin registration and dependency-ordered lookup.
+* `descriptors/` -- YAML overlay descriptors (one per service) that own rendering topology; `descriptors/data/` holds the descriptor files themselves. See [Renderer Contract](rendering-contract.md) and [Descriptor Condition Schema](descriptor-condition-schema.md).
+* `plugins/` -- per-service plugin implementations.
 
-CLI settings management (the legacy monolithic config package was removed in May 2026):
+### Secrets and encryption (`internal/sops/`, `internal/secrets/`, `internal/secretartifacts/`, `internal/barbican/`)
 
-* `cli_settings.go` - CLI user preferences, cluster defaults, plugin checksums
-* `cli_settings_helpers.go` - Path resolution from CLI config (ResolveClustersDir, GetGitOpsDir, etc.)
-* `manager.go` - Global manager singleton
-* `persistence.go` - Config/state directory resolution
-* `status.go` - Cluster status updates
-* `defaults/` - Default configuration templates per provider-region
-* `v2/` - Authoritative v2 configuration (loader, validator, manager, cache, errors, io_handler)
-* `flags/` - CLI flag parsing and struct mutation via reflection
-* `services/` - Typed service configs with dependency/provider validation
+* `internal/sops/` -- SOPS/Age operations: `manager.go`, `keys.go` (Age key generation/storage), `encrypt.go`, `git.go` (encrypted-file Git integration), `key_manager.go`, `overlay_files.go`.
+* `internal/secrets/` -- multi-cluster secret lifecycle: `manager.go`, `multi_cluster.go`, `registry.go`, `revocation.go`, `reconcile.go`, `hooks.go`.
+* `internal/secretartifacts/` -- planning and state tracking for generated secret manifests (`planner.go`, `state.go`).
+* `internal/barbican/` -- OpenStack Key Manager (Barbican) client (`client.go`, `auth.go`, `token.go`).
 
-**Key types (v2):**
+### Providers (`internal/cloud/`, `internal/provision/`, `internal/tofu/`)
 
-```go
-type Config struct {
-    Meta           MetaConfig
-    OpenCenter     OpenCenterConfig
-    Infrastructure InfrastructureConfig
-    Kubernetes     KubernetesConfig
-    GitOps         GitOpsConfig
-    Services       ServiceMap
-    Secrets        SecretsConfig
-    OpenTofu       OpenTofuConfig
-    Deployment     DeploymentConfig
-}
-```
+* `internal/cloud/openstack/` -- OpenStack drift detection, discovery, preflight checks.
+* `internal/cloud/vmware/` -- VMware/vSphere drift detection.
+* `internal/cloud/kind/` -- Kind cluster lifecycle.
+* `internal/cloud/magnum/` -- OpenStack Magnum managed-Kubernetes provider (the most recently added provider; see [Adding New Infrastructure Providers](adding-providers.md)).
+* `internal/provision/` -- embedded OpenTofu/Terraform provisioning templates (`embed.go`).
+* `internal/tofu/` -- OpenTofu execution wrapper (falls back to `terraform` binary if `tofu` is unavailable).
 
-### GitOps (internal/gitops/)
+### Cluster lifecycle orchestration (`internal/cluster/`)
 
-GitOps repository scaffolding:
+Business logic behind the `cmd/cluster_*.go` commands: `init_service.go`, `configure_service.go` (+ provider orchestrators such as `openstack_configure_orchestrator.go`, `magnum_configure_orchestrator.go`), `setup_service.go` (backs `cluster generate`), `validate_service.go` (+ `validation_formatter.go`, `validation_report.go`), `bootstrap_service.go` / `bootstrap_provider.go` / `bootstrap_plan.go` / `bootstrap_runtime.go` (backs `cluster deploy`; provider-specific steps in `openstack_bootstrap_provider.go`... actually see note below), `destroy_service.go` / `destroy_provider.go`, `configure_storage.go`, `configure_dns.go`, `configure_git_auth.go`, `admin_secrets.go`, `sops_age_secret.go`, `tofu_binary.go`.
 
-* `copy.go` - Template copying and rendering logic
-* `embed.go` - Embedded template management (`//go:embed`)
-* `gitops-base-dir/` - Base repository structure (embedded)
-* `templates/` - Cluster-specific templates (embedded)
+### Validation (`internal/core/validation/`)
 
-**Template structure:**
+Engine + registry + typed validators. See [Validation Rules](../reference/validation-rules.md) for the full validator inventory and [Cluster Validate Execution Flow](validation.md) for how `cluster validate` drives it.
 
-```
-gitops-base-dir/
-├── applications/
-│   └── base/
-│       └── services/
-│           ├── cert-manager/
-│           ├── kyverno/
-│           └── ...
-└── infrastructure/
-    └── clusters/
-        ├── openstack/
-        ├── vmware/
-        └── ...
-```
+### Security (`internal/security/` and `internal/util/security/`)
 
-### Secrets (internal/sops/)
+Two distinct packages -- do not confuse them:
 
-SOPS and Age key management:
+* `internal/security/` -- CLI-facing security controls: `audit_logger.go` (structured audit log of CLI operations), `command_runner.go` (safe external-command execution), `command_sanitizer.go` (argument sanitization), `credential_masker.go` (secret redaction in output/logs), `input_validator.go` (path traversal / injection checks on user input).
+* `internal/util/security/` -- lower-level security utilities shared across packages: `credential_masker.go` (a separate, more general masker implementation), `secure_temp_file.go`, `interfaces.go`.
 
-* `manager.go` - SOPS manager interface
-* `keys.go` - Age key generation and storage
-* `encrypt.go` - Encryption/decryption operations
-* `git.go` - Git integration for encrypted files
-* `validator.go` - SOPS configuration validation
+See [Audit Signing Key](../reference/audit-key.md) for what the audit logger actually records and signs.
 
-### Providers (internal/cloud/, internal/provision/)
+### Shared utilities (`internal/util/`)
 
-Cloud provider adapters:
+* `crypto/` -- Age/SSH key generation and validation (`key_generator.go`, `ssh_key_generator.go`, `key_validator.go`, `key_manager.go`).
+* `errors/` -- error aggregation, wrapping, and structured-error middleware.
+* `files/` -- atomic file writes (`atomic_writer.go`).
+* `fs/` -- filesystem abstraction wrapper (for testability).
+* `metrics/` -- lightweight in-process metrics.
+* `security/` -- see above.
+* `reflection.go` -- reflection helpers used by the dotted-flag override mechanism.
 
-* `internal/cloud/openstack/` - OpenStack drift detection + discovery
-* `internal/cloud/vmware/` - VMware/vSphere drift detection
-* `internal/cloud/kind/` - Kind cluster lifecycle
-* `internal/cloud/` - Provider factory, drift comparison
-* `internal/provision/` - Embedded OpenTofu/Terraform provisioning templates
+### Other packages
 
-### Security (internal/security/)
+* `internal/ansible/` and `internal/observability/` referenced in older documentation **do not exist on this branch** -- do not link to them. Ansible/Kubespray invocation lives in `internal/cluster` (the bootstrap provider steps shell out to `ansible-playbook` directly); structured logging lives in `internal/logging/`.
+* `internal/core/paths/` -- cluster path-layout resolution (org-based directory strategy).
+* `internal/credentials/` -- cloud credential extraction from `v2.Config` (`extractor.go`, `openstack.go`, `aws.go`).
+* `internal/di/` -- dependency-injection container (`app.go`, `container.go`, `providers.go`) that wires services (like `BootstrapService`) with their dependencies.
+* `internal/importer/` -- live-cluster scan/import (`scanner.go`, `detectors.go`, `apply.go`, `write_plan.go`).
+* `internal/localdev/` -- local development environment (Kind + Gitea) lifecycle (`cluster.go`, `exec.go`, `layout.go`).
+* `internal/logging/` -- global structured logger (`logging.go`).
+* `internal/operations/` -- drift detection (`drift_detector.go`) and backup/restore (`backup_manager.go`).
+* `internal/plugins/` -- external CLI plugin discovery and checksum verification (`loader.go`).
+* `internal/resilience/` -- retry (`retry.go`), circuit breaker (`circuit_breaker.go`), distributed/local lock manager (`lock_manager.go`, with a Redis-backed implementation).
+* `internal/template/` -- general-purpose template engine with caching, sandboxing, and composition (`engine.go`, `sandbox.go`, `cache.go`, `composition.go`, `embedded_registry.go` -- the latter's `inferServices` lists every service name the renderer can discover from the embedded template filesystem).
+* `internal/testenv/` -- isolated CLI config/state directories for tests (`cli_dirs.go`, `loopback.go`).
+* `internal/testing/` -- shared test helpers/mocks/generators.
+* `internal/ui/` -- prompts, guided-flow prompter, error formatting.
 
-Security utilities:
+## Testing (`tests/`)
 
-* `input_validator.go` - Input validation (path traversal, injection)
-* `command_sanitizer.go` - Command sanitization
-* `credential_masker.go` - Credential masking in logs
-* `audit_logger.go` - Audit logging with HMAC signatures
+BDD scenarios live in `tests/features/*.feature` (Gherkin), executed via [Godog](https://github.com/cucumber/godog): `cli_config.feature`, `cluster_generate_deploy.feature`, `cluster_init.feature`, `cluster_selection.feature`, `config_template_rendering.feature`, `secrets.feature`, `validation.feature`, `workflow.feature`. Step definitions live in `tests/features/steps/` (`helpers.go`, `steps_test.go`). Scenarios are tagged (`@wip`, `@init`, `@deploy`, `@keycloak`, `@cert-manager`, and dozens of feature-specific tags); `@wip` scenarios are excluded from the default `mise run godog` run. See [Testing Guide](testing-guide.md).
 
-### Utilities (internal/util/)
-
-Shared utility packages:
-
-* `crypto/` - Key generation and management
-* `errors/` - Error handling and aggregation
-* `files/` - File operations (atomic writes, backups)
-* `paths/` - Path resolution and validation
-* `template/` - Template engine and validation
-
-### Other Packages
-
-* `internal/ansible/` - Kubespray inventory generation from config
-* `internal/barbican/` - OpenStack Key Manager (Barbican) client
-* `internal/cluster/` - Cluster lifecycle services (init, validate, setup, bootstrap, destroy)
-* `internal/core/` - Shared path resolution (`core/paths`) and validation engine (`core/validation`)
-* `internal/credentials/` - Cloud credential extraction from config
-* `internal/di/` - Dependency injection container (App struct + reflection-based Container)
-* `internal/importer/` - Live cluster import/scan for existing workloads
-* `internal/localdev/` - Local dev environment (Kind, Gitea, Flux)
-* `internal/logging/` - Structured logging (global logger, level/format reconfiguration)
-* `internal/observability/` - Log shipping (Loki, syslog), migration helpers
-* `internal/operations/` - Drift detection, backup, disaster recovery
-* `internal/plugins/` - External CLI plugin discovery and checksum verification
-* `internal/resilience/` - Retry, circuit breaker, distributed locks
-* `internal/secrets/` - Multi-cluster secrets management (rotation, registry, hooks, revocation)
-* `internal/services/` - Platform service plugin registry with dependency resolution
-* `internal/template/` - Template engine with caching, validation, sandboxing
-* `internal/testenv/` - Test environment helpers (isolated CLI config/state)
-* `internal/testing/` - Shared test utilities (helpers, mocks, generators, benchmarks)
-* `internal/tofu/` - OpenTofu/Terraform provisioning execution (falls back to terraform)
-* `internal/ui/` - Prompts, error formatting, guided flows
-
-## Testing (tests/)
-
-BDD tests using Cucumber/Gherkin:
-
-```
-tests/
-└── features/
-    ├── workflow.feature
-    ├── cluster_init.feature
-    ├── validation.feature
-    └── steps/
-        ├── cluster_steps.go
-        ├── config_steps.go
-        └── test_suite.go
-```
-
-**Tag convention:**
-
-* `@wip` - Work in progress scenarios
-* `@priority1` - High priority tests
-* `@priority2` - Medium priority tests
-
-## Configuration Storage
-
-User configurations stored in organization-based structure:
+## Configuration storage on disk
 
 ```
 ~/.config/opencenter/clusters/
 └── <organization>/
-    ├── .<cluster>-config.yaml       # Cluster configuration (dot-prefixed)
+    ├── .<cluster>-config.yaml       # v2 cluster configuration (dot-prefixed)
+    ├── infrastructure/clusters/<cluster>/
+    ├── applications/overlays/<cluster>/
     ├── secrets/
-    │   ├── age/
-    │   │   └── <cluster>-key.txt
-    │   └── ssh/
-    │       └── <cluster>-<env>-<region>
-    └── gitops/
-        ├── applications/
-        └── infrastructure/
+    │   ├── age/keys/<cluster>-key.txt
+    │   └── ssh/<cluster>-<env>-<region>
+    └── .sops.yaml
 ```
 
-## Code Organization Principles
+See [File Locations](../reference/file-locations.md) for the full, verified path list and the environment variables that override each root.
 
-### Separation of Concerns
+## Naming and organization conventions
 
-Each package has a single, well-defined responsibility:
+* Commands: `<noun>_<verb>.go` (e.g. `cluster_init.go`, `secrets_keys_ops.go`).
+* Tests: `<name>_test.go` (unit), `<name>_property_test.go` (property-based, via `gopter`), `<name>_integration_test.go` (integration).
+* Package documentation: `doc.go` per package.
+* Errors: wrapped with `fmt.Errorf("...: %w", err)` for context; aggregated failures use `internal/util/errors`.
+* Embedded resources: `//go:embed` directives in `embed.go` files (`internal/gitops/embed.go`, `internal/provision/embed.go`).
 
-* `cmd/` - CLI interface and user interaction
-* `internal/config/` - Configuration management
-* `internal/gitops/` - GitOps repository generation
-* `internal/sops/` - Secrets encryption
-* `internal/cloud/` - Provider-specific logic
+## Finding functionality: quick pointers
 
-### Dependency Injection
+**Add a command:** create `cmd/cluster_<action>.go`, implement a `newCluster<Action>Cmd() *cobra.Command`, register it in `cmd/cluster.go`.
 
-Avoid global state, pass dependencies explicitly:
+**Change configuration shape:** edit `internal/config/v2/config.go` (structs), `internal/config/v2/` validator and defaults files, then regenerate the schema with `mise run schema-v2`.
 
-```go
-// Good: Dependencies injected
-func NewValidator(schema *jsonschema.Schema) *Validator {
-    return &Validator{schema: schema}
-}
+**Add a provider:** see [Adding New Infrastructure Providers](adding-providers.md) -- `internal/cloud/magnum/` is the current worked example.
 
-// Bad: Global state
-var globalSchema *jsonschema.Schema
-```
+**Add a service:** see [Adding New Platform Services](adding-services.md) -- add the typed config in `internal/config/services/`, a plugin manifest in `internal/services/plugins/`, embedded templates under `internal/gitops/templates/cluster-apps-base/services/<service>/`, and a descriptor in `internal/services/descriptors/data/`.
 
-### Interface-Based Design
+**Add a validator:** create it under `internal/core/validation/validators/` and register it with the engine; see [Validation Rules](../reference/validation-rules.md).
 
-Define interfaces in consumer packages:
+## Dead-code and duplication cleanup history
 
-```go
-// internal/config/interfaces.go
-type SecretManager interface {
-    Encrypt(data []byte) ([]byte, error)
-    Decrypt(data []byte) ([]byte, error)
-}
-
-// internal/sops/manager.go implements SecretManager
-```
-
-### Embedded Resources
-
-Templates and defaults embedded in binary via `//go:embed`:
-
-```go
-//go:embed gitops-base-dir
-var gitopsBaseFS embed.FS
-
-//go:embed templates
-var templatesFS embed.FS
-```
-
-### Error Wrapping
-
-Use `fmt.Errorf` with `%w` for error context:
-
-```go
-if err != nil {
-    return fmt.Errorf("failed to load config: %w", err)
-}
-```
-
-## File Naming Conventions
-
-* Commands: `<noun>_<verb>.go` (e.g., `cluster_init.go`, `secrets_keys_ops.go`)
-* Tests: `<name>_test.go` (unit), `<name>_property_test.go` (property-based)
-* Integration tests: `<name>_integration_test.go`
-* Interfaces: `interfaces.go` in each package
-* Documentation: `doc.go` for package documentation
-
-## Finding Functionality
-
-**To add a new command:**
-
-1. Create `cmd/cluster_<action>.go`
-2. Implement `newCluster<Action>Cmd()`
-3. Register in `cmd/cluster.go`
-
-**To modify configuration:**
-
-1. Update `internal/config/v2/config.go` (structs)
-2. Update `internal/config/v2/validator.go` (validation rules)
-3. Update `internal/config/v2/defaults.go` (defaults)
-4. Run `go generate ./internal/config/v2schema/` to regenerate JSON schema
-
-**To add a provider:**
-
-1. Create `internal/cloud/<provider>/provider.go`
-2. Add defaults in `internal/config/defaults/<provider>.go`
-3. Add bootstrap steps in `internal/cluster/bootstrap_provider_infra.go`
-4. Add template in `internal/gitops/templates/infrastructure-cluster-template/`
-
-**To add a service:**
-
-1. Add service config in `internal/config/services/`
-2. Create plugin in `internal/services/plugins/`
-3. Add templates in `internal/gitops/gitops-base-dir/`
-4. Add descriptor in `internal/services/descriptors/`
-
-**To add validation:**
-
-1. Create validator in `internal/core/validation/validators/`
-2. Register in `internal/di/providers.go`
-
-## Code Metrics
-
-* **Total lines:** ~226,000 LOC
-* **Go files:** ~710 files
-* **Test files:** ~350 files
-* **Internal packages:** 30+ packages
-* **Commands:** 50+ command files
-* **Dependencies:** 19 direct dependencies
-
-## Architecture Patterns
-
-### Command Pattern
-
-Commands encapsulate operations:
-
-```go
-type Command interface {
-    Execute() error
-}
-```
-
-### Repository Pattern
-
-Configuration storage abstracted:
-
-```go
-type ConfigRepository interface {
-    Load(path string) (*Config, error)
-    Save(path string, cfg *Config) error
-}
-```
-
-### Template Method Pattern
-
-Base template with provider-specific overrides:
-
-```go
-func GenerateInfrastructure(provider string) error {
-    // Common steps
-    loadConfig()
-    validateConfig()
-
-    // Provider-specific
-    switch provider {
-    case "openstack":
-        generateOpenStackTerraform()
-    case "aws":
-        generateAWSTerraform()
-    }
-
-    // Common steps
-    writeFiles()
-}
-```
-
----
-
-## Evidence
-
-This documentation is based on the following repository files:
-
-* Project structure: `.kiro/steering/structure.md:1-128`
-* Command layer: `cmd/` directory (70+ files)
-* Internal packages: `internal/` directory (25 packages)
-* Configuration: `internal/config/` directory
-* GitOps: `internal/gitops/` directory
-* Testing: `tests/features/` directory
-* Code metrics: Session 1 summary (A1)
-* Organization principles: `.kiro/steering/structure.md:130-145`
+A conservative first cleanup pass removed the unreferenced `internal/util/template` package (no importers -- active template rendering lives in `internal/gitops` and `internal/template`), trimmed `internal/util/files` to the atomic-write helper still used by `internal/sops` and `internal/util/crypto`, and collapsed duplicated `ConfigurationManager.Load` / `LoadWithoutValidation` logic into a shared private helper. `cmd/` dead-code findings were deliberately deferred because command registration affects public CLI behavior and generated reference docs; treat unused-looking exported functions in `cmd/` and in `internal/gitops` (e.g. the deprecated `shouldSkipFile` path) as intentionally retained until the descriptor-driven renderer cutover is formally approved (see [Renderer Contract](rendering-contract.md)), not as candidates for casual removal.
