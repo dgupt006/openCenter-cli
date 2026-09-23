@@ -564,6 +564,17 @@ func (s *Service) runContainer(ctx context.Context) error {
 		"-p", fmt.Sprintf("%d:3000", s.settings.HTTPPort),
 		"-p", fmt.Sprintf("%d:3001", s.settings.HTTPSPort),
 		"-p", fmt.Sprintf("%d:22", s.settings.SSHPort),
+		// Enforce the HTTPS server config via GITEA__* env vars so the image's
+		// environment-to-ini step keeps app.ini serving HTTPS on 3001 with the
+		// install lock set, even if the entrypoint would otherwise regenerate a
+		// default HTTP-on-3000 install-page config. This backs up the app.ini the
+		// CLI writes and prevents the silent HTTP fallback that stalls readiness.
+		"-e", "GITEA__server__PROTOCOL=https",
+		"-e", "GITEA__server__HTTP_PORT=3001",
+		"-e", fmt.Sprintf("GITEA__server__ROOT_URL=https://localhost:%d/", s.settings.HTTPSPort),
+		"-e", "GITEA__server__CERT_FILE=/data/gitea/certs/cert.pem",
+		"-e", "GITEA__server__KEY_FILE=/data/gitea/certs/key.pem",
+		"-e", "GITEA__security__INSTALL_LOCK=true",
 	}
 
 	// The bind-mounted /data tree must be owned by the git user Gitea runs as

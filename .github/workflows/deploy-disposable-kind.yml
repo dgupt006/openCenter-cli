@@ -268,6 +268,18 @@ jobs:
           set -euo pipefail
           status_file="${RUNNER_TEMP}/gitea-before-kind.status"; rm -f "${status_file}"
 
+          # FIX 6 (the real gitea blocker): self-hosted runners reuse RUNNER_TEMP
+          # across runs, so a stale Gitea /data from an earlier run persists. The
+          # container then reads that old app.ini (HTTP install page on :3000,
+          # INSTALL_LOCK=false) instead of the HTTPS :3001 config the CLI writes,
+          # so nothing ever listens on :3001 and the readiness probe times out.
+          # Force a clean slate before provisioning: remove any leftover Gitea
+          # container and wipe the persisted local-dev state so writeAppINI/
+          # writeCertificates start fresh.
+          opencenter-local gitea --runtime "${CONTAINER_RUNTIME}" destroy 2>/dev/null || true
+          "${CONTAINER_RUNTIME}" rm -f gitea 2>/dev/null || true
+          rm -rf "${OPENCENTER_CONFIG_DIR}/local" "${OPENCENTER_CONFIG_DIR}"/*/gitea 2>/dev/null || true
+
           # Diagnostics: if `gitea up` fails (e.g. the API readiness wait times
           # out), capture container state, logs, and port bindings so the cause
           # is visible in the run log instead of an opaque timeout.
