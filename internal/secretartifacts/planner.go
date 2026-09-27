@@ -205,18 +205,23 @@ func etcdBackupPayload(cfg *v2.Config) map[string]interface{} {
 }
 
 func harborPayload(cfg *v2.Config) any {
-	// Harbor's registry/database credentials remain materialized, but its S3
-	// credentials are not applicable to filesystem or managed RustFS storage.
-	payload := map[string]interface{}{
-		"admin_password":    cfg.Secrets.Harbor.AdminPassword,
-		"registry_password": cfg.Secrets.Harbor.RegistryPassword,
-		"database_password": cfg.Secrets.Harbor.DatabasePassword,
-	}
-	if v2.ResolveObjectStorageBackend(cfg, "harbor") == "s3" && !v2.UsesManagedObjectStorage(cfg) {
-		payload["s3_access_key_id"] = cfg.Secrets.Harbor.S3AccessKeyID
-		payload["s3_secret_access_key"] = cfg.Secrets.Harbor.S3SecretAccessKey
-	}
-	return payload
+	// Harbor has no consumer for a materialized services/harbor/secret.yaml
+	// (opencenter-harbor-secret). Every credential Harbor needs — admin,
+	// registry, database, and (in S3 mode) the object-storage access/secret
+	// keys — is rendered directly into helm-values/override-values.yaml from
+	// cfg.Secrets.Harbor.* and delivered to the chart via the kustomize
+	// secretGenerator (which is SOPS-encrypted at rest). Nothing references
+	// opencenter-harbor-secret via secretKeyRef, so materializing it only
+	// produces an orphaned artifact.
+	//
+	// That orphan is now rejected by validateMaterializedSecretMembership: the
+	// artifact is materialized but Harbor's overlay kustomization.yaml never
+	// lists secret.yaml in resources, which fails `secrets sync` for any config
+	// that populates Harbor credentials. Return nil so Harbor stops emitting the
+	// orphan entirely (the same treatment Keycloak received; see the fixed[]
+	// comment above). This is storage-backend agnostic and consistent with the
+	// OCTR-744 contract that filesystem-mode Harbor carries no S3 credentials.
+	return nil
 }
 
 // mimirPayload contains only the credentials consumed by Mimir's effective
