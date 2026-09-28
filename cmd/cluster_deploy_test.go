@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	configdefaults "github.com/opencenter-cloud/opencenter-cli/internal/config/defaults"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/resilience"
@@ -49,6 +50,10 @@ func writeTestConfig(t *testing.T, dir, name, provider, gitDir string) {
 	cfg := *cfgPtr
 	cfg.OpenCenter.Meta.Organization = "opencenter"
 	cfg.OpenCenter.GitOps.Repository.LocalDir = clusterPaths.GitOpsDir
+	// These deploy-mechanics fixtures do not run secrets sync; clear the secret
+	// payloads so the deploy secrets preflight (OCTR-787) has nothing to require.
+	// The preflight itself is covered by TestCheckSecretsSyncedPreflight.
+	cfg.Secrets = v2.SecretsConfig{}
 
 	loader := v2.NewConfigLoader(configdefaults.NewRegistry())
 	if err := loader.SaveToFile(&cfg, clusterPaths.ConfigPath); err != nil {
@@ -309,18 +314,83 @@ func TestPrintPostDeployNextSteps(t *testing.T) {
 
 	output := out.String()
 
-	// The correct command is "opencenter secrets sync" (top-level), not
-	// "opencenter cluster secrets sync" which doesn't exist.
-	if !strings.Contains(output, "opencenter secrets sync my-cluster") {
-		t.Fatalf("expected next-steps to contain correct 'opencenter secrets sync' command, got:\n%s", output)
-	}
-	if strings.Contains(output, "opencenter cluster secrets sync") {
-		t.Fatalf("next-steps must not suggest non-existent 'opencenter cluster secrets sync' command, got:\n%s", output)
+	// Secrets are synced BEFORE deploy (generate -> secrets sync -> deploy, now
+	// enforced by the deploy secrets preflight), so the post-deploy next-steps
+	// must NOT tell the user to sync secrets afterwards (OCTR-787: the old
+	// post-deploy ordering was misleading and caused "secret not found").
+	if strings.Contains(output, "secrets sync") {
+		t.Fatalf("post-deploy next-steps must not suggest secrets sync (it precedes deploy), got:\n%s", output)
 	}
 	if !strings.Contains(output, "git add -A") {
 		t.Fatalf("expected next-steps to contain git commit instruction, got:\n%s", output)
 	}
 	if !strings.Contains(output, "git push") {
 		t.Fatalf("expected next-steps to contain git push instruction, got:\n%s", output)
+	}
+}
+
+// TestCheckSecretsSyncedPreflight covers OCTR-787: cluster deploy must fail
+// fast when a required secret manifest is missing or created-but-unwired, and
+// pass once it is created and wired into the service kustomization.
+func TestCheckSecretsSyncedPreflight(t *testing.T) {
+	cfgPtr, err := v2.NewV2Default("pf", "kind")
+	if err != nil {
+		t.Fatalf("v2 default: %v", err)
+	}
+	cfg := *cfgPtr
+	mimir, ok := cfg.OpenCenter.Services["mimir"].(*services.MimirConfig)
+	if !ok {
+		t.Fatalf("mimir service type unexpected")
+	}
+	mimir.Enabled = true
+	mimir.StorageType = "s3"
+	mimir.S3Endpoint = "http://s3.example:8333"
+	mimir.BucketName = "pf-mimir"
+	cfg.Secrets.Mimir.S3AccessKeyID = "k"
+	cfg.Secrets.Mimir.S3SecretAccessKey = "v"
+
+	// Isolate the preflight to the mimir secret: clear the other secret payloads
+	// the default config would otherwise require, so this test asserts only the
+	// mimir create/wire states. (The preflight covering all services is exercised
+	// by the live reproduction; here we keep the fixture minimal.)
+	cfg.Secrets.Loki = v2.LokiSecrets{}
+	cfg.Secrets.Tempo = v2.TempoSecrets{}
+	cfg.Secrets.Headlamp = v2.HeadlampSecrets{}
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{}
+
+	gitDir := filepath.Join(t.TempDir(), "opencenter")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = gitDir
+	mimirDir := filepath.Join(gitDir, "applications", "overlays", "pf", "services", "mimir")
+	if err := os.MkdirAll(mimirDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// (1) No secret.yaml at all -> must fail with actionable message.
+	if err := checkSecretsSynced(&cfg, "pf"); err == nil ||
+		!strings.Contains(err.Error(), "not created") ||
+		!strings.Contains(err.Error(), "opencenter secrets sync pf") {
+		t.Fatalf("expected 'not created' preflight failure, got %v", err)
+	}
+
+	// (2) secret.yaml present but NOT wired into kustomization -> must fail.
+	if err := os.WriteFile(filepath.Join(mimirDir, "secret.yaml"), []byte("kind: Secret\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mimirDir, "kustomization.yaml"),
+		[]byte("resources:\n  - custom/\n"), 0o644); err != nil {
+		t.Fatalf("write kustomization: %v", err)
+	}
+	if err := checkSecretsSynced(&cfg, "pf"); err == nil ||
+		!strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("expected 'not wired' preflight failure, got %v", err)
+	}
+
+	// (3) secret.yaml present AND wired -> must pass.
+	if err := os.WriteFile(filepath.Join(mimirDir, "kustomization.yaml"),
+		[]byte("resources:\n  - custom/\n  - secret.yaml\n"), 0o644); err != nil {
+		t.Fatalf("rewrite kustomization: %v", err)
+	}
+	if err := checkSecretsSynced(&cfg, "pf"); err != nil {
+		t.Fatalf("preflight should pass when secret is created and wired, got %v", err)
 	}
 }

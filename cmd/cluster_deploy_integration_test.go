@@ -491,6 +491,27 @@ func prepareKindBootstrapFixture(t *testing.T, clusterName string) (string, stri
 
 	resetCommandStateForTests()
 
+	// These fixtures exercise deploy mechanics with a fake kind/bootstrap, not
+	// the secrets flow, and do not run secrets sync. Clear the secret payloads in
+	// the generated config so the deploy secrets preflight (OCTR-787) has nothing
+	// to require. The preflight itself is covered by TestCheckSecretsSyncedPreflight.
+	clearConfigSecretsForTest(t, filepath.Join(dir, "clusters", "blueprints", "opencenter", clusterName, clusterName+"-config.yaml"))
+
 	clusterDir := filepath.Join(dir, "clusters", "gitops", "opencenter", "infrastructure", "clusters", clusterName)
 	return dir, stateDir, clusterDir
+}
+
+// clearConfigSecretsForTest rewrites the cluster config file with an empty
+// secrets section so the deploy secrets preflight requires nothing.
+func clearConfigSecretsForTest(t *testing.T, configPath string) {
+	t.Helper()
+	loader := v2.NewConfigLoader(configdefaults.NewRegistry())
+	cfg, err := loader.LoadFromFile(configPath)
+	if err != nil {
+		t.Fatalf("load config for secret clear: %v", err)
+	}
+	cfg.Secrets = v2.SecretsConfig{}
+	if err := loader.SaveToFile(cfg, configPath); err != nil {
+		t.Fatalf("save config after secret clear: %v", err)
+	}
 }

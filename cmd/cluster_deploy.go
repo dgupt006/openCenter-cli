@@ -16,7 +16,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +29,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/di"
 	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
+	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/spf13/cobra"
 )
 
@@ -125,6 +129,15 @@ func runClusterDeploy(cmd *cobra.Command, args []string) error {
 	}
 	bootstrapService := app.BootstrapService
 	bootstrapService.SetOutput(cmd.OutOrStdout())
+
+	// Pre-check: ensure required secret manifests are synced and wired before
+	// bootstrap, so secret-consuming services (e.g. Mimir) do not fail with
+	// "secret ... not found" after a full deploy (OCTR-787).
+	if !opts.DryRun && err == nil {
+		if secretErr := checkSecretsSynced(&cfg, actualClusterName); secretErr != nil {
+			return secretErr
+		}
+	}
 
 	// Pre-check: ensure the GitOps working tree is clean before bootstrap.
 	// A dirty tree causes git pull --rebase to fail during the gitea-rebase step.
@@ -239,11 +252,13 @@ func parseBootstrapOptions(cmd *cobra.Command, args []string, clusterName string
 }
 
 // printPostDeployNextSteps prints next steps after a successful deploy.
+// Secrets are synced BEFORE deploy (enforced by checkSecretsSynced and the
+// generate -> secrets sync -> deploy flow), so they are intentionally not
+// listed here — only committing and pushing the generated tree remain.
 func printPostDeployNextSteps(cmd *cobra.Command, name string) {
 	fmt.Fprintln(cmd.OutOrStdout(), "\nNext steps:")
-	fmt.Fprintf(cmd.OutOrStdout(), "  1. Sync secrets:    opencenter secrets sync %s\n", name)
-	fmt.Fprintf(cmd.OutOrStdout(), "  2. Commit changes:  git add -A && git commit -m \"deploy %s\"\n", name)
-	fmt.Fprintln(cmd.OutOrStdout(), "  3. Push to remote:  git push")
+	fmt.Fprintf(cmd.OutOrStdout(), "  1. Commit changes:  git add -A && git commit -m \"deploy %s\"\n", name)
+	fmt.Fprintln(cmd.OutOrStdout(), "  2. Push to remote:  git push")
 }
 
 // warnUncommittedChanges prints a warning if the GitOps directory has
@@ -259,6 +274,72 @@ func warnUncommittedChanges(ctx context.Context, cmd *cobra.Command, gitDir stri
 		return
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Warning: GitOps directory has uncommitted changes:\n%s\n", strings.TrimRight(string(output), "\n"))
+}
+
+// checkSecretsSynced verifies that every secret manifest the cluster
+// configuration requires has been materialized by `opencenter secrets sync` AND
+// wired into its service overlay kustomization's resources list. Deploying
+// without this leaves services that consume the secret (e.g. Mimir's
+// opencenter-mimir-secret) stuck in CreateContainerConfigError with
+// "secret <name> not found" (OCTR-787). Failing fast here — before any
+// infrastructure changes — gives the operator a clear, actionable next step
+// instead of a cryptic pod-level failure after a full deploy.
+//
+// The set of required secrets is derived from secretartifacts.Plan(cfg), the
+// same planner secrets sync uses, so this never hardcodes a service list.
+func checkSecretsSynced(cfg *v2.Config, clusterName string) error {
+	gitDir := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.LocalDir)
+	if gitDir == "" {
+		return nil
+	}
+	artifacts, err := secretartifacts.Plan(cfg)
+	if err != nil {
+		// Planning issues surface elsewhere; do not block deploy on them here.
+		return nil
+	}
+	overlay := filepath.Join(gitDir, "applications", "overlays", clusterName)
+	var missing []string
+	for _, artifact := range artifacts {
+		rel := filepath.FromSlash(artifact.Path) // services/<svc>/secret.yaml
+		full := filepath.Join(overlay, rel)
+		if _, statErr := os.Stat(full); statErr != nil {
+			missing = append(missing, artifact.Path+" (not created)")
+			continue
+		}
+		wired, wErr := secretWiredIntoKustomization(filepath.Dir(full))
+		if wErr == nil && !wired {
+			missing = append(missing, artifact.Path+" (created but not wired into kustomization)")
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	return fmt.Errorf(
+		"required secret manifests are not ready for deploy:\n  %s\n\n"+
+			"Run 'opencenter secrets sync %s' before deploying so these secrets are "+
+			"created and applied by Flux; otherwise the consuming services fail with "+
+			"\"secret ... not found\".",
+		strings.Join(missing, "\n  "), clusterName)
+}
+
+// secretWiredIntoKustomization reports whether the kustomization.yaml in dir
+// lists secret.yaml in its resources so Flux actually applies it.
+func secretWiredIntoKustomization(dir string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "kustomization.yaml"))
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimPrefix(trimmed, "- ")
+		trimmed = strings.Trim(trimmed, "\"'")
+		trimmed = strings.TrimPrefix(trimmed, "./")
+		if trimmed == "secret.yaml" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // verifyOriginMatchesGitURL checks that the "origin" remote in gitDir points to
