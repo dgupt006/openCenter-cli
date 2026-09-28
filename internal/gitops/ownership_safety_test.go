@@ -119,3 +119,46 @@ func TestLoadGeneratedManifestRejectsSymlink(t *testing.T) {
 		t.Fatalf("expected symlink refusal, got %v", err)
 	}
 }
+
+// TestPromoteExemptsDeployManagedInventory reproduces OCTR-786: kubespray
+// populates infrastructure/clusters/<cluster>/inventory/ at deploy time, so
+// those files are never in the generator ownership ledger. A subsequent
+// generate must not reject them as "user-authored files found in
+// generator-owned paths". Files elsewhere in the generator-owned infrastructure
+// scope must still be protected.
+func TestPromoteExemptsDeployManagedInventory(t *testing.T) {
+	repo := t.TempDir()
+	stage := t.TempDir()
+	cluster := "inv-cluster"
+	infraRel := filepath.Join("infrastructure", "clusters", cluster)
+
+	// Stage only what the generator actually produces for the inventory subtree:
+	// a .gitkeep. Promote it to seed the ownership ledger.
+	writeTestFile(t, filepath.Join(stage, infraRel, "inventory", ".gitkeep"), "")
+	if _, err := promoteGeneratedTree(stage, repo, cluster, PromoteOptions{}); err != nil {
+		t.Fatalf("initial promotion failed: %v", err)
+	}
+
+	// Simulate kubespray populating the inventory subtree at deploy time. These
+	// files are not in the ledger and not in the staged/planned set.
+	writeTestFile(t, filepath.Join(repo, infraRel, "inventory", "inventory.yaml"), "# populated by kubespray\n")
+	writeTestFile(t, filepath.Join(repo, infraRel, "inventory", "os_hardening_playbook.yml"), "# hardening\n")
+	writeTestFile(t, filepath.Join(repo, infraRel, "inventory", "group_vars", "k8s_cluster", "k8s-cluster.yml"), "kube_version: v1.35\n")
+
+	// Re-promote: must succeed (inventory subtree is deploy-managed, exempt).
+	if _, err := promoteGeneratedTree(stage, repo, cluster, PromoteOptions{Force: true}); err != nil {
+		t.Fatalf("promotion rejected deploy-managed inventory files (OCTR-786): %v", err)
+	}
+	// The inventory files must be left intact (not clobbered/pruned).
+	if got := readTestFile(t, filepath.Join(repo, infraRel, "inventory", "inventory.yaml")); got != "# populated by kubespray\n" {
+		t.Fatalf("deploy-managed inventory file was modified: %q", got)
+	}
+
+	// Negative case: a user file in the infrastructure scope but OUTSIDE the
+	// inventory subtree must still be refused, proving the exemption is scoped.
+	writeTestFile(t, filepath.Join(repo, infraRel, "rogue-user-file.yaml"), "rogue\n")
+	if _, err := promoteGeneratedTree(stage, repo, cluster, PromoteOptions{Force: true}); err == nil ||
+		!strings.Contains(err.Error(), "user-authored") {
+		t.Fatalf("expected refusal for non-inventory user file, got %v", err)
+	}
+}
