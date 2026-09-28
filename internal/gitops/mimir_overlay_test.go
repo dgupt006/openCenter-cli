@@ -70,12 +70,13 @@ func TestMimirKeepsBundledKafkaWhenExternalDisabled(t *testing.T) {
 		"mimir override must not disable bundled Kafka when external kafka-cluster is disabled:\n%s", values)
 }
 
-// TestMimirKafkaAddressUsesKafkaSystem verifies the Kafka broker address
-// points at the kafka-system namespace, where kafka-cluster actually deploys
-// (its kustomization/flux templates hardcode kafka-system). The
-// kafka-cluster.namespace config field is not honored, so the address must not
-// follow it.
-func TestMimirKafkaAddressUsesKafkaSystem(t *testing.T) {
+// TestMimirUsesExternalKafkaIngestStorageWhenEnabled verifies that enabling the
+// kafka-cluster service switches Mimir into the ingest-storage architecture
+// backed by the external kafka-cluster: ingest_storage.enabled stays true (the
+// chart default) and the broker address/topic point at kafka-cluster in the
+// kafka-system namespace. The bundled demo Kafka is disabled separately
+// (TestMimirDisablesBundledKafkaWhenExternalEnabled).
+func TestMimirUsesExternalKafkaIngestStorageWhenEnabled(t *testing.T) {
 	cfg, err := v2.NewV2Default("k8s-mimir", "openstack")
 	require.NoError(t, err)
 	mimir, ok := cfg.OpenCenter.Services["mimir"].(*configservices.MimirConfig)
@@ -86,29 +87,35 @@ func TestMimirKafkaAddressUsesKafkaSystem(t *testing.T) {
 	kafka.Enabled = true
 
 	values := readMimirOverrideValues(t, *cfg)
+	require.Contains(t, values, "ingest_storage:\n            enabled: true",
+		"mimir override must enable ingest_storage when external kafka-cluster is enabled:\n%s", values)
 	require.Contains(t, values, "kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092",
-		"mimir kafka address must point at kafka-system (kafka-cluster's real namespace):\n%s", values)
+		"mimir override must wire the external kafka-cluster broker address:\n%s", values)
+	require.Contains(t, values, "topic: mimir-ingest",
+		"mimir override must wire the Kafka ingest topic:\n%s", values)
+	require.Contains(t, values, "image:\n    tag: \"3.2.0\"",
+		"mimir override must pin the image to the chart appVersion (3.2.0) for ingest-storage:\n%s", values)
 }
 
-// TestMimirKafkaAddressIgnoresConfiguredNamespace verifies that a non-default
-// kafka-cluster namespace does NOT change the Kafka broker address, because
-// kafka-cluster ignores the namespace field and always deploys to kafka-system.
-func TestMimirKafkaAddressIgnoresConfiguredNamespace(t *testing.T) {
+// TestMimirDisablesIngestStorageWhenNoExternalKafka verifies that without the
+// kafka-cluster service, Mimir runs the classic architecture: ingest_storage is
+// explicitly disabled (chart default is true) and the Push gRPC method stays
+// enabled so ingesters accept direct writes.
+func TestMimirDisablesIngestStorageWhenNoExternalKafka(t *testing.T) {
 	cfg, err := v2.NewV2Default("k8s-mimir", "openstack")
 	require.NoError(t, err)
 	mimir, ok := cfg.OpenCenter.Services["mimir"].(*configservices.MimirConfig)
 	require.True(t, ok)
 	mimir.Enabled = true
-	kafka, ok := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
-	require.True(t, ok)
-	kafka.Enabled = true
-	kafka.Namespace = "kafka-prod"
+	// kafka-cluster stays disabled (default).
 
 	values := readMimirOverrideValues(t, *cfg)
-	require.Contains(t, values, "kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092",
-		"mimir kafka address must stay at kafka-system regardless of the configured namespace:\n%s", values)
-	require.NotContains(t, values, "kafka-prod",
-		"mimir kafka address must not follow the (non-functional) configured namespace:\n%s", values)
+	require.Contains(t, values, "ingest_storage:\n            enabled: false",
+		"mimir override must disable ingest_storage when no external kafka-cluster is present:\n%s", values)
+	require.Contains(t, values, "push_grpc_method_enabled: true",
+		"mimir override must keep the Push gRPC method enabled under the classic architecture:\n%s", values)
+	require.NotContains(t, values, "kafka-cluster-kafka-brokers",
+		"mimir override must not wire an external Kafka broker when kafka-cluster is disabled:\n%s", values)
 }
 
 // TestMimirStatefulPVCSizesMeetCinderMinimum verifies the mimir override bumps

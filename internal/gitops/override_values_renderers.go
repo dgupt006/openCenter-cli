@@ -680,6 +680,16 @@ minio:
 # bundled demo Kafka broker (chart default is kafka.enabled: true).
 kafka:
     enabled: false
+# mimir-distributed 6.2.0 declares appVersion 3.2.0, but the vendored base
+# values ship image tag 3.0.0. The chart renders ingest-storage flags for
+# zone-aware ingesters (e.g. -ingest-storage.kafka.client-rack, added in Mimir
+# 3.1+) that 3.0.0 does not recognize, crashlooping the ingesters when the
+# Kafka ingest-storage architecture is enabled. Pin the image to the chart's
+# appVersion so the binary matches the templates. (gitops-base carries the same
+# pin; this override keeps ingest-storage self-consistent even against an older
+# base.)
+image:
+    tag: "3.2.0"
 {{- else }}
 # No external kafka-cluster, so the chart's own bundled Kafka broker stays
 # enabled. Its chart-default PVC size (5Gi) is below this region's Cinder
@@ -751,8 +761,39 @@ mimir:
                 user_domain_name: {{ $mimir.SwiftUserDomainName | quote }}
                 domain_name: {{ $mimir.SwiftDomainName | quote }}
 {{- end }}
+        # mimir-distributed chart 6.x defaults to the Kafka-based ingest-storage
+        # architecture (chart 5.x/Mimir 2.x used classic). openCenter selects the
+        # architecture based on whether the external kafka-cluster service is
+        # enabled:
+        #
+        #   * kafka-cluster ENABLED  -> Mimir uses the ingest-storage architecture
+        #     backed by the shared kafka-cluster (bundled demo Kafka is disabled
+        #     above). ingest_storage.enabled stays at the chart default (true) and
+        #     we wire the external broker address/topic.
+        #
+        #   * kafka-cluster DISABLED -> Mimir runs the classic architecture
+        #     (distributors push directly to ingesters). We apply Grafana's own
+        #     classic-architecture overlay
+        #     (operations/helm/charts/mimir-distributed/classic-architecture.yaml):
+        #     ingest_storage.enabled=false AND null the kafka sub-keys, otherwise
+        #     the chart's ingest_storage.kafka defaults merge through and Mimir
+        #     rejects the rendered flags (-ingest-storage.kafka.client-rack) or
+        #     fails config validation ("the Kafka address has not been configured").
+        #
+        #     Grafana's overlay also nulls distributor.remote_timeout and
+        #     ingester.push_grpc_method_enabled so the chart deletes them. That
+        #     null-deletion only works when the overlay is merged at the chart
+        #     values layer; openCenter injects these through structuredConfig,
+        #     where the chart's deep-merge keeps its own defaults
+        #     (push_grpc_method_enabled: false) and null does NOT win. A rendered
+        #     "ingester.push_grpc_method_enabled: false" makes Mimir refuse to
+        #     start ("cannot disable Push gRPC method in ingester, while ingest
+        #     storage is not enabled"), so we set it back to true explicitly.
+        #     remote_timeout is left to the chart default (5s), valid under
+        #     classic.
 {{- if (index .OpenCenter.Services "kafka-cluster").Enabled }}
         ingest_storage:
+            enabled: true
             kafka:
                 # kafka-cluster always deploys to the kafka-system namespace
                 # (hardcoded in its kustomization/flux templates); the
@@ -761,6 +802,15 @@ mimir:
                 topic: mimir-ingest
                 auto_create_topic_enabled: true
                 auto_create_topic_default_partitions: 1000
+{{- else }}
+        ingest_storage:
+            enabled: false
+            kafka:
+                address: null
+                topic: null
+                auto_create_topic_default_partitions: null
+        ingester:
+            push_grpc_method_enabled: true
 {{- end }}
 # Chart defaults (1-2Gi) are below this region's Cinder minimum volume size
 # (10Gi for the "Standard" volume type), which fails PVC provisioning outright.

@@ -173,12 +173,14 @@ func TestRenderMimirOverrideValues(t *testing.T) {
 	if strings.Contains(mimirValues, "backend: s3") || strings.Contains(mimirValues, "PLACEHOLDER") {
 		t.Fatalf("did not expect S3 or placeholder storage credentials in Mimir values:\n%s", mimirValues)
 	}
-	// No external kafka-cluster, so there must be no Kafka ingest_storage wiring.
-	// (The chart's bundled Kafka broker stays enabled in this case and gets a PVC
-	// size override — see the bundled-Kafka assertion below — so we no longer
-	// assert the absence of any "kafka:" key, only the ingest_storage wiring.)
-	if strings.Contains(mimirValues, "ingest_storage:") {
-		t.Fatalf("did not expect Kafka ingest storage when kafka-cluster is disabled:\n%s", mimirValues)
+	// The mimir-distributed chart defaults ingest_storage.enabled to true, so the
+	// override must explicitly disable it (regardless of kafka-cluster) and must
+	// not wire any Kafka broker/topic.
+	if !strings.Contains(mimirValues, "ingest_storage:\n            enabled: false") {
+		t.Fatalf("expected ingest_storage explicitly disabled when kafka-cluster is disabled:\n%s", mimirValues)
+	}
+	if strings.Contains(mimirValues, "mimir-ingest") || strings.Contains(mimirValues, "kafka-cluster-kafka-brokers") {
+		t.Fatalf("did not expect Kafka ingest wiring when kafka-cluster is disabled:\n%s", mimirValues)
 	}
 	// The bundled Kafka broker (active when external kafka-cluster is disabled)
 	// must get a >=10Gi PVC via the sub-chart's persistence.size key (Cinder min).
@@ -188,16 +190,24 @@ func TestRenderMimirOverrideValues(t *testing.T) {
 
 	kafka := cfg.OpenCenter.Services["kafka-cluster"].(*configservices.DefaultServiceConfig)
 	kafka.Enabled = true
-	// kafka-cluster ignores the namespace field and always deploys to
-	// kafka-system, so the Mimir address must point there regardless.
 	kafka.Namespace = "strimzi"
 	mimirValues = renderOverrideValues(t, cfg, "mimir")
-	if !strings.Contains(mimirValues, "address: kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092") {
-		t.Fatalf("expected Mimir Kafka address to point at kafka-system:\n%s", mimirValues)
+	// Enabling the kafka-cluster service switches Mimir into the ingest-storage
+	// architecture backed by the external kafka-cluster: ingest_storage stays
+	// enabled (chart default) and the broker address/topic are wired. The
+	// kafka-cluster deploys to kafka-system regardless of its configured
+	// namespace, so the address must point there.
+	if !strings.Contains(mimirValues, "ingest_storage:\n            enabled: true") {
+		t.Fatalf("expected ingest_storage enabled when kafka-cluster is enabled:\n%s", mimirValues)
 	}
-	if strings.Contains(mimirValues, "strimzi") {
-		t.Fatalf("Mimir Kafka address must not follow the non-functional configured namespace:\n%s", mimirValues)
+	if !strings.Contains(mimirValues, "kafka-cluster-kafka-brokers.kafka-system.svc.cluster.local:9092") {
+		t.Fatalf("expected external Kafka broker address wired when kafka-cluster is enabled:\n%s", mimirValues)
 	}
+	if !strings.Contains(mimirValues, "topic: mimir-ingest") {
+		t.Fatalf("expected Kafka ingest topic wired when kafka-cluster is enabled:\n%s", mimirValues)
+	}
+	// The bundled-Kafka disable toggle is still expected when the external
+	// kafka-cluster service is enabled.
 	if !strings.Contains(mimirValues, "kafka:\n    enabled: false") {
 		t.Fatalf("expected bundled Kafka disabled when external kafka-cluster is enabled:\n%s", mimirValues)
 	}
