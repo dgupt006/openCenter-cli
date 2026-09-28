@@ -10,3 +10,9 @@ repos:
         entry: python3 hack/scripts/check_staged_docs.py
         language: system
         pass_filenames: true
+        # The policy compares qualifying implementation files against maintained
+        # docs across the whole changeset. pre-commit otherwise splits the file
+        # list into several parallel invocations, so an implementation file can
+        # land in a batch without the accompanying doc and fail spuriously.
+        # require_serial forces a single invocation that sees every changed file.
+        require_serial: true

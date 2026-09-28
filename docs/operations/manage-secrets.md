@@ -6,7 +6,7 @@ description: Generate keys and manage encrypted secret files with openCenter.
 doc_type: how-to
 audience: openCenter operators
 tags: [secrets, security]
-last_updated: 2026-09-25
+last_updated: 2026-09-28
 ---
 # Manage secrets
 
@@ -46,6 +46,34 @@ opencenter secrets validate ORG/CLUSTER
 
 `sync` supports `--services`, `--dry-run`, `--force`, and `--all`; `validate
 --fix` can invoke synchronization for detected drift.
+
+## Sync secrets before deploying
+
+Run `secrets sync` **before** `cluster deploy`, not after. The canonical order is:
+
+```bash
+opencenter cluster generate ORG/CLUSTER
+opencenter secrets sync ORG/CLUSTER
+opencenter cluster deploy ORG/CLUSTER
+```
+
+`cluster generate` renders the service overlays but does not create the
+per-service secret manifests (for example `opencenter-mimir-secret`). Those are
+materialized by `secrets sync` and wired into each service's kustomization.
+Deploying before syncing leaves secret-consuming services (such as Mimir)
+failing with `secret "opencenter-<service>-secret" not found`.
+
+To prevent that, `cluster deploy` runs a preflight that verifies every required
+secret manifest is created and wired before provisioning any infrastructure. If
+one is missing it stops immediately with:
+
+```
+required secret manifests are not ready for deploy:
+  services/<service>/secret.yaml (not created)
+Run 'opencenter secrets sync ORG/CLUSTER' before deploying ...
+```
+
+Re-run `secrets sync` (and let its manifest refresh complete) to resolve it.
 
 ## Rotate and back up keys
 
