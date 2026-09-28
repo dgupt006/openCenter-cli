@@ -506,7 +506,10 @@ backend:
     replicas: 0
 {{- end }}
 global:
-    dnsService: coredns
+    # kind provisions CoreDNS behind a Service named "kube-dns"; kubespray-based
+    # providers expose it as "coredns". The chart's nginx gateway resolver must
+    # match the actual Service name or it fails with "host not found in resolver".
+    dnsService: {{ if eq (lower .OpenCenter.Infrastructure.Provider) "kind" }}kube-dns{{ else }}coredns{{ end }}
 loki:
 {{- if eq $storageType "none" }}
     commonConfig:
@@ -650,7 +653,10 @@ reportingEnabled: false
 const mimirTemplate = `{{- $mimir := mimirStorage -}}
 {{- $storageClass := .OpenCenter.Infrastructure.Storage.DefaultStorageClass -}}
 global:
-    dnsService: coredns
+    # kind provisions CoreDNS behind a Service named "kube-dns"; kubespray-based
+    # providers expose it as "coredns". The chart's nginx gateway resolver must
+    # match the actual Service name or it fails with "host not found in resolver".
+    dnsService: {{ if eq (lower .OpenCenter.Infrastructure.Provider) "kind" }}kube-dns{{ else }}coredns{{ end }}
     podAnnotations:
         opencenter.io/mimir-credentials-hash: {{ $mimir.CredentialHash | quote }}
 {{- if eq $mimir.Backend "s3" }}

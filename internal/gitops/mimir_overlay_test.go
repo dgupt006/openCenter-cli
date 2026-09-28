@@ -97,6 +97,34 @@ func TestMimirUsesExternalKafkaIngestStorageWhenEnabled(t *testing.T) {
 		"mimir override must pin the image to the chart appVersion (3.2.0) for ingest-storage:\n%s", values)
 }
 
+// TestMimirDNSServiceMatchesProvider verifies the global.dnsService value tracks
+// the CoreDNS Service name for the provider: "kube-dns" on kind, "coredns"
+// elsewhere. The chart's nginx gateway resolver must match the real Service
+// name or it crashloops with "host not found in resolver".
+func TestMimirDNSServiceMatchesProvider(t *testing.T) {
+	kindCfg, err := v2.NewV2Default("k8s-mimir", "kind")
+	require.NoError(t, err)
+	kindMimir := kindCfg.OpenCenter.Services["mimir"].(*configservices.MimirConfig)
+	kindMimir.Enabled = true
+	kindMimir.StorageType = "s3" // kind uses external S3, not OpenStack Swift
+	kindMimir.S3Endpoint = "https://s3.example"
+	kindMimir.BucketName = "kind-mimir"
+	kindCfg.Secrets.Mimir.S3AccessKeyID = "kind-access"
+	kindCfg.Secrets.Mimir.S3SecretAccessKey = "kind-secret"
+	kindValues := readMimirOverrideValues(t, *kindCfg)
+	require.Contains(t, kindValues, "dnsService: kube-dns",
+		"kind provider must use the kube-dns Service name:\n%s", kindValues)
+	require.NotContains(t, kindValues, "dnsService: coredns",
+		"kind provider must not use coredns:\n%s", kindValues)
+
+	osCfg, err := v2.NewV2Default("k8s-mimir", "openstack")
+	require.NoError(t, err)
+	osCfg.OpenCenter.Services["mimir"].(*configservices.MimirConfig).Enabled = true
+	osValues := readMimirOverrideValues(t, *osCfg)
+	require.Contains(t, osValues, "dnsService: coredns",
+		"openstack provider must use the coredns Service name:\n%s", osValues)
+}
+
 // TestMimirDisablesIngestStorageWhenNoExternalKafka verifies that without the
 // kafka-cluster service, Mimir runs the classic architecture: ingest_storage is
 // explicitly disabled (chart default is true) and the Push gRPC method stays
@@ -186,7 +214,9 @@ func TestMimirCredentialEnvUsesGlobalValuesAndRollsOnRotation(t *testing.T) {
 	cfg.Secrets.Mimir.S3SecretAccessKey = "mimir-secret"
 
 	values := readMimirOverrideValues(t, *cfg)
-	require.Contains(t, values, "global:\n    dnsService: coredns\n    podAnnotations:")
+	// Non-kind (openstack) provider resolves the CoreDNS Service name to "coredns".
+	require.Contains(t, values, "dnsService: coredns",
+		"non-kind provider must use the coredns Service name:\n%s", values)
 	require.Contains(t, values, "    extraEnv:\n        - name: MIMIR_S3_ACCESS_KEY_ID")
 	require.NotContains(t, values, "mimir:\n    extraEnv:")
 	require.NotContains(t, values, "access_key_id: \"mimir-access\"")
