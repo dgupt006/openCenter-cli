@@ -154,8 +154,21 @@ func TestPromoteExemptsDeployManagedInventory(t *testing.T) {
 		t.Fatalf("deploy-managed inventory file was modified: %q", got)
 	}
 
+	// terraform init writes .terraform.lock.hcl at the cluster root at deploy
+	// time; it is not in the ledger. Re-promote must succeed and leave it intact
+	// (OCTR-786, tenant-reported sibling of the inventory case).
+	lockContents := "# This file is maintained automatically by \"terraform init\".\n"
+	writeTestFile(t, filepath.Join(repo, infraRel, ".terraform.lock.hcl"), lockContents)
+	if _, err := promoteGeneratedTree(stage, repo, cluster, PromoteOptions{Force: true}); err != nil {
+		t.Fatalf("promotion rejected deploy-managed .terraform.lock.hcl (OCTR-786): %v", err)
+	}
+	if got := readTestFile(t, filepath.Join(repo, infraRel, ".terraform.lock.hcl")); got != lockContents {
+		t.Fatalf("deploy-managed .terraform.lock.hcl was modified: %q", got)
+	}
+
 	// Negative case: a user file in the infrastructure scope but OUTSIDE the
-	// inventory subtree must still be refused, proving the exemption is scoped.
+	// exempted deploy-managed paths must still be refused, proving the exemption
+	// is scoped (not a blanket cluster-dir exemption).
 	writeTestFile(t, filepath.Join(repo, infraRel, "rogue-user-file.yaml"), "rogue\n")
 	if _, err := promoteGeneratedTree(stage, repo, cluster, PromoteOptions{Force: true}); err == nil ||
 		!strings.Contains(err.Error(), "user-authored") {

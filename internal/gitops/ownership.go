@@ -406,8 +406,8 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 		if ownedSecretTreePath(root, clusterName, path) {
 			continue
 		}
-		if isDeployManagedInventoryPath(clusterName, path) {
-			continue // kubespray-populated inventory is deploy-managed (OCTR-786)
+		if isDeployManagedPath(clusterName, path) {
+			continue // kubespray inventory + terraform lock are deploy-managed (OCTR-786)
 		}
 		if expected, tracked := known[path]; tracked {
 			if hashBytes(onDisk) != expected.SHA256 || uint32(existingModes[path].Perm()) != expected.Mode {
@@ -623,11 +623,12 @@ func scanLiveRepositoryTree(root, clusterName string, scopes []string) (map[stri
 		if filepath.Base(rel) == secretartifacts.OwnershipStateFilename || filepath.Base(rel) == secretsSyncLockFilename {
 			return nil
 		}
-		// kubespray populates the cluster inventory subtree at deploy time; those
-		// files are deploy-managed, not generator-owned, so they must not enter
-		// the ownership scan (otherwise a later generate rejects them as
+		// kubespray populates the cluster inventory subtree, and terraform init
+		// writes .terraform.lock.hcl, at deploy time; those files are
+		// deploy-managed, not generator-owned, so they must not enter the
+		// ownership scan (otherwise a later generate rejects them as
 		// user-authored — OCTR-786).
-		if isDeployManagedInventoryPath(clusterName, rel) {
+		if isDeployManagedPath(clusterName, rel) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -781,23 +782,36 @@ func isGeneratedTreeCustomPath(path string) bool {
 	return false
 }
 
-// isDeployManagedInventoryPath reports whether path is inside a cluster's
-// kubespray inventory subtree (infrastructure/clusters/<cluster>/inventory/).
-// The generator only seeds inventory/.gitkeep; the actual inventory files
-// (inventory.yaml, group_vars, k8s_hardening.yml, os_hardening_playbook.yml,
-// credentials, etc.) are populated by kubespray at deploy time. They are never
-// part of the generator ownership ledger, so the ownership preflight would
-// otherwise reject them as "user-authored files found in generator-owned paths"
-// on a subsequent generate (OCTR-786). They are deploy-managed, not generated,
-// so exempt them from the preflight (the .gitkeep the generator does own is not
-// under the inventory/ subtree segment matched here).
-func isDeployManagedInventoryPath(clusterName, path string) bool {
+// isDeployManagedPath reports whether path is one of the
+// deploy-managed (not generator-owned) locations under a cluster's
+// infrastructure directory (infrastructure/clusters/<cluster>/):
+//
+//   - the kubespray inventory subtree (inventory/): the generator only seeds
+//     inventory/.gitkeep; the actual inventory files (inventory.yaml,
+//     group_vars, k8s_hardening.yml, os_hardening_playbook.yml, credentials,
+//     etc.) are populated by kubespray at deploy time.
+//   - .terraform.lock.hcl: the Terraform dependency lock file, written by
+//     `terraform init` at deploy time and committed to the repo.
+//
+// None of these are part of the generator ownership ledger, so the ownership
+// preflight would otherwise reject them as "user-authored files found in
+// generator-owned paths" on a subsequent generate (OCTR-786). They are
+// deploy-managed, not generated, so exempt them from the preflight. The
+// generator-owned files under the cluster dir (main.tf, variables.tf, Makefile,
+// inventory/.gitkeep) are not matched here and remain policed.
+func isDeployManagedPath(clusterName, path string) bool {
 	if clusterName == "" {
 		return false
 	}
 	path = filepath.ToSlash(filepath.Clean(path))
-	prefix := filepath.ToSlash(filepath.Join("infrastructure", "clusters", clusterName, "inventory")) + "/"
-	return strings.HasPrefix(path, prefix)
+	clusterDir := filepath.ToSlash(filepath.Join("infrastructure", "clusters", clusterName))
+	if strings.HasPrefix(path, clusterDir+"/inventory/") {
+		return true
+	}
+	if path == clusterDir+"/.terraform.lock.hcl" {
+		return true
+	}
+	return false
 }
 func isTempPath(path string) bool            { return path == ".tmp" || strings.HasPrefix(path, ".tmp/") }
 func hashBytes(data []byte) string           { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
