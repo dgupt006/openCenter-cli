@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-25
+last_updated: 2026-09-29
 id: service-metallb
 title: "MetalLB"
 sidebar_label: MetalLB
@@ -32,6 +32,12 @@ opencenter:
           type: l2
           ip_address_pools: []
           interfaces: []
+          node_selectors:
+            - match_labels:
+                kubernetes.io/hostname: worker-0
+            - match_expressions:
+                - key: node-role.kubernetes.io/worker
+                  operator: Exists
 ```
 
 | Field | Default | Evidence |
@@ -45,8 +51,27 @@ opencenter:
 | `l2_advertisements[].name` | required | `L2Advertisement` |
 | `l2_advertisements[].type` | `l2` when omitted | `GetType` |
 | `l2_advertisements[].ip_address_pools`, `interfaces` | empty | `L2Advertisement` |
+| `l2_advertisements[].node_selectors` | empty (all nodes eligible) | `L2Advertisement.NodeSelectors` |
 
 `DefaultPoolName` selects the explicitly marked pool, otherwise the first pool, otherwise an empty string.
+
+### Node selectors
+
+`node_selectors` restricts which nodes advertise a pool's load-balancer IPs. It renders to `spec.nodeSelectors` on the generated `L2Advertisement`, mirroring a Kubernetes label selector. Use it when only some nodes carry the configured `interfaces` (for example, to keep a remote GPU node from being elected to advertise a Gateway IP). When omitted, every node is eligible.
+
+Each selector accepts `match_labels` (all key/value pairs must match) and/or `match_expressions` (`key`, `operator` one of `In`/`NotIn`/`Exists`/`DoesNotExist`, and `values`). `In`/`NotIn` require `values`; `Exists`/`DoesNotExist` must omit `values`.
+
+```yaml
+l2_advertisements:
+  - name: private-pool-l2
+    ip_address_pools: [private-pool]
+    interfaces: [mgmt.102]
+    node_selectors:
+      - match_labels:
+          kubernetes.io/hostname: rackai-dev-wrk-0
+      - match_labels:
+          kubernetes.io/hostname: rackai-dev-wrk-1
+```
 
 ## Rendering
 
