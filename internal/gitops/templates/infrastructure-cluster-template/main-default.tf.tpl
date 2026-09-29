@@ -349,6 +349,12 @@ module "kubespray-cluster" {
   master_nodes                            = module.openstack-nova.master_nodes
 {{- end }}
   network_plugin                          = local.network_plugin
+{{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
+  # Run kubelet with --cloud-provider=external so the OpenStack CCM initializes
+  # each node (sets spec.providerID, clears the uninitialized taint). Required
+  # for CCM LoadBalancer/Octavia provisioning. See OCTR-750.
+  external_cloud_provider                 = "openstack"
+{{- end }}
   k8s_hardening_enabled                   = local.k8s_hardening_enabled
   os_hardening_enabled                    = local.os_hardening_enabled
   ssh_user                                = local.ssh_user
