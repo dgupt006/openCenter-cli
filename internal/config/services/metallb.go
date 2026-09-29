@@ -31,10 +31,27 @@ const L2AdvertisementType = "l2"
 
 // L2Advertisement represents a MetalLB layer-2 advertisement.
 type L2Advertisement struct {
-	Name           string   `yaml:"name" json:"name" jsonschema:"description=Name of the L2 advertisement,required"`
-	Type           string   `yaml:"type,omitempty" json:"type,omitempty" jsonschema:"description=Advertisement type; only \"l2\" is supported today,default=l2"`
-	IPAddressPools []string `yaml:"ip_address_pools,omitempty" json:"ip_address_pools,omitempty" jsonschema:"description=Pools to advertise; empty means all pools"`
-	Interfaces     []string `yaml:"interfaces,omitempty" json:"interfaces,omitempty" jsonschema:"description=Node interfaces to advertise on"`
+	Name           string         `yaml:"name" json:"name" jsonschema:"description=Name of the L2 advertisement,required"`
+	Type           string         `yaml:"type,omitempty" json:"type,omitempty" jsonschema:"description=Advertisement type; only \"l2\" is supported today,default=l2"`
+	IPAddressPools []string       `yaml:"ip_address_pools,omitempty" json:"ip_address_pools,omitempty" jsonschema:"description=Pools to advertise; empty means all pools"`
+	Interfaces     []string       `yaml:"interfaces,omitempty" json:"interfaces,omitempty" jsonschema:"description=Node interfaces to advertise on"`
+	NodeSelectors  []NodeSelector `yaml:"node_selectors,omitempty" json:"node_selectors,omitempty" jsonschema:"description=Restrict which nodes advertise the pool IPs; rendered as L2Advertisement spec.nodeSelectors. Empty means all nodes are eligible."`
+}
+
+// NodeSelector restricts which nodes advertise the load-balancer IPs for an L2
+// advertisement. It mirrors a Kubernetes metav1.LabelSelector and renders as an
+// entry in L2Advertisement spec.nodeSelectors.
+type NodeSelector struct {
+	MatchLabels      map[string]string         `yaml:"match_labels,omitempty" json:"match_labels,omitempty" jsonschema:"description=Node label key/value pairs that must all match"`
+	MatchExpressions []NodeSelectorRequirement `yaml:"match_expressions,omitempty" json:"match_expressions,omitempty" jsonschema:"description=Node label selector requirements"`
+}
+
+// NodeSelectorRequirement is a single label selector requirement, mirroring a
+// Kubernetes metav1.LabelSelectorRequirement.
+type NodeSelectorRequirement struct {
+	Key      string   `yaml:"key" json:"key" jsonschema:"description=Label key that the selector applies to,required"`
+	Operator string   `yaml:"operator" json:"operator" jsonschema:"description=Selector operator; one of In, NotIn, Exists, DoesNotExist,required"`
+	Values   []string `yaml:"values,omitempty" json:"values,omitempty" jsonschema:"description=Values for the operator; required for In/NotIn and must be empty for Exists/DoesNotExist"`
 }
 
 // GetType returns the advertisement type, defaulting to layer-2.

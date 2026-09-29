@@ -20,12 +20,26 @@ l2_advertisements:
   - name: public-pool-l2
     ip_address_pools: [public-pool]
     interfaces: [metal.105]
+  - name: private-pool-l2
+    ip_address_pools: [private-pool]
+    interfaces: [mgmt.102]
+    node_selectors:
+      - match_labels:
+          kubernetes.io/hostname: rackai-dev-wrk-0
+      - match_labels:
+          kubernetes.io/hostname: rackai-dev-wrk-1
+      - match_expressions:
+          - key: node-role.kubernetes.io/worker
+            operator: Exists
 `
 
 	var config MetalLBConfig
 	require.NoError(t, yaml.Unmarshal([]byte(input), &config))
 	require.Len(t, config.IPAddressPools, 2)
-	require.Len(t, config.L2Advertisements, 1)
+	require.Len(t, config.L2Advertisements, 2)
+	require.Len(t, config.L2Advertisements[1].NodeSelectors, 3)
+	require.Equal(t, "rackai-dev-wrk-0", config.L2Advertisements[1].NodeSelectors[0].MatchLabels["kubernetes.io/hostname"])
+	require.Equal(t, "Exists", config.L2Advertisements[1].NodeSelectors[2].MatchExpressions[0].Operator)
 	require.Nil(t, config.IPAddressPools[0].AutoAssign)
 	require.True(t, config.IPAddressPools[0].GetAutoAssign())
 	require.NotNil(t, config.IPAddressPools[1].AutoAssign)

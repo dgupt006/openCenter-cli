@@ -3869,6 +3869,42 @@
                       "name": {
                         "type": "string"
                       },
+                      "node_selectors": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "match_expressions": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "operator": {
+                                    "type": "string"
+                                  },
+                                  "values": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "match_labels": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
                       "type": {
                         "type": "string"
                       }
@@ -6067,6 +6103,42 @@
                       },
                       "name": {
                         "type": "string"
+                      },
+                      "node_selectors": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "match_expressions": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "operator": {
+                                    "type": "string"
+                                  },
+                                  "values": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "match_labels": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "type": {
                         "type": "string"
@@ -8342,6 +8414,42 @@
                       },
                       "name": {
                         "type": "string"
+                      },
+                      "node_selectors": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "match_expressions": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "operator": {
+                                    "type": "string"
+                                  },
+                                  "values": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "match_labels": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "type": "array"
                       },
                       "type": {
                         "type": "string"

@@ -39,6 +39,88 @@ func TestMetalLBOverlayFilesRenderer(t *testing.T) {
 	require.Contains(t, files["l2advertisement.yaml"], "metal.105")
 }
 
+func TestMetalLBOverlayFilesRendererNodeSelectors(t *testing.T) {
+	cfg := metallbTestConfig(&services.MetalLBConfig{
+		BaseConfig:     services.BaseConfig{Enabled: true, Namespace: "metallb-system"},
+		IPAddressPools: []services.IPAddressPool{{Name: "private-pool", Addresses: []string{"10.97.6.61/32"}}},
+		L2Advertisements: []services.L2Advertisement{{
+			Name:           "private-pool-l2",
+			IPAddressPools: []string{"private-pool"},
+			Interfaces:     []string{"mgmt.102"},
+			NodeSelectors: []services.NodeSelector{
+				{MatchLabels: map[string]string{"kubernetes.io/hostname": "rackai-dev-wrk-0"}},
+				{MatchLabels: map[string]string{"kubernetes.io/hostname": "rackai-dev-wrk-1"}},
+			},
+		}},
+	})
+
+	files, err := metallbOverlayFilesRenderer(cfg)
+	require.NoError(t, err)
+	l2 := files["l2advertisement.yaml"]
+	require.Contains(t, l2, "kind: L2Advertisement")
+	require.Contains(t, l2, "nodeSelectors:")
+	require.Contains(t, l2, "matchLabels:")
+	require.Contains(t, l2, "kubernetes.io/hostname: rackai-dev-wrk-0")
+	require.Contains(t, l2, "kubernetes.io/hostname: rackai-dev-wrk-1")
+	// worker allowlist (interfaces) behavior preserved alongside node selectors
+	require.Contains(t, l2, "mgmt.102")
+}
+
+func TestMetalLBOverlayFilesRendererNodeSelectorMatchExpressions(t *testing.T) {
+	cfg := metallbTestConfig(&services.MetalLBConfig{
+		BaseConfig:     services.BaseConfig{Enabled: true},
+		IPAddressPools: []services.IPAddressPool{{Name: "pool", Addresses: []string{"10.0.0.1/32"}}},
+		L2Advertisements: []services.L2Advertisement{{
+			Name:           "expr-l2",
+			IPAddressPools: []string{"pool"},
+			NodeSelectors: []services.NodeSelector{{
+				MatchExpressions: []services.NodeSelectorRequirement{
+					{Key: "node-role.kubernetes.io/worker", Operator: "Exists"},
+					{Key: "topology.kubernetes.io/zone", Operator: "In", Values: []string{"az1", "az2"}},
+				},
+			}},
+		}},
+	})
+
+	files, err := metallbOverlayFilesRenderer(cfg)
+	require.NoError(t, err)
+	l2 := files["l2advertisement.yaml"]
+	require.Contains(t, l2, "matchExpressions:")
+	require.Contains(t, l2, "operator: Exists")
+	require.Contains(t, l2, "operator: In")
+	require.Contains(t, l2, "az1")
+}
+
+func TestMetalLBOverlayFilesRendererRejectsInvalidNodeSelector(t *testing.T) {
+	// Empty selector (no match_labels or match_expressions) must be rejected.
+	empty := metallbTestConfig(&services.MetalLBConfig{
+		BaseConfig:     services.BaseConfig{Enabled: true},
+		IPAddressPools: []services.IPAddressPool{{Name: "pool", Addresses: []string{"10.0.0.1/32"}}},
+		L2Advertisements: []services.L2Advertisement{{
+			Name:          "empty-sel",
+			NodeSelectors: []services.NodeSelector{{}},
+		}},
+	})
+	_, err := metallbOverlayFilesRenderer(empty)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must set match_labels or match_expressions")
+
+	// In operator without values must be rejected.
+	badOp := metallbTestConfig(&services.MetalLBConfig{
+		BaseConfig:     services.BaseConfig{Enabled: true},
+		IPAddressPools: []services.IPAddressPool{{Name: "pool", Addresses: []string{"10.0.0.1/32"}}},
+		L2Advertisements: []services.L2Advertisement{{
+			Name: "bad-op",
+			NodeSelectors: []services.NodeSelector{{
+				MatchExpressions: []services.NodeSelectorRequirement{{Key: "k", Operator: "In"}},
+			}},
+		}},
+	})
+	_, err = metallbOverlayFilesRenderer(badOp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "values must not be empty")
+}
+
 func TestMetalLBOverlayFilesRendererConditionalFiles(t *testing.T) {
 	poolsOnly := metallbTestConfig(&services.MetalLBConfig{
 		BaseConfig:     services.BaseConfig{Enabled: true},
