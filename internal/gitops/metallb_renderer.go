@@ -48,8 +48,45 @@ type metallbL2AdvertisementManifest struct {
 }
 
 type metallbL2AdvertisementSpec struct {
-	IPAddressPools []string `yaml:"ipAddressPools,omitempty"`
-	Interfaces     []string `yaml:"interfaces,omitempty"`
+	IPAddressPools []string              `yaml:"ipAddressPools,omitempty"`
+	Interfaces     []string              `yaml:"interfaces,omitempty"`
+	NodeSelectors  []metallbNodeSelector `yaml:"nodeSelectors,omitempty"`
+}
+
+// metallbNodeSelector renders a Kubernetes label selector under
+// L2Advertisement spec.nodeSelectors (camelCase CRD field names).
+type metallbNodeSelector struct {
+	MatchLabels      map[string]string                `yaml:"matchLabels,omitempty"`
+	MatchExpressions []metallbNodeSelectorRequirement `yaml:"matchExpressions,omitempty"`
+}
+
+type metallbNodeSelectorRequirement struct {
+	Key      string   `yaml:"key"`
+	Operator string   `yaml:"operator"`
+	Values   []string `yaml:"values,omitempty"`
+}
+
+// toMetalLBNodeSelectors maps config-side node selectors to the manifest shape.
+func toMetalLBNodeSelectors(selectors []services.NodeSelector) []metallbNodeSelector {
+	if len(selectors) == 0 {
+		return nil
+	}
+	rendered := make([]metallbNodeSelector, 0, len(selectors))
+	for _, selector := range selectors {
+		manifest := metallbNodeSelector{MatchLabels: selector.MatchLabels}
+		if len(selector.MatchExpressions) > 0 {
+			manifest.MatchExpressions = make([]metallbNodeSelectorRequirement, 0, len(selector.MatchExpressions))
+			for _, requirement := range selector.MatchExpressions {
+				manifest.MatchExpressions = append(manifest.MatchExpressions, metallbNodeSelectorRequirement{
+					Key:      requirement.Key,
+					Operator: requirement.Operator,
+					Values:   requirement.Values,
+				})
+			}
+		}
+		rendered = append(rendered, manifest)
+	}
+	return rendered
 }
 
 func metallbOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
@@ -113,6 +150,7 @@ func metallbOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 				Spec: metallbL2AdvertisementSpec{
 					IPAddressPools: advertisement.IPAddressPools,
 					Interfaces:     advertisement.Interfaces,
+					NodeSelectors:  toMetalLBNodeSelectors(advertisement.NodeSelectors),
 				},
 			})
 		}

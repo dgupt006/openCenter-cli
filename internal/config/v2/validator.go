@@ -914,6 +914,38 @@ func validateMetalLBConfig(config *services.MetalLBConfig) error {
 				seenInterfaces[iface] = struct{}{}
 			}
 		}
+		for j, selector := range advertisement.NodeSelectors {
+			selectorPath := fmt.Sprintf("%s.node_selectors[%d]", path, j)
+			if len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0 {
+				problems = append(problems, selectorPath+" must set match_labels or match_expressions")
+			}
+			for key, value := range selector.MatchLabels {
+				if key == "" {
+					problems = append(problems, selectorPath+".match_labels contains an empty key")
+				}
+				_ = value
+			}
+			for k, requirement := range selector.MatchExpressions {
+				requirementPath := fmt.Sprintf("%s.match_expressions[%d]", selectorPath, k)
+				if requirement.Key == "" {
+					problems = append(problems, requirementPath+".key must not be empty")
+				}
+				switch requirement.Operator {
+				case "In", "NotIn":
+					if len(requirement.Values) == 0 {
+						problems = append(problems, fmt.Sprintf("%s.values must not be empty for operator %q", requirementPath, requirement.Operator))
+					}
+				case "Exists", "DoesNotExist":
+					if len(requirement.Values) > 0 {
+						problems = append(problems, fmt.Sprintf("%s.values must be empty for operator %q", requirementPath, requirement.Operator))
+					}
+				case "":
+					problems = append(problems, requirementPath+".operator must not be empty (one of In, NotIn, Exists, DoesNotExist)")
+				default:
+					problems = append(problems, fmt.Sprintf("%s.operator %q is not supported (one of In, NotIn, Exists, DoesNotExist)", requirementPath, requirement.Operator))
+				}
+			}
+		}
 		for j, poolName := range advertisement.IPAddressPools {
 			if _, exists := poolNames[poolName]; !exists {
 				problems = append(problems, fmt.Sprintf("%s.ip_address_pools[%d] references unknown pool %q", path, j, poolName))
