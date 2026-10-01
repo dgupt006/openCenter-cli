@@ -432,6 +432,16 @@ func (l *kubesprayLifecycle) deploy(ctx context.Context, cfg *v2.Config) error {
 	}
 	env := l.environment()
 	env["ANSIBLE_ROLES_PATH"] = filepath.Join(l.kubesprayPath, "roles")
+	// OCTR-750: forward OS_* creds to the kubespray ansible run so the external
+	// OpenStack cloud-controller-manager role (external_openstack_* default to
+	// lookup('env','OS_AUTH_URL') etc.) can configure itself. These are already
+	// built for OpenTofu (l.openTofuEnv) but were not passed to ansible, so the
+	// CCM failed with "external_openstack_auth_url is missing".
+	for key, value := range l.openTofuEnv {
+		if strings.HasPrefix(key, "OS_") {
+			env[key] = value
+		}
+	}
 	ansiblePlaybook := filepath.Join(l.venvPath, "bin", "ansible-playbook")
 	args := []string{"-i", filepath.Join(l.inventoryPath, "inventory.yaml"), filepath.Join(l.kubesprayPath, "cluster.yml"), "-f", "10", "-b", "--become-user=root"}
 	if cfg != nil && cfg.OpenCenter.Cluster.Kubernetes.Security.K8sHardening {
