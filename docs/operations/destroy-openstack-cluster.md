@@ -1,10 +1,10 @@
 ---
-last_updated: "2026-10-28"
+last_updated: 2026-10-02
 id: destroy-openstack-cluster
 title: Destroy an OpenStack cluster
 sidebar_label: Destroy an OpenStack cluster
-description: How to safely tear down an OpenStack cluster, remove cluster-owned Octavia load balancers, and clean up orphaned CSI Cinder volumes to avoid quota exhaustion.
-doc_type: how-to
+description: How to safely tear down an OpenStack cluster and clean up orphaned CSI Cinder volumes to avoid quota exhaustion.
+doc_type: operations
 audience: "platform engineers"
 tags: [operations, openstack, destroy, storage]
 ---
@@ -52,17 +52,9 @@ What happens step by step:
 1. **capture-csi-volumes** — `kubectl get pv -o json` enumerates PersistentVolumes
    backed by `cinder.csi.openstack.org` and records their Cinder volume IDs. This runs
    while the cluster API is still reachable, before any infrastructure is torn down.
-2. **cleanup-openstack-networking** — deletes Octavia load balancers created by the
-   cloud controller manager on the cluster's network before OpenTofu runs. CCM-managed
-   load balancers keep Neutron ports attached, which can make router-interface and
-   network deletion hang during teardown. Only load balancers whose name starts with
-   `k8s-<cluster>-` **and** whose VIP sits on the configured cluster network are
-   deleted (cascade, waiting for each deletion to complete). If `network_id` is not
-   configured the step refuses to run rather than guess a delete scope. Failures are
-   reported as warnings and never block the destroy.
-3. **opentofu-init** — initialises the OpenTofu working directory.
-4. **opentofu-destroy** — tears down compute, network, and storage infrastructure.
-5. **cleanup-csi-volumes** — deletes the captured Cinder volume IDs via the Cinder API.
+2. **opentofu-init** — initialises the OpenTofu working directory.
+3. **opentofu-destroy** — tears down compute, network, and storage infrastructure.
+4. **cleanup-csi-volumes** — deletes the captured Cinder volume IDs via the Cinder API.
    Only volumes in `available` state are deleted; `in-use` or `reserved` volumes are
    skipped (they belong to a live cluster and are never touched).
 
@@ -122,19 +114,6 @@ Add `--remove-files` to delete them as well:
 opencenter cluster destroy <org>/<cluster> --force --delete-volumes --remove-files
 ```
 
-## Idempotent teardown
-
-Destroy is safe to re-run. If the OpenTofu working directory is already gone —
-the infrastructure was destroyed earlier, or `gitops.repository.local_dir`
-points at a checkout that no longer exists — the destroy step is skipped with
-`Nothing to destroy via OpenTofu; infrastructure may already be destroyed.`
-instead of failing, and `--remove-files` still completes local cleanup. The
-organization prefix in `<org>/<cluster>` is resolved from the blueprint's
-on-disk location, which is authoritative when the stored
-`opencenter.meta.organization` is stale. With `--remove-files`, destroy also
-removes the whole blueprint directory, including the `<cluster>-config.yaml.backup`
-sidecar, so no phantom directory is left behind.
-
 ## Safety guarantees
 
 - `--delete-volumes` only deletes volumes whose IDs were captured from the cluster's own
@@ -142,15 +121,6 @@ sidecar, so no phantom directory is left behind.
   touched.
 - Volumes in `in-use`, `reserved`, or any state other than `available` are always
   skipped, even if their IDs appear in the captured list.
-- Capture step is non-fatal. If the cluster API is already unreachable, the capture
-  warns and continues with zero handles (cleanup becomes a no-op).
-- **In `--delete-volumes` mode:** deletion failures are reported but do NOT fail the
-  overall destroy command (exit 0). Always check the cleanup output to verify volumes
-  were actually deleted. If cleanup errors appear, re-run the report step or manually
-  delete remaining volumes.
-- **In report-only mode (default):** failures are logged as warnings and do not affect
-  the destroy result.
-- The Octavia cleanup step deletes only load balancers that match **both** the
-  `k8s-<cluster>-` name prefix and the configured cluster network (`network_id`).
-  Load balancers belonging to other clusters or networks are never touched, and the
-  step refuses to run at all when `network_id` is not configured.
+- Both the capture and cleanup steps are non-fatal. If the cluster API is already
+  unreachable when destroy runs, the capture step warns and continues; the cleanup step
+  then reports the handles it could not verify.
