@@ -10,7 +10,7 @@ tags: [cli, commands, flags, reference]
 ---
 # CLI Commands Reference
 
-The per-command pages under [`opencenter/`](opencenter/) are generated from the
+The per-command pages under [`opencenter/`](opencenter/opencenter.md) are generated from the
 live Cobra command tree. They are the canonical reference for command usage,
 arguments, flags, examples, and parent/child links. Regenerate them with:
 

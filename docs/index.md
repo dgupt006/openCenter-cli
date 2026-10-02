@@ -116,7 +116,7 @@ Contributor-facing how-to and reference material:
 Repository-only architecture maps live in [CODEMAPS/](CODEMAPS/INDEX.md) and
 are intentionally not part of this reader-facing index. The repository map
 and editing rules are in [docs/README.md](README.md); code-oriented navigation
-is in the root [llms.txt](../llms.txt).
+is in the root `llms.txt` file.
 
 Documentation validation is also repository-only: contributors can run
 [`mise run test-docs`](reference/mise-tasks.md), which checks Markdown,

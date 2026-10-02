@@ -24,13 +24,13 @@ repository's workflows use self-hosted runners; `deploy-kind.yml` uses the
 
 | Workflow | Repository role | Trigger summary | Canonical definition |
 | --- | --- | --- | --- |
-| `build-binaries.yml` | Builds Linux amd64 and arm64 CLI artifacts for manual publication. | `workflow_dispatch` | [`build-binaries.yml`](../../.github/workflows/build-binaries.yml) |
-| `deploy-kind.yml` | Exercises a disposable Kind, Gitea, and FluxCD deployment using the CLI and local plugin. | `workflow_dispatch` with deployment inputs | [`deploy-kind.yml`](../../.github/workflows/deploy-kind.yml) |
-| `docs-p0.yml` | Checks changed Markdown files with the strict frontmatter audit and Vale. | Pull requests that change Markdown | [`docs-p0.yml`](../../.github/workflows/docs-p0.yml) |
-| `pre-commit.yaml` | Runs the configured pre-commit hooks on pull-request changes. | Pull requests | [`pre-commit.yaml`](../../.github/workflows/pre-commit.yaml) |
-| `release.yml` | Builds multi-platform CLI and local-plugin artifacts, signs release outputs, generates an SBOM, and publishes a GitHub release. | Version-tag pushes and manual dispatch | [`release.yml`](../../.github/workflows/release.yml) |
-| `test.yml` | Runs the repository Go tests, race-detector suite, property tests, and `go vet`. | Pull requests and pushes to `main` | [`test.yml`](../../.github/workflows/test.yml) |
-| `vulncheck.yml` | Runs Go dependency vulnerability analysis. | Pull requests, weekly schedule, and manual dispatch | [`vulncheck.yml`](../../.github/workflows/vulncheck.yml) |
+| `build-binaries.yml` | Builds Linux amd64 and arm64 CLI artifacts for manual publication. | `workflow_dispatch` | [`build-binaries.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/build-binaries.yml) |
+| `deploy-kind.yml` | Exercises a disposable Kind, Gitea, and FluxCD deployment using the CLI and local plugin. | `workflow_dispatch` with deployment inputs | [`deploy-kind.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/deploy-kind.yml) |
+| `docs-p0.yml` | Checks changed Markdown files with the strict frontmatter audit and Vale. | Pull requests that change Markdown | [`docs-p0.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/docs-p0.yml) |
+| `pre-commit.yaml` | Runs the configured pre-commit hooks on pull-request changes. | Pull requests | [`pre-commit.yaml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/pre-commit.yaml) |
+| `release.yml` | Builds multi-platform CLI and local-plugin artifacts, signs release outputs, generates an SBOM, and publishes a GitHub release. | Version-tag pushes and manual dispatch | [`release.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/release.yml) |
+| `test.yml` | Runs the repository Go tests, race-detector suite, property tests, and `go vet`. | Pull requests and pushes to `main` | [`test.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/test.yml) |
+| `vulncheck.yml` | Runs Go dependency vulnerability analysis. | Pull requests, weekly schedule, and manual dispatch | [`vulncheck.yml`](https://github.com/opencenter-cloud/openCenter-cli/blob/main/.github/workflows/vulncheck.yml) |
 
 ## CI boundaries
 
