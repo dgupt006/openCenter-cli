@@ -12,11 +12,11 @@ tags: [validation, rules, constraints, schema]
 
 **Purpose:** For all users, documents what makes an `opencenter` cluster configuration invalid, and which subsystem enforces each rule.
 
-`opencenter cluster validate` runs two independent layers on the loaded config. Both must pass for `cluster validate` to exit `0`; see [Exit Codes](exit-codes.md#exit-code-table) for how failures map to process exit codes.
+`opencenter cluster validate` runs two independent layers on the loaded config. Both must pass for `cluster validate` to exit `0`; see [Exit Codes](exit-codes.md#general-command-contract) for how failures map to process exit codes.
 
 ## Layer 1 — schema and load-time checks
 
-Every load (`internal/config/v2/loader.go`, `LoadFromBytes`) runs a fixed pipeline: **parse YAML → normalize → resolve `${ref:}`/`${env:}`/`${file:}` references → apply provider-region defaults → validate → freeze**. The "validate" stage here checks the decoded config against `schema/opencenter-v2.schema.json` (types, enums, required fields — see [Configuration Schema Reference](configuration-schema.md)) plus a handful of structural checks in `internal/config/v2/validator.go`, including detecting fields still left at their `cluster init` placeholder value (`v2.PlaceholderSecret = "CHANGEME"`, the SSH key placeholder, etc. — see [Default Values](default-values.md#secrets)).
+Every load (`internal/config/v2/loader.go`, `LoadFromBytes`) runs a fixed pipeline: **parse YAML → normalize → resolve `${ref:}`/`${env:}`/`${file:}` references → apply provider-region defaults → validate → freeze**. The "validate" stage here checks the decoded config against `schema/opencenter-v2.schema.json` (types, enums, required fields — see [Configuration Schema Reference](configuration-schema.md)) plus a handful of structural checks in `internal/config/v2/validator.go`, including detecting fields still left at their `cluster init` placeholder value (`v2.PlaceholderSecret = "CHANGEME"`, the SSH key placeholder, etc. — see [Default Values](default-values.md)).
 
 ## Layer 2 — deployment readiness (`v2.ValidateReadiness`)
 
