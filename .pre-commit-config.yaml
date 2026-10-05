@@ -24,6 +24,10 @@ repos:
         pass_filenames: true
       - id: vale
         name: Vale prose lint (staged Markdown)
+        # Vale is provisioned by mise (pinned to vale = "3.23.0" in .mise.toml)
+        # and resolved via the mise shim on PATH, both locally (`mise install`)
+        # and in CI (jdx/mise-action in .github/workflows/pre-commit.yaml). Keep
+        # that pin in sync with the version in .github/workflows/docs-p0.yml.
         entry: vale
         language: system
         types: [markdown]

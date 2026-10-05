@@ -19,6 +19,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Set up mise
+        # Provisions the tools pinned in .mise.toml (notably vale = "3.23.0")
+        # onto PATH so the language:system pre-commit hooks (vale prose lint,
+        # frontmatter/doc-policy scripts) resolve the same binaries used
+        # locally. Mirrors the mise setup in docs-p0.yml.
+        uses: jdx/mise-action@v2
+        with:
+          version: 2026.9.18
+          install: true
+          cache: true
       - name: Fetch all branches and tags
         run: git fetch --prune --unshallow
       - name: Determine changed files
