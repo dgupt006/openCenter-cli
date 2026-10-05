@@ -127,17 +127,19 @@ spec:
   # --- token auth (active) ---
   url: https://github.com/opencenter-cloud/openCenter-gitops-base.git
   ref:
-    branch: "2026.03-rc"
+    tag: "2026.03-rc01"
   # --- ssh auth (alternative) ---
   # url: ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git
   # ref:
-  #   branch: "2026.03-rc"
+  #   tag: "2026.03-rc01"
 ```
 
-The default base reference is the `2026.03-rc` branch (set via `cluster init` defaults and the
-infrastructure OpenTofu module `?ref=` sources). This keeps the Flux application layer and the IaC
-modules on the same gitops-base revision; pin a release tag or a different branch in
-`opencenter.gitops.base_repo` to override.
+The default base reference is the immutable `2026.03-rc01` tag (set via `cluster init` defaults and
+the infrastructure OpenTofu module `?ref=` sources). It is configured in the release (tag) slot
+(`opencenter.gitops.base_repo.release`) with the branch left empty, so Flux and the IaC modules both
+resolve to the same reproducible commit. The release (tag) takes precedence over branch: set
+`opencenter.gitops.base_repo.branch` (with release empty) to track a mutable branch instead, or set a
+different `release` to pin another tag.
 
 `opencenter cluster generate <cluster> --gitops-auth=token|ssh` controls which block is active. With no flag, generation uses `cluster_defaults.gitops_auth_method`, then the built-in `token` default. The choice only affects that run; it does not modify cluster configuration.
 

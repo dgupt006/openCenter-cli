@@ -31,10 +31,11 @@ const (
 	defaultGitURLPlaceholder          = "ssh://git@example.com/opencenter/cluster-config.git"
 	defaultHTTPSGitURLPlaceholder     = "https://github.com/opencenter/cluster-config.git"
 	defaultGitBaseRepoURL             = "ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git"
-	// Base repo (gitops-base) tracks the 2026.03-rc branch. Release is left empty
-	// so the branch is used (a pinned release tag would otherwise win over branch).
-	defaultGitBaseRepoRelease         = ""
-	defaultGitBaseRepoBranch          = "2026.03-rc"
+	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc01 tag so
+	// generated clusters resolve to a reproducible commit. The release (tag) slot
+	// takes precedence over branch, so branch is left empty.
+	defaultGitBaseRepoRelease         = "2026.03-rc01"
+	defaultGitBaseRepoBranch          = ""
 	defaultGitopsAuthMethod           = "token"
 	defaultDefaultStorageClass        = "standard"
 	defaultWorkerVolumeType           = "Performance"
@@ -293,12 +294,12 @@ func NewV2Default(name, provider string) (*Config, error) {
 				Modules: map[string]ModuleConfig{
 					"kubespray": {
 						Enabled: true,
-						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc",
+						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc01",
 					},
 				},
 				KubesprayCluster: ModuleConfig{
 					Enabled: true,
-					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc",
+					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc01",
 				},
 			},
 		},
@@ -557,7 +558,7 @@ func applyProviderCloudDefaults(cfg *Config, availabilityZone string) {
 			},
 			Modules: OpenStackModulesConfig{
 				OpenstackNova: OpenstackNovaModuleConfig{
-					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc",
+					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc01",
 				},
 			},
 		}
