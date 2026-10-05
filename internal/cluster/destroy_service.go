@@ -32,6 +32,9 @@ type DestroyService struct {
 type DestroyOptions struct {
 	// AutoApprove skips the tofu destroy confirmation prompt.
 	AutoApprove bool
+	// DeleteVolumes deletes CSI-provisioned Cinder volumes after infrastructure
+	// destruction. When false, orphaned volumes are only reported.
+	DeleteVolumes bool
 }
 
 // DestroyResult contains the result of a destroy operation.
@@ -42,6 +45,9 @@ type DestroyResult struct {
 	StepsCompleted []string
 	// Error contains any error that occurred during destruction.
 	Error error
+	// CleanupWarnings contains non-fatal errors from post-destroy cleanup (e.g., CSI volume deletion).
+	// The destroy still succeeds, but the caller should check this and signal a warning.
+	CleanupWarnings error
 }
 
 // NewDestroyService creates a new DestroyService with the default command runner.
@@ -77,7 +83,8 @@ func (s *DestroyService) DestroyInfrastructure(ctx context.Context, cfg *v2.Conf
 	}
 
 	infraOpts := &DestroyInfraOptions{
-		AutoApprove: opts != nil && opts.AutoApprove,
+		AutoApprove:   opts != nil && opts.AutoApprove,
+		DeleteVolumes: opts != nil && opts.DeleteVolumes,
 	}
 
 	steps, err := provider.BuildSteps(cfg, infraOpts)
@@ -89,8 +96,15 @@ func (s *DestroyService) DestroyInfrastructure(ctx context.Context, cfg *v2.Conf
 		s.logf("Running: %s\n", step.Description)
 
 		if err := step.Run(ctx); err != nil {
-			result.Error = fmt.Errorf("step %q failed: %w", step.ID, err)
-			return result, result.Error
+			// Distinguish cleanup warnings (non-fatal post-destroy issues) from hard failures.
+			// Steps named "cleanup-*" are post-destroy and non-fatal; capture them separately.
+			if strings.HasPrefix(step.ID, "cleanup-") {
+				result.CleanupWarnings = err
+				s.logf("Warning: %s encountered issues: %v\n", step.Description, err)
+			} else {
+				result.Error = fmt.Errorf("step %q failed: %w", step.ID, err)
+				return result, result.Error
+			}
 		}
 
 		result.StepsCompleted = append(result.StepsCompleted, step.ID)
@@ -133,10 +147,10 @@ func (s *DestroyService) getDestroyProvider(cfg *v2.Config) (lifecycleDestroyPro
 
 	switch provider {
 	case "openstack":
-		return newOpenStackDestroyProvider(s.runner), nil
+		return newOpenStackDestroyProvider(s.runner, s.output), nil
 	case "vmware":
 		// VMware uses the same OpenTofu-based destroy pattern
-		return newOpenStackDestroyProvider(s.runner), nil
+		return newOpenStackDestroyProvider(s.runner, s.output), nil
 	case "magnum":
 		return newMagnumDestroyProvider(cfg)
 	default:
