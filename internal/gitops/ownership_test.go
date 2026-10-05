@@ -1022,3 +1022,29 @@ func TestRepositoryOwnershipSiblingIsolationAndScopedPruneRetention(t *testing.T
 		t.Fatal("scoped promotion dropped an unrelated state record")
 	}
 }
+
+func TestOwnershipPathAllowedExcludesOverlayFluxSystem(t *testing.T) {
+	clusterName := "oc-kind"
+	// These are written by `flux bootstrap` at deploy time, not by the
+	// generator, so they must be exempt from the ownership preflight.
+	exempt := []string{
+		filepath.ToSlash(filepath.Join("applications", "overlays", clusterName, "flux-system", "gotk-components.yaml")),
+		filepath.ToSlash(filepath.Join("applications", "overlays", clusterName, "flux-system", "gotk-sync.yaml")),
+		filepath.ToSlash(filepath.Join("applications", "overlays", clusterName, "flux-system", "kustomization.yaml")),
+	}
+	for _, p := range exempt {
+		if ownershipPathAllowed(p, clusterName) {
+			t.Errorf("ownershipPathAllowed(%q) = true; want false (flux bootstrap-managed)", p)
+		}
+	}
+	// A genuine generator-owned file must remain allowed.
+	generatorOwned := filepath.ToSlash(filepath.Join("applications", "overlays", clusterName, "services", "calico", "deployment.yaml"))
+	if !ownershipPathAllowed(generatorOwned, clusterName) {
+		t.Errorf("ownershipPathAllowed(%q) = false; want true (generator-owned)", generatorOwned)
+	}
+	// The existing clusters/<name>/flux-system exclusion must still hold.
+	oldExempt := filepath.ToSlash(filepath.Join("clusters", clusterName, "flux-system", "gotk-sync.yaml"))
+	if ownershipPathAllowed(oldExempt, clusterName) {
+		t.Errorf("ownershipPathAllowed(%q) = true; want false (pre-existing exclusion regressed)", oldExempt)
+	}
+}

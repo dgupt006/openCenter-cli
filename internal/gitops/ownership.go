@@ -230,14 +230,25 @@ func ownershipPathAllowed(path, clusterName string) bool {
 	if globalOwnershipFiles[path] {
 		return true
 	}
+	// flux bootstrap writes gotk-components.yaml / gotk-sync.yaml /
+	// kustomization.yaml into the cluster's flux-system dir at deploy time
+	// (both the base path clusters/<name>/flux-system and the overlay path
+	// applications/overlays/<name>/flux-system when --path is the overlay).
+	// These are deploy-managed, not generator-owned, so they must be exempt
+	// from the ownership preflight or a later generate is refused.
+	fluxPrefixes := []string{
+		filepath.ToSlash(filepath.Join("clusters", clusterName, "flux-system")),
+		filepath.ToSlash(filepath.Join("applications", "overlays", clusterName, "flux-system")),
+	}
 	for _, scope := range repositoryClusterScopes(clusterName) {
 		if path == scope || strings.HasPrefix(path, scope+"/") {
 			if isGeneratedTreeCustomPath(path) {
 				return false
 			}
-			fluxPrefix := filepath.ToSlash(filepath.Join("clusters", clusterName, "flux-system"))
-			if path == fluxPrefix || strings.HasPrefix(path, fluxPrefix+"/") {
-				return false
+			for _, prefix := range fluxPrefixes {
+				if path == prefix || strings.HasPrefix(path, prefix+"/") {
+					return false
+				}
 			}
 			return true
 		}
