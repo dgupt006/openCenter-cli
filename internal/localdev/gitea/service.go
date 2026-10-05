@@ -149,7 +149,7 @@ func (s *Service) Up(ctx context.Context) (*Status, error) {
 	if err := s.layout.Ensure(); err != nil {
 		return nil, err
 	}
-	if err := s.writeCertificates(nil); err != nil {
+	if err := s.writeCertificates(nil, nil); err != nil {
 		return nil, err
 	}
 	if err := s.writeAppINI(); err != nil {
@@ -276,7 +276,7 @@ func (s *Service) Destroy(ctx context.Context) error {
 // routable IP as SANs. This allows a single URL (using the host IP) to work
 // from both the macOS host and from inside the Kind cluster, because Podman
 // binds the Gitea port on 0.0.0.0.
-func (s *Service) AttachKind(ctx context.Context) (*AttachResult, error) {
+func (s *Service) AttachKind(ctx context.Context, extraHosts []string) (*AttachResult, error) {
 	if err := s.connectKindNetwork(ctx); err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (s *Service) AttachKind(ctx context.Context) (*AttachResult, error) {
 		certIPs = append(certIPs, hostIP)
 	}
 
-	if err := s.writeCertificates(certIPs); err != nil {
+	if err := s.writeCertificates(certIPs, extraHosts); err != nil {
 		return nil, err
 	}
 	if err := s.restart(ctx); err != nil {
@@ -310,7 +310,7 @@ func (s *Service) AttachKind(ctx context.Context) (*AttachResult, error) {
 	}
 	if finalIP != "" && finalIP != initialIP {
 		certIPs[0] = finalIP
-		if err := s.writeCertificates(certIPs); err != nil {
+		if err := s.writeCertificates(certIPs, extraHosts); err != nil {
 			return nil, err
 		}
 		if err := s.restart(ctx); err != nil {
@@ -352,7 +352,7 @@ func (s *Service) tryAttachKind(ctx context.Context) error {
 	if err != nil || !exists {
 		return nil
 	}
-	if _, err := s.AttachKind(ctx); err != nil {
+	if _, err := s.AttachKind(ctx, nil); err != nil {
 		return fmt.Errorf("auto-attach to kind network: %w", err)
 	}
 	return nil
@@ -514,7 +514,7 @@ func currentUID() uint32 {
 	return uint32(syscall.Getuid())
 }
 
-func (s *Service) writeCertificates(extraIPs []string) error {
+func (s *Service) writeCertificates(extraIPs []string, extraHosts []string) error {
 	if err := s.ensureCertDirOwnership(); err != nil {
 		return err
 	}
@@ -523,6 +523,14 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		if ip := net.ParseIP(strings.TrimSpace(rawIP)); ip != nil {
 			ips = append(ips, ip)
 		}
+	}
+	dnsNames := []string{"localhost", "gitea"}
+	for _, host := range extraHosts {
+		host = strings.TrimSpace(host)
+		if host == "" || net.ParseIP(host) != nil {
+			continue // skip empties and bare IPs (already IP SANs)
+		}
+		dnsNames = append(dnsNames, host)
 	}
 
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -572,7 +580,7 @@ func (s *Service) writeCertificates(extraIPs []string) error {
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost", "gitea"},
+		DNSNames:              dnsNames,
 		IPAddresses:           ips,
 	}
 	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)

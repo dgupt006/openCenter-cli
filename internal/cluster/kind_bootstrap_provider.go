@@ -16,6 +16,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,7 +171,11 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				if !status.Running {
 					return fmt.Errorf("local gitea is not running; run 'opencenter local gitea up' first")
 				}
-				if _, err := giteaService.AttachKind(ctx); err != nil {
+				var extraHosts []string
+				if u, err := url.Parse(strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL)); err == nil && u.Hostname() != "" {
+					extraHosts = append(extraHosts, u.Hostname())
+				}
+				if _, err := giteaService.AttachKind(ctx, extraHosts); err != nil {
 					return fmt.Errorf("attach gitea to kind network: %w", err)
 				}
 				return nil

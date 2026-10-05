@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -347,7 +348,11 @@ func newGiteaCmd(stateDir *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := service.AttachKind(ctx)
+			var extraHosts []string
+			if u, err := url.Parse(strings.TrimSpace(clusterCtx.Config.OpenCenter.GitOps.Repository.URL)); err == nil && u.Hostname() != "" {
+				extraHosts = append(extraHosts, u.Hostname())
+			}
+			result, err := service.AttachKind(ctx, extraHosts)
 			if err != nil {
 				return err
 			}

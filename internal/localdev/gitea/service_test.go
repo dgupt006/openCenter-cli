@@ -18,7 +18,7 @@ func TestWriteCertificatesIncludesLocalAndKindSANs(t *testing.T) {
 		t.Fatalf("Ensure() error = %v", err)
 	}
 
-	if err := service.writeCertificates([]string{"10.89.0.11", "192.168.1.100"}); err != nil {
+	if err := service.writeCertificates([]string{"10.89.0.11", "192.168.1.100"}, nil); err != nil {
 		t.Fatalf("writeCertificates() error = %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestWriteCertificatesReplacesForeignOwnedFile(t *testing.T) {
 		t.Fatalf("seed ca.pem: %v", err)
 	}
 
-	if err := service.writeCertificates(nil); err != nil {
+	if err := service.writeCertificates(nil, nil); err != nil {
 		t.Fatalf("writeCertificates() error = %v (expected it to replace the read-only file)", err)
 	}
 
@@ -95,5 +95,39 @@ func TestWriteCertificatesReplacesForeignOwnedFile(t *testing.T) {
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "CERTIFICATE" {
 		t.Fatalf("ca.pem is not a certificate: %q", string(data[:min(40, len(data))]))
+	}
+}
+
+func TestWriteCertificatesIncludesURLHostSAN(t *testing.T) {
+	service, err := NewService(localdev.NewExecutor(), t.TempDir(), DefaultSettings("podman"))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	if err := service.layout.Ensure(); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if err := service.writeCertificates([]string{"10.89.0.11"}, []string{"gitea.oc-baremetal", "not-an-ip-but-a-name"}); err != nil {
+		t.Fatalf("writeCertificates() error = %v", err)
+	}
+	data, err := os.ReadFile(service.layout.ServerCertPath)
+	if err != nil {
+		t.Fatalf("read server cert: %v", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		t.Fatal("failed to decode server cert PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificate() error = %v", err)
+	}
+	found := false
+	for _, name := range cert.DNSNames {
+		if name == "gitea.oc-baremetal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected gitea.oc-baremetal in DNS SANs, got %v", cert.DNSNames)
 	}
 }

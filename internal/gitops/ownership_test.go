@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1046,5 +1047,24 @@ func TestOwnershipPathAllowedExcludesOverlayFluxSystem(t *testing.T) {
 	oldExempt := filepath.ToSlash(filepath.Join("clusters", clusterName, "flux-system", "gotk-sync.yaml"))
 	if ownershipPathAllowed(oldExempt, clusterName) {
 		t.Errorf("ownershipPathAllowed(%q) = true; want false (pre-existing exclusion regressed)", oldExempt)
+	}
+}
+
+func TestRenderClusterAppsConfigSourcesFollowGitURL(t *testing.T) {
+	repo := t.TempDir()
+	cfg := newDefault("ownership-config-follow-url")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = repo
+	cfg.OpenCenter.GitOps.Repository.URL = "https://gitea.oc-baremetal:3001/newuser/test-repo.git"
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	// The rendered keycloak-config GitRepository must carry the configured URL host.
+	p := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "sources", "opencenter-keycloak-config.yaml")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read rendered keycloak-config (keycloak is enabled by default): %v", err)
+	}
+	if !bytes.Contains(data, []byte("https://gitea.oc-baremetal:3001/newuser/test-repo.git")) {
+		t.Fatalf("rendered source did not follow git_url; got:\n%s", data)
 	}
 }
