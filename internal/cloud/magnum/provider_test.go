@@ -143,6 +143,57 @@ func TestAuthOptionsDoNotCarryProjectScope(t *testing.T) {
 	if opts.ApplicationCredentialID != "app-id" || opts.ApplicationCredentialSecret != "app-secret" {
 		t.Fatal("application credential values were not preserved")
 	}
+	if opts.Scope != nil {
+		t.Fatalf("application credential auth carried a scope: %+v", opts.Scope)
+	}
+}
+
+func TestAuthOptionsPasswordPathUsesProjectScope(t *testing.T) {
+	config := Config{
+		IdentityEndpoint:  "https://identity.example.test/v3",
+		Region:            "region-one",
+		TenantID:          "project-id",
+		Username:          "svc-user",
+		Password:          "svc-pass",
+		UserDomainName:    "user-domain",
+		ProjectDomainName: "project-domain",
+		ProjectName:       "svc-project",
+		ClusterTemplate:   "template-id",
+	}
+	opts := authOptions(config)
+	if opts.Username != "svc-user" || opts.Password != "svc-pass" {
+		t.Fatalf("password credentials not preserved: %+v", opts)
+	}
+	if opts.ApplicationCredentialID != "" || opts.ApplicationCredentialSecret != "" {
+		t.Fatal("password auth must not carry application credentials")
+	}
+	if opts.DomainName != "user-domain" {
+		t.Fatalf("user DomainName = %q, want %q", opts.DomainName, "user-domain")
+	}
+	if opts.Scope == nil {
+		t.Fatal("password auth must carry a project scope")
+	}
+	if opts.Scope.ProjectID != "project-id" {
+		t.Fatalf("scope ProjectID = %q, want %q", opts.Scope.ProjectID, "project-id")
+	}
+	if opts.Scope.ProjectName != "svc-project" {
+		t.Fatalf("scope ProjectName = %q, want %q", opts.Scope.ProjectName, "svc-project")
+	}
+	if opts.Scope.DomainName != "project-domain" {
+		t.Fatalf("scope DomainName = %q, want %q", opts.Scope.DomainName, "project-domain")
+	}
+}
+
+func TestNormalizeRequestClampsMasterCount(t *testing.T) {
+	if got := normalizeRequest(Request{Name: "c", MasterCount: 0}).MasterCount; got != 1 {
+		t.Fatalf("MasterCount=0 normalized to %d, want 1", got)
+	}
+	if got := normalizeRequest(Request{Name: "c", MasterCount: -2}).MasterCount; got != 1 {
+		t.Fatalf("MasterCount=-2 normalized to %d, want 1", got)
+	}
+	if got := normalizeRequest(Request{Name: "c", MasterCount: 3}).MasterCount; got != 3 {
+		t.Fatalf("MasterCount=3 normalized to %d, want 3 (unchanged)", got)
+	}
 }
 
 func TestAuthenticatedProjectValidation(t *testing.T) {

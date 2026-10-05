@@ -836,8 +836,53 @@ func TestValidateReadinessMagnumRequiresCloudAndCredentials(t *testing.T) {
 
 	report := ValidateReadiness(cfg)
 	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.magnum.auth_url")
-	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.magnum.application_credential_id")
+	// With neither authentication method configured, readiness reports that
+	// either application credentials or username/password are required.
+	authIssue := assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.magnum.application_credential_id")
+	if !strings.Contains(strings.ToLower(authIssue.Message), "username/password") {
+		t.Fatalf("expected either-method message, got %q", authIssue.Message)
+	}
 	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.magnum.cluster_template")
+}
+
+func TestValidateReadinessMagnumAcceptsPasswordAuth(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Provider = "magnum"
+	cfg.OpenCenter.Infrastructure.Cloud = CloudConfig{
+		Magnum: &MagnumCloudConfig{
+			AuthURL:         "https://keystone.example.com/v3",
+			Region:          "RegionOne",
+			ProjectID:       "project-id",
+			Username:        "svc-user",
+			Password:        "svc-pass",
+			UserDomainName:  "Default",
+			ClusterTemplate: "kubernetes-template",
+		},
+	}
+
+	report := ValidateReadiness(cfg)
+	for _, issue := range report.Issues {
+		if issue.Severity == SeverityError && issue.Category == CategoryProvider {
+			t.Fatalf("unexpected Magnum provider error for password auth: %s — %s", issue.Path, issue.Message)
+		}
+	}
+}
+
+func TestValidateReadinessMagnumRejectsIncompletePasswordAuth(t *testing.T) {
+	cfg := validReadinessConfig(t, "kind")
+	cfg.OpenCenter.Infrastructure.Provider = "magnum"
+	cfg.OpenCenter.Infrastructure.Cloud = CloudConfig{
+		Magnum: &MagnumCloudConfig{
+			AuthURL:         "https://keystone.example.com/v3",
+			Region:          "RegionOne",
+			ProjectID:       "project-id",
+			Username:        "svc-user",
+			ClusterTemplate: "kubernetes-template",
+		},
+	}
+
+	report := ValidateReadiness(cfg)
+	assertIssue(t, report, SeverityError, CategoryProvider, "opencenter.infrastructure.cloud.magnum.username")
 }
 
 func TestValidateReadinessKeycloakStrictHostnameSchedulingCapacity(t *testing.T) {

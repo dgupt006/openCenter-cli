@@ -42,7 +42,48 @@ func TestDefaultValidatorMagnumRequiresTemplateAndCredentials(t *testing.T) {
 	cfg.OpenCenter.Infrastructure.Cloud.Magnum.ApplicationCredentialSecret = ""
 
 	err := NewValidator().Validate(cfg)
-	if err == nil || (!strings.Contains(err.Error(), "ApplicationCredential") && !strings.Contains(err.Error(), "ClusterTemplate")) {
+	if err == nil || (!strings.Contains(err.Error(), "ApplicationCredential") && !strings.Contains(err.Error(), "application_credential") && !strings.Contains(err.Error(), "ClusterTemplate") && !strings.Contains(err.Error(), "cluster_template")) {
 		t.Fatalf("expected Magnum credential or template validation error, got %v", err)
+	}
+}
+
+func TestDefaultValidatorMagnumAcceptsPasswordAuthWithoutAppCreds(t *testing.T) {
+	cfg := validMagnumV2Config()
+	magnum := cfg.OpenCenter.Infrastructure.Cloud.Magnum
+	magnum.ApplicationCredentialID = ""
+	magnum.ApplicationCredentialSecret = ""
+	magnum.Username = "svc-user"
+	magnum.Password = "svc-pass"
+	magnum.UserDomainName = "Default"
+
+	if err := NewValidator().Validate(cfg); err != nil {
+		t.Fatalf("complete username/password Magnum config failed validation: %v", err)
+	}
+}
+
+func TestDefaultValidatorMagnumRejectsIncompletePasswordAuth(t *testing.T) {
+	cfg := validMagnumV2Config()
+	magnum := cfg.OpenCenter.Infrastructure.Cloud.Magnum
+	magnum.ApplicationCredentialID = ""
+	magnum.ApplicationCredentialSecret = ""
+	magnum.Username = "svc-user"
+	// Password intentionally omitted: username/password must be supplied together.
+
+	err := NewValidator().Validate(cfg)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "password") {
+		t.Fatalf("expected incomplete password-auth validation error, got %v", err)
+	}
+}
+
+func TestDefaultValidatorMagnumRejectsNoAuthMethod(t *testing.T) {
+	cfg := validMagnumV2Config()
+	magnum := cfg.OpenCenter.Infrastructure.Cloud.Magnum
+	magnum.ApplicationCredentialID = ""
+	magnum.ApplicationCredentialSecret = ""
+	// Neither application credentials nor username/password configured.
+
+	err := NewValidator().Validate(cfg)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "username/password or application_credential") {
+		t.Fatalf("expected missing-auth-method validation error, got %v", err)
 	}
 }

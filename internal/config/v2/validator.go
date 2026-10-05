@@ -729,8 +729,10 @@ func validateMagnumCloudConfig(config *MagnumCloudConfig) error {
 	if strings.TrimSpace(config.ProjectID) == "" {
 		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.project_id is required")
 	}
-	if isMissingSecret(config.ApplicationCredentialID) || isMissingSecret(config.ApplicationCredentialSecret) {
-		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.application_credential_id and application_credential_secret are required")
+	hasAppCred := !isMissingSecret(config.ApplicationCredentialID) && !isMissingSecret(config.ApplicationCredentialSecret)
+	hasPassword := !isMissingSecret(config.Username) && !isMissingSecret(config.Password)
+	if !hasAppCred && !hasPassword {
+		return fmt.Errorf("opencenter.infrastructure.cloud.magnum requires either username/password or application_credential_id and application_credential_secret")
 	}
 	if strings.TrimSpace(config.ClusterTemplate) == "" {
 		return fmt.Errorf("opencenter.infrastructure.cloud.magnum.cluster_template is required")
