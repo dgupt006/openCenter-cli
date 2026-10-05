@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	kindprovider "github.com/opencenter-cloud/opencenter-cli/internal/cloud/kind"
@@ -463,7 +464,60 @@ ENABLE_CAPTCHA = false
 	return nil
 }
 
+// ensureCertDirOwnership makes the cert directory and any existing cert files
+// writable by the current process. On a re-run the Gitea data dir may be owned
+// by the container UID (1000) while the CLI runs as a different UID, so
+// os.WriteFile's in-place truncate would fail with EACCES. Removing a file
+// requires only directory write permission, so we drop foreign-owned files and
+// let writePEMFile recreate them. If the directory itself is not writable, we
+// return an actionable error.
+func (s *Service) ensureCertDirOwnership() error {
+	certDir := s.layout.GiteaCertDir
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		return fmt.Errorf("create cert dir %s: %w", certDir, err)
+	}
+	for _, path := range []string{s.layout.CACertPath, s.layout.ServerCertPath, s.layout.ServerKeyPath} {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+		if !fileWritable(path) {
+			ownerUID := uint32(0)
+			if st, ok := info.Sys().(*syscall.Stat_t); ok {
+				ownerUID = st.Uid
+			}
+			if rmErr := os.Remove(path); rmErr != nil {
+				return fmt.Errorf("cert %s is owned by uid %d and is not writable by this process (uid %d). Remove or re-own it, e.g.:\n  sudo chown $(id -u):$(id -g) %s\nthen retry.", path, ownerUID, currentUID(), path)
+			}
+		}
+	}
+	return nil
+}
+
+// fileWritable reports whether the current process can open path for writing.
+func fileWritable(path string) bool {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	return true
+}
+
+// currentUID returns the effective UID of the calling process. On Linux
+// syscall.Getuid returns an int UID; on Windows it returns 0 (the ownership
+// reconciliation is a no-op there because the data dir is always CLI-owned).
+func currentUID() uint32 {
+	return uint32(syscall.Getuid())
+}
+
 func (s *Service) writeCertificates(extraIPs []string) error {
+	if err := s.ensureCertDirOwnership(); err != nil {
+		return err
+	}
 	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
 	for _, rawIP := range extraIPs {
 		if ip := net.ParseIP(strings.TrimSpace(rawIP)); ip != nil {

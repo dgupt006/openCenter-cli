@@ -66,3 +66,34 @@ func TestWriteCertificatesIncludesLocalAndKindSANs(t *testing.T) {
 		t.Fatalf("expected host IP SAN in %v", cert.IPAddresses)
 	}
 }
+
+func TestWriteCertificatesReplacesForeignOwnedFile(t *testing.T) {
+	service, err := NewService(localdev.NewExecutor(), t.TempDir(), DefaultSettings("podman"))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	if err := service.layout.Ensure(); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	// Simulate a foreign-owned cert file that the current user cannot
+	// overwrite: create a real file, then remove write permission on the
+	// file while keeping the directory writable. os.WriteFile truncates in
+	// place, so a non-writable file must fail the naive path.
+	if err := os.WriteFile(service.layout.CACertPath, []byte("stale"), 0o444); err != nil {
+		t.Fatalf("seed ca.pem: %v", err)
+	}
+
+	if err := service.writeCertificates(nil); err != nil {
+		t.Fatalf("writeCertificates() error = %v (expected it to replace the read-only file)", err)
+	}
+
+	// The file must now hold a fresh, parseable certificate (not "stale").
+	data, err := os.ReadFile(service.layout.CACertPath)
+	if err != nil {
+		t.Fatalf("read ca.pem: %v", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("ca.pem is not a certificate: %q", string(data[:min(40, len(data))]))
+	}
+}
