@@ -21,7 +21,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitea/api"
 )
 
-const (
+	const (
 	defaultContainerName = "gitea"
 	defaultImage         = "docker.gitea.com/gitea:1.27.2"
 	defaultAdminUser     = "admin"
@@ -31,6 +31,13 @@ const (
 	defaultRepoPassword  = "newuserpassword"
 	defaultRepoEmail     = "newuser@example.com"
 	defaultRepoName      = "test-repo"
+
+	// giteaContainerUID is the UID/GID the Gitea container process runs as
+	// (see the `exec --user 1000:1000` in ensureAdminUser and RUN_USER=git in
+	// the container). The CLI writes the TLS certs on the host; the container
+	// must be able to read them, so writeCertificates re-owns them to this UID
+	// (falling back to world-readable when the caller lacks chown privilege).
+	giteaContainerUID = 1000
 )
 
 // Settings configures the local Gitea container.
@@ -598,6 +605,37 @@ func (s *Service) writeCertificates(extraIPs []string, extraHosts []string) erro
 	if err := writePEMFile(s.layout.ServerKeyPath, "RSA PRIVATE KEY", serverKeyBytes, 0o600); err != nil {
 		return err
 	}
+	return s.reownCertsForContainer()
+}
+
+// reownCertsForContainer makes the freshly-written TLS certs readable by the
+// Gitea container process (giteaContainerUID). The container runs as a fixed
+// UID that may differ from the host user running the CLI; without this the
+// container cannot open key.pem and the HTTPS listener fails to start, so
+// waitForAPI times out. We chown to the container UID when possible; when the
+// caller lacks chown privilege (no root/sudo) we fall back to world-readable
+// certs. This is a disposable local Gitea on localhost with a self-signed
+// cert, so a world-readable key is an accepted trade-off over a broken service.
+func (s *Service) reownCertsForContainer() error {
+	certs := []string{s.layout.CACertPath, s.layout.ServerCertPath, s.layout.ServerKeyPath}
+	allChowned := true
+	for _, path := range certs {
+		if err := os.Chown(path, giteaContainerUID, giteaContainerUID); err != nil {
+			allChowned = false
+			break
+		}
+	}
+	if allChowned {
+		return nil
+	}
+	// No chown privilege: make the certs readable by the container's UID via
+	// world-read. ca.pem/cert.pem are already 0644; key.pem starts 0600 and
+	// is widened to 0644 so the container can read it.
+	for _, path := range certs {
+		if err := os.Chmod(path, 0o644); err != nil {
+			return fmt.Errorf("chmod %s for container read: %w", path, err)
+		}
+	}
 	return nil
 }
 
@@ -621,7 +659,7 @@ func (s *Service) runContainer(ctx context.Context) error {
 func (s *Service) ensureAdminUser(ctx context.Context) error {
 	runtime := s.commandRuntime()
 	args := []string{
-		"exec", "--user", "1000:1000",
+		"exec", "--user", fmt.Sprintf("%d:%d", giteaContainerUID, giteaContainerUID),
 		s.settings.ContainerName,
 		"gitea", "admin", "user", "create",
 		"--config", "/data/gitea/conf/app.ini",

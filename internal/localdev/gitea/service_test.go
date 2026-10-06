@@ -131,3 +131,39 @@ func TestWriteCertificatesIncludesURLHostSAN(t *testing.T) {
 		t.Fatalf("expected gitea.oc-baremetal in DNS SANs, got %v", cert.DNSNames)
 	}
 }
+
+// TestWriteCertificatesKeyReadableByContainer verifies the container-UID
+// re-ownership fallback: when the CLI cannot chown (unprivileged test user),
+// key.pem must still be readable by a process running as the container UID.
+// Without this the Gitea HTTPS listener fails with "open key.pem: permission
+// denied" and waitForAPI times out during gitea-attach-kind.
+func TestWriteCertificatesKeyReadableByContainer(t *testing.T) {
+	service, err := NewService(localdev.NewExecutor(), t.TempDir(), DefaultSettings("podman"))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	if err := service.layout.Ensure(); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	if err := service.writeCertificates(nil, nil); err != nil {
+		t.Fatalf("writeCertificates() error = %v", err)
+	}
+
+	info, err := os.Stat(service.layout.ServerKeyPath)
+	if err != nil {
+		t.Fatalf("stat key.pem: %v", err)
+	}
+	mode := info.Mode().Perm()
+	// The container (a different UID) must be able to read the key. Either it
+	// was chowned to the container UID (owner-read set) or, as the unprivileged
+	// fallback, it is world/group readable. Both satisfy "a foreign UID can
+	// read it". The only failing case is a foreign-owned 0600 file.
+	if mode&0o004 == 0 && mode&0o040 == 0 {
+		t.Fatalf("key.pem mode %v is not readable by a foreign UID (container); want world or group read", mode)
+	}
+	// And the CLI user (owner, when not chowned) must retain read for the
+	// next write cycle — owner-read must be set.
+	if mode&0o400 == 0 {
+		t.Fatalf("key.pem mode %v lost owner read; the CLI cannot rewrite it", mode)
+	}
+}
