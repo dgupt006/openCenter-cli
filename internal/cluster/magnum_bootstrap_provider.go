@@ -254,10 +254,18 @@ func (p *magnumBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths
 		}
 		openstackProvider := &openstackBootstrapProvider{runner: p.runner}
 		fluxPlanEnv := envPlanFromMap(buildBootstrapEnvironment(kubeconfigPath), nil)
+		publishStep, err := openstackProvider.buildGitOpsPublishStep(cfg, gitOpsDir, fluxPlanEnv)
+		if err != nil {
+			return nil, fmt.Errorf("building GitOps publish step: %w", err)
+		}
+		steps = append(steps, publishStep)
 		fluxStep, err := openstackProvider.buildFluxBootstrapStep(cfg, gitOpsDir, fluxPlanEnv, &localOpts)
 		if err != nil {
 			return nil, fmt.Errorf("building flux bootstrap step: %w", err)
 		}
+		// Flux bootstrap creates the flux-system namespace. Reconcile the
+		// namespace-scoped SOPS key only after that bootstrap; applying it first
+		// fails on a fresh Magnum cluster because the namespace does not exist.
 		steps = append(steps, fluxStep)
 		steps = append(steps, newSopsAgeSecretStep(sopsKeyPath, kubeconfigPath, p.runner))
 		steps = append(steps, newGrafanaAdminSecretStep(cfg, kubeconfigPath, p.runner))
