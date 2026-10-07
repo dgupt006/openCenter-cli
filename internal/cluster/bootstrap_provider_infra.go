@@ -247,19 +247,11 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 	if cfg.OpenCenter.GitOps.Auth.Token != nil &&
 		strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.Provider) != "" &&
 		cfg.ConfiguredGitURL() != "" {
-		publishStep, err := p.buildGitOpsPublishStep(cfg, clusterDir, planEnv)
-		if err != nil {
-			return nil, fmt.Errorf("building GitOps publish step: %w", err)
-		}
-		steps = append(steps, publishStep)
 		fluxStep, err := p.buildFluxBootstrapStep(cfg, clusterDir, planEnv, opts)
 		if err != nil {
 			return nil, fmt.Errorf("building flux bootstrap step: %w", err)
 		}
 		steps = append(steps, fluxStep)
-		// Flux bootstrap creates the flux-system namespace. Reconcile the
-		// namespace-scoped SOPS key after bootstrap; applying it first fails on
-		// a fresh cluster because the namespace does not exist yet.
 		steps = append(steps, newSopsAgeSecretStep(clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner))
 		// No opencenter-base credential Secret is created: the shared
 		// openCenter-gitops-base repository is public, so its GitRepository
