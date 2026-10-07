@@ -92,6 +92,16 @@ func (p *openstackBootstrapProvider) installOpenStackNetworkPlugin(ctx context.C
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Helm otherwise uses the user's global cache/config/data directories. On
+	// macOS those directories may be protected by filesystem permissions, and
+	// concurrent cluster bootstraps can also race on the same repository index.
+	// Keep all Helm state inside this bootstrap's writable temporary directory;
+	// this is platform-neutral and makes the step isolated and repeatable.
+	env, err = withBootstrapHelmDirectories(env, tmpDir)
+	if err != nil {
+		return err
+	}
+
 	if selection.Name == "calico" {
 		if err := p.installOpenStackCalicoWithHelm(ctx, cfg, selection, kubeconfigPath, tmpDir, env); err != nil {
 			return err
@@ -113,6 +123,29 @@ func (p *openstackBootstrapProvider) installOpenStackNetworkPlugin(ctx context.C
 	}
 
 	return p.waitForOpenStackNetworkPlugin(ctx, selection, kubeconfigPath, tmpDir, env)
+}
+
+func withBootstrapHelmDirectories(env map[string]string, tmpDir string) (map[string]string, error) {
+	helmRoot := filepath.Join(tmpDir, "helm")
+	dirs := map[string]string{
+		"HELM_CACHE_HOME":  filepath.Join(helmRoot, "cache"),
+		"HELM_CONFIG_HOME": filepath.Join(helmRoot, "config"),
+		"HELM_DATA_HOME":   filepath.Join(helmRoot, "data"),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create Helm state directory %s: %w", dir, err)
+		}
+	}
+
+	isolated := make(map[string]string, len(env)+len(dirs))
+	for key, value := range env {
+		isolated[key] = value
+	}
+	for key, value := range dirs {
+		isolated[key] = value
+	}
+	return isolated, nil
 }
 
 // installOpenStackCalicoWithHelm installs Calico via the official Helm chart
