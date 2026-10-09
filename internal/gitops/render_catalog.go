@@ -189,7 +189,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "weave-gitops", DefaultNamespace: "flux-system", HasOverrideValues: true,
 			SourceName: "opencenter-weave-gitops", SourceGroup: "weave-gitops", EmitSource: true,
 			BasePath: "applications/base/services/weave-gitops", OverrideDependsOn: []string{"sources", "envoy-gateway-api-base"},
-			OverrideValuesRenderer: templateRenderer(weaveGitOpsTemplate),
+			OverrideValuesRenderer: weaveGitOpsRenderer,
 		},
 		{
 			ServiceName: "longhorn", DefaultNamespace: "longhorn-system", HasOverrideValues: true,
