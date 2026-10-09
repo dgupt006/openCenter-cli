@@ -356,6 +356,7 @@ func TestMagnumDestroyAcceptedInvisibleClusterRetainsState(t *testing.T) {
 	}
 	fake := &lifecycleMagnumService{
 		getByID:    clusters.Cluster{UUID: testMagnumUUID, Name: cfg.ClusterName(), Status: "CREATE_IN_PROGRESS"},
+		getNameErr: gophercloud.ErrUnexpectedResponseCode{Actual: http.StatusNotFound},
 		idNotFound: true,
 	}
 	client := newLifecycleMagnumProvider(t, fake)
