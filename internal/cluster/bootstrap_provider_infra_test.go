@@ -496,7 +496,7 @@ func TestOpenStackNetworkPluginInstallCalicoUsesHelmChart(t *testing.T) {
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "apply --server-side -f https://raw.githubusercontent.com/projectcalico/calico/v"+configuredCalicoVersion+"/manifests/operator-crds.yaml")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo add projectcalico https://docs.tigera.io/calico/charts")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo update projectcalico")
-	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace --skip-crds -f "+valuesPath)
+	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace --skip-crds --force-conflicts -f "+valuesPath)
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" -n tigera-operator rollout status deployment/tigera-operator --timeout=5m")
 
 	crdApplyIndex, helmInstallIndex := -1, -1

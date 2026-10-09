@@ -211,6 +211,11 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 		"--namespace", selection.Namespace,
 		"--create-namespace",
 		"--skip-crds",
+		// Helm 4 uses server-side apply for this release. On a retry, the Tigera
+		// operator already owns normalized Installation fields such as ipPools;
+		// force conflict resolution so the declared values (including bootstrap
+		// tolerations) can be reconciled idempotently.
+		"--force-conflicts",
 		"-f", valuesPath,
 	); err != nil {
 		return fmt.Errorf("helm install Calico %s: %w", selection.Version, err)
@@ -428,7 +433,7 @@ func openStackNetworkPluginPlanCommands(selection openStackNetworkPluginSelectio
 			commandPlan("kubectl", kubectlArgs(kubeconfigPath, "apply", "--server-side", "-f", fmt.Sprintf(calicoOperatorCRDsURLFormat, selection.Version))...),
 			commandPlan("helm", "repo", "add", calicoHelmRepoName, calicoHelmRepo),
 			commandPlan("helm", "repo", "update", calicoHelmRepoName),
-			commandPlan("helm", "upgrade", "--install", selection.ReleaseName, calicoHelmChart, "--version", selection.Version, "--namespace", selection.Namespace, "--create-namespace", "-f", "<organization>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml"),
+			commandPlan("helm", "upgrade", "--install", selection.ReleaseName, calicoHelmChart, "--version", selection.Version, "--namespace", selection.Namespace, "--create-namespace", "--force-conflicts", "-f", "<organization>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml"),
 		}
 		return append(commands, openStackNetworkPluginReadinessPlanCommands(selection, kubeconfigPath)...)
 	}
