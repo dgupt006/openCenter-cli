@@ -949,6 +949,25 @@ func TestRenderClusterAppsOpenStackCCMNamespace(t *testing.T) {
 	}
 }
 
+func TestRenderClusterAppsOpenStackCCMUsesUniqueClusterName(t *testing.T) {
+	dst := t.TempDir()
+	cfg := newDefault("ccm-unique-cluster")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = dst
+
+	if err := RenderClusterApps(cfg); err != nil {
+		t.Fatalf("RenderClusterApps() error = %v", err)
+	}
+
+	overridePath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "openstack-ccm", "helm-values", "override-values.yaml")
+	overrideValues := mustReadFile(t, overridePath)
+	if !strings.Contains(overrideValues, "cluster:\n  name: ccm-unique-cluster\n") {
+		t.Fatalf("expected OpenStack CCM cluster identity to use the configured cluster name:\n%s", overrideValues)
+	}
+	if strings.Contains(overrideValues, "name: kubernetes") {
+		t.Fatalf("OpenStack CCM must not use the shared default cluster identity:\n%s", overrideValues)
+	}
+}
+
 func TestRenderClusterAppsOpenStackCSINamespace(t *testing.T) {
 	dst := t.TempDir()
 	cfg := newDefault("csi-ns-test")

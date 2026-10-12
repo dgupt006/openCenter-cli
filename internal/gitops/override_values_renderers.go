@@ -266,7 +266,9 @@ const weaveGitOpsTemplate = `adminUser:
   passwordHash: {{ .Secrets.WeaveGitOps.PasswordHash }}
 `
 
-const openstackCCMTemplate = `cloudConfig:
+const openstackCCMTemplate = `cluster:
+  name: {{ .OpenCenter.Cluster.ClusterName }}
+cloudConfig:
   global:
     {{- if .OpenCenter.Infrastructure.Cloud.OpenStack }}
     auth-url: {{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL }}
