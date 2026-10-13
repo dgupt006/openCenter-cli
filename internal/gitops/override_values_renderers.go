@@ -944,7 +944,7 @@ const headlampTemplate = `config:
         clientID: opencenter
         clientSecret: {{ .Secrets.Headlamp.OIDCClientSecret }}
         issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
-        scopes: openid profile email groups
+        scopes: profile email groups
         callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
     extraArgs:
         - -oidc-ca-file=/etc/headlamp/oidc-ca/ca.crt
