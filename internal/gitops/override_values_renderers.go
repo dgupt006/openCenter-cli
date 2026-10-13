@@ -287,7 +287,9 @@ const weaveGitOpsTemplate = `adminUser:
   passwordHash: {{ .Secrets.WeaveGitOps.PasswordHash }}
 `
 
-const openstackCCMTemplate = `cloudConfig:
+const openstackCCMTemplate = `cluster:
+  name: {{ .OpenCenter.Cluster.ClusterName }}
+cloudConfig:
   global:
     {{- if .OpenCenter.Infrastructure.Cloud.OpenStack }}
     auth-url: {{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL }}
@@ -942,7 +944,7 @@ const headlampTemplate = `config:
         clientID: opencenter
         clientSecret: {{ .Secrets.Headlamp.OIDCClientSecret }}
         issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
-        scopes: openid profile email groups
+        scopes: profile,email
         callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
     extraArgs:
         - -oidc-ca-file=/etc/headlamp/oidc-ca/ca.crt
@@ -1072,6 +1074,9 @@ alertmanager:
       volumeClaimTemplate:
         spec:
           storageClassName: {{ $kps.AlertmanagerStorageClass | default $defaultSC }}
+          resources:
+            requests:
+              storage: {{ $kps.AlertmanagerVolumeSize | default 10 }}Gi
   config:
     global:
       resolve_timeout: 5m
@@ -1132,6 +1137,9 @@ prometheus:
       volumeClaimTemplate:
         spec:
           storageClassName: {{ $kps.PrometheusStorageClass | default $defaultSC }}
+          resources:
+            requests:
+              storage: {{ $kps.PrometheusVolumeSize | default 150 }}Gi
 grafana:
   enabled: true
   service:
@@ -1141,6 +1149,7 @@ grafana:
   # Grafana's PVC (when persistence is enabled) must likewise pin its class.
   persistence:
     storageClassName: {{ $kps.GrafanaStorageClass | default $defaultSC }}
+    size: {{ $kps.GrafanaVolumeSize | default 10 }}Gi
   admin:
     existingSecret: "grafana-admin-password"
     userKey: admin-user
