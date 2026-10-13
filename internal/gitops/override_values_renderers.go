@@ -1063,6 +1063,9 @@ alertmanager:
       volumeClaimTemplate:
         spec:
           storageClassName: {{ $kps.AlertmanagerStorageClass | default $defaultSC }}
+          resources:
+            requests:
+              storage: {{ $kps.AlertmanagerVolumeSize | default 10 }}Gi
   config:
     global:
       resolve_timeout: 5m
@@ -1123,6 +1126,9 @@ prometheus:
       volumeClaimTemplate:
         spec:
           storageClassName: {{ $kps.PrometheusStorageClass | default $defaultSC }}
+          resources:
+            requests:
+              storage: {{ $kps.PrometheusVolumeSize | default 150 }}Gi
 grafana:
   enabled: true
   service:
@@ -1132,6 +1138,7 @@ grafana:
   # Grafana's PVC (when persistence is enabled) must likewise pin its class.
   persistence:
     storageClassName: {{ $kps.GrafanaStorageClass | default $defaultSC }}
+    size: {{ $kps.GrafanaVolumeSize | default 10 }}Gi
   admin:
     existingSecret: "grafana-admin-password"
     userKey: admin-user
