@@ -16,6 +16,8 @@ func TestHeadlampAndWeaveGitOpsOverlayRoutesUseClusterFQDN(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, headlamp["headlamp-http-route.yaml"], "dashboard.portal-routes.sjc3.k8s.opencenter.cloud")
 	require.Contains(t, headlamp["headlamp-http-route.yaml"], "sectionName: headlamp-https")
+	require.Contains(t, headlamp["headlamp-oidc-ca-certificate.yaml"], "secretName: headlamp-oidc-ca")
+	require.Contains(t, headlamp["headlamp-oidc-ca-certificate.yaml"], "name: rackspace-ca")
 
 	weave, err := weaveGitOpsOverlayFilesRenderer(cfg)
 	require.NoError(t, err)

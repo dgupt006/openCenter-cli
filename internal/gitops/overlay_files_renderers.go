@@ -235,7 +235,12 @@ func longhornOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 }
 
 func headlampOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
-	return singleOverlayFile(cfg, "headlamp-http-route.yaml", headlampHTTPRouteTemplate)
+	files, err := singleOverlayFile(cfg, "headlamp-http-route.yaml", headlampHTTPRouteTemplate)
+	if err != nil {
+		return nil, err
+	}
+	files["headlamp-oidc-ca-certificate.yaml"] = headlampOIDCCACertificate
+	return files, nil
 }
 
 func weaveGitOpsOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
@@ -324,6 +329,19 @@ spec:
           name: headlamp
           port: 80
           weight: 1
+`
+
+const headlampOIDCCACertificate = `---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: headlamp-oidc-ca
+spec:
+  secretName: headlamp-oidc-ca
+  commonName: headlamp-oidc-ca
+  issuerRef:
+    name: rackspace-ca
+    kind: ClusterIssuer
 `
 
 const weaveGitOpsHTTPRouteTemplate = `---
