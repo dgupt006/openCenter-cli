@@ -14,13 +14,9 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
-
 	kindprovider "github.com/opencenter-cloud/opencenter-cli/internal/cloud/kind"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
@@ -28,6 +24,12 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/flux"
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitea"
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitops"
+	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 type kindBootstrapProvider struct {
@@ -148,6 +150,7 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 		{
 			ID:          "gitea-attach-kind",
 			Description: "Attach local Gitea to the Kind network",
+			NeverSkip:   true, // URL rewrite + origin align must run against the live config each deploy
 			Plan: BootstrapPlanStep{
 				ID:          "gitea-attach-kind",
 				Action:      "Attach local Gitea to the Kind network",
@@ -178,6 +181,9 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				if _, err := giteaService.AttachKind(ctx, extraHosts); err != nil {
 					return fmt.Errorf("attach gitea to kind network: %w", err)
 				}
+				// The configured git_url may be unreachable from this process when it
+				// uses a kind-network IP. Deploy re-homes it during its pre-check
+				// phase, so no per-step URL rewrite is needed here.
 				return nil
 			},
 		},
@@ -237,6 +243,31 @@ func (p *kindBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.C
 				return run(ctx)
 			}
 			return step
+		}(),
+		func() bootstrapStep {
+			return bootstrapStep{
+				ID:          "gitea-source-rehome",
+				Description: "Re-home Flux GitRepository sources to an in-cluster Gitea URL",
+				NeverSkip:   true,
+				Plan: BootstrapPlanStep{
+					ID:         "gitea-source-rehome",
+					Action:     "Re-home Flux GitRepository sources to an in-cluster Gitea URL",
+					WorkingDir: gitDir,
+					Commands: []BootstrapPlanCommand{
+						commandPlan("sed", "-i.rehomed", "s|<host>|gitea|", "<overlay>/services/sources/*.yaml"),
+						commandPlan("rm", "-f", "<overlay>/services/sources/*.rehomed"),
+					},
+					Reads:  []string{gitDir + "/applications/overlays/" + cfg.ClusterName()},
+					Writes: []string{"local GitOps checkout services/sources manifests"},
+					Notes:  appendPlanNotes([]string{"No-op when the configured git_url already uses an in-cluster reachable host."}, gitDirErr),
+				},
+				Run: func(ctx context.Context) error {
+					if os.Getenv("OPENCENTER_TEST_MODE") != "" || !useGitea {
+						return nil
+					}
+					return p.rehomeInClusterSources(ctx, cfg, clusterPaths)
+				},
+			}
 		}(),
 		{
 			ID:          "gitea-rebase",
@@ -425,6 +456,77 @@ func resolveGitDir(cfg *v2.Config, clusterPaths *paths.ClusterPaths) (string, er
 		return "", fmt.Errorf("cluster %q does not define a git_dir", cfg.ClusterName())
 	}
 	return gitDir, nil
+}
+
+// rehomeInClusterSources rewrites the url field of every GitRepository manifest
+// under applications/overlays/<cluster>/services/sources from the configured
+// git_url host to the podman DNS alias "gitea", which is resolvable from inside
+// the cluster. The local checkout is updated and committed; deploy's gitea-rebase
+// step then fetches, rebases, and pushes the corrected sources. No-op when the
+// configured URL already uses an in-cluster reachable host or the path does not
+// exist.
+func (p *kindBootstrapProvider) rehomeInClusterSources(ctx context.Context, cfg *v2.Config, clusterPaths *paths.ClusterPaths) error {
+	rawURL := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL)
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("parse git_url %q: %w", rawURL, err)
+	}
+	// Skip hosts that are already in-cluster resolvable. Bare IPs are reachable
+	// on the Kind network only when Gitea keeps its current IP; re-homing those to
+	// "gitea" (podman DNS alias) is safer after a container restart.
+	if u.Hostname() == "gitea" {
+		logging.Debugf("rehomeInClusterSources: host %q already uses in-cluster alias; skipping", u.Hostname())
+		return nil
+	}
+	overlayDir := filepath.Join(clusterPaths.GitOpsDir, "applications", "overlays", cfg.ClusterName())
+	srcDirs := []string{
+		filepath.Join(overlayDir, "services", "sources"),
+		filepath.Join(overlayDir, "flux-system"),
+	}
+	var matches []string
+	for _, d := range srcDirs {
+		m, err := filepath.Glob(filepath.Join(d, "*.yaml"))
+		if err != nil {
+			return err
+		}
+		matches = append(matches, m...)
+	}
+	if len(matches) == 0 {
+		logging.Debugf("rehomeInClusterSources: no source manifests found; skipping")
+		return nil
+	}
+	oldHost := u.Host
+	port := ""
+	if u.Port() != "" {
+		port = ":" + u.Port()
+	}
+	newHost := "gitea" + port
+	for _, f := range matches {
+		data, rerr := os.ReadFile(f)
+		if rerr != nil {
+			continue
+		}
+		updated := bytes.ReplaceAll(data, []byte(oldHost), []byte(newHost))
+		if !bytes.Equal(data, updated) {
+			if werr := os.WriteFile(f, updated, 0o644); werr != nil {
+				return werr
+			}
+			logging.Debugf("rehomeInClusterSources: rewrote %s", f)
+		}
+	}
+	gitDir := clusterPaths.GitOpsDir
+	runGit := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", gitDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %s: %w\n%s", args[0], err, out)
+		}
+		return nil
+	}
+	if err := runGit("add", "-A"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // resolveKindClusterName returns the Kind cluster name, preferring an explicit

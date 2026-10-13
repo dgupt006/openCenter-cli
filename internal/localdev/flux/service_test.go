@@ -2,6 +2,7 @@ package flux
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -80,6 +81,10 @@ func TestBootstrapUsesHostIPURLAndReconciles(t *testing.T) {
 				}
 				return nil, nil
 			},
+			// CA refresh reads the stored ca.crt; it matches the fixture CA, so no patch is issued.
+			"kubectl -n flux-system get secret flux-system -o jsonpath={.data.ca.crt}": func(opts localdev.RunOptions) ([]byte, error) {
+				return []byte(base64.StdEncoding.EncodeToString([]byte("ca"))), nil
+			},
 		},
 	}
 
@@ -137,6 +142,10 @@ func TestBootstrapPrefersConfiguredGitURLAndTokenPath(t *testing.T) {
 					t.Fatalf("bootstrap KUBECONFIG = %q, want %q", opts.Env["KUBECONFIG"], clusterCtx.Paths.KubeconfigPath)
 				}
 				return nil, nil
+			},
+			// CA refresh reads the stored ca.crt; it matches the fixture CA, so no patch is issued.
+			"kubectl -n flux-system get secret flux-system -o jsonpath={.data.ca.crt}": func(opts localdev.RunOptions) ([]byte, error) {
+				return []byte(base64.StdEncoding.EncodeToString([]byte("ca"))), nil
 			},
 		},
 	}

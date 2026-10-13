@@ -300,6 +300,11 @@ func (s *Service) AttachKind(ctx context.Context, extraHosts []string) (*AttachR
 	if hostIP, err := hostRoutableIP(); err == nil && hostIP != "" {
 		certIPs = append(certIPs, hostIP)
 	}
+	// The Podman machine's virtual-network gateway is reachable from inside the
+	// VM and (via port forward) from outside it, so include it as a SAN.
+	if ip, err := s.machineBridgeIP(ctx); err == nil && ip != "" {
+		certIPs = append(certIPs, ip)
+	}
 
 	if err := s.writeCertificates(certIPs, extraHosts); err != nil {
 		return nil, err
@@ -850,6 +855,35 @@ func hostRoutableIP() (string, error) {
 		return ip.String(), nil
 	}
 	return "", fmt.Errorf("no routable IPv4 address found")
+}
+
+// machineBridgeIP returns the Podman machine VM's virtual-network gateway IP
+// (e.g. 192.168.127.2). It is reachable from containers attached to the Podman
+// "kind" network and, via port forward, from outside the VM as well. For
+// Docker or when detection fails it returns an empty string.
+func (s *Service) machineBridgeIP(ctx context.Context) (string, error) {
+	if s.commandRuntime() != "podman" {
+		return "", nil
+	}
+	output, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: "podman",
+		Args: []string{"machine", "ssh", "--", "ip", "route"},
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "default" || !strings.Contains(fields[1], "via") {
+			continue
+		}
+		for i, f := range fields {
+			if f == "src" && i+1 < len(fields) {
+				return fields[i+1], nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func (s *Service) commandRuntime() string {

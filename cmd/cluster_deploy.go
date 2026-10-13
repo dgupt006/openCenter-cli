@@ -16,6 +16,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,8 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/di"
+	localdevpkg "github.com/opencenter-cloud/opencenter-cli/internal/localdev"
+	gitealocaldev "github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitea"
 	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
 	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/spf13/cobra"
@@ -142,11 +146,23 @@ func runClusterDeploy(cmd *cobra.Command, args []string) error {
 	// Pre-check: ensure the GitOps working tree is clean before bootstrap.
 	// A dirty tree causes git pull --rebase to fail during the gitea-rebase step.
 	if !opts.DryRun {
-		if gitDir := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.LocalDir); gitDir != "" {
+		gitDir := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.LocalDir)
+		gitURL := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL)
+
+		// Re-home the configured git_url when its hostname is unreachable from this
+		// execution context (e.g. a kind-network IP under Podman). This keeps the
+		// flux-bootstrap and in-cluster GitRepository on a single reachable host.
+		if _, rehomeErr := rehomeGitURL(ctx, &cfg, gitDir); rehomeErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: git_url re-home failed: %v\n", rehomeErr)
+		}
+		gitURL = strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL)
+
+		if gitDir != "" {
 			warnUncommittedChanges(ctx, cmd, gitDir)
 			// Verify the local repo's origin remote points to git_url so the
 			// gitea-rebase and gitops-push steps operate against the expected remote.
-			if gitURL := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL); gitURL != "" {
+			if gitURL != "" {
+				alignOriginToGitURL(ctx, gitDir, gitURL)
 				if err := verifyOriginMatchesGitURL(ctx, gitDir, gitURL); err != nil {
 					return err
 				}
@@ -358,4 +374,79 @@ func verifyOriginMatchesGitURL(ctx context.Context, gitDir, expectedURL string) 
 			gitDir, actual, expectedURL, gitDir, expectedURL)
 	}
 	return nil
+}
+
+// alignOriginToGitURL best-effort updates the origin remote in gitDir to match
+// expectedURL. Failures are non-fatal so pre-check reporting stays authoritative.
+func alignOriginToGitURL(ctx context.Context, gitDir, expectedURL string) {
+	cmd := exec.CommandContext(ctx, "git", "-C", gitDir, "remote", "set-url", "origin", expectedURL)
+	_ = cmd.Run()
+}
+
+// rehomeGitURL re-homes cfg.OpenCenter.GitOps.Repository.URL to a reachable host
+// when its current hostname cannot be reached from this process. The preferred
+// target is the host-reachable Gitea endpoint reported by the local gitea plugin;
+// the in-cluster alias "gitea" remains resolvable for Flux via podman DNS.
+func rehomeGitURL(ctx context.Context, cfg *v2.Config, gitDir string) (string, error) {
+	rawURL := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.URL)
+	if rawURL == "" {
+		return "", nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" || u.Path == "" {
+		return "", fmt.Errorf("parse git_url %q: %w", rawURL, err)
+	}
+	if isHostReachable(ctx, u.Hostname(), u.Port()) {
+		return rawURL, nil
+	}
+	stateDir, err := config.ResolveConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
+	svc, err := gitealocaldev.NewService(localdevpkg.NewExecutor(), stateDir+"/local", gitealocaldev.DefaultSettings(""))
+	if err != nil {
+		return "", fmt.Errorf("create gitea service: %w", err)
+	}
+	status, err := svc.Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("check gitea status: %w", err)
+	}
+	if !status.Running {
+		return "", fmt.Errorf("local gitea is not running")
+	}
+	// Prefer the routable host IP over the kind-network IP, which is only
+	// reachable inside the Podman VM / Kind network. The re-homed URL is what
+	// flux bootstrap clones from; in-cluster GitRepositories that need a
+	// different route use podman's built-in alias resolution for "gitea".
+	targetHost := status.KindIP
+	if status.HostIP != "" {
+		targetHost = status.HostIP
+	}
+	port := u.Port()
+	if port == "" {
+		port = "3001"
+	}
+	newURL := fmt.Sprintf("https://%s:%s%s", targetHost, port, u.Path)
+	logging.Debugf("deploy: re-homing git_url %s -> %s (host-unreachable)", rawURL, newURL)
+	cfg.OpenCenter.GitOps.Repository.URL = newURL
+	if cm, err := config.NewConfigurationManager(); err == nil {
+		if serr := cm.SaveWithoutValidation(ctx, cfg); serr != nil {
+			return newURL, fmt.Errorf("persist re-homed git_url: %w", serr)
+		}
+	}
+	return newURL, nil
+}
+
+// isHostReachable probes TCP connectivity to host[:port] (default 443).
+func isHostReachable(ctx context.Context, host, port string) bool {
+	if port == "" {
+		port = "443"
+	}
+	d := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }

@@ -96,3 +96,4 @@ tests/features/steps/tmp/
 .kiro
 .opencode
 .slim/deepwork/
+.omp

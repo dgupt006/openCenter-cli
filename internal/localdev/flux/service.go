@@ -1,7 +1,9 @@
 package flux
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev"
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitea"
 	"github.com/opencenter-cloud/opencenter-cli/internal/localdev/gitops"
+	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
 )
 
 // BootstrapResult reports the inputs used for Flux bootstrap.
@@ -222,16 +225,94 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 		return nil, fmt.Errorf("flux bootstrap: %w", err)
 	}
 
+	// The deploy's gitea-attach-kind step reissues the Gitea TLS cert (and with
+	// it the CA) immediately before this bootstrap runs. If the stored CA no
+	// longer matches, the in-cluster GitRepository cannot verify the server
+	// certificate and the cluster never reconciles from the repository. Patch
+	// the source secret so both match.
+	if tokenProvider == "gitea" && giteaStatus != nil {
+		if perr := s.refreshSourceSecretCA(ctx, cluster.Paths.KubeconfigPath, giteaStatus.CAPath); perr != nil {
+			logging.Warnf("flux bootstrap: could not refresh flux-system source secret CA: %v", perr)
+		}
+	}
+
 	return &BootstrapResult{
 		GitDir:         gitDir,
 		RepoURL:        repoURL,
-		Branch:         branch,
 		KubeconfigPath: cluster.Paths.KubeconfigPath,
 	}, nil
 }
 
 func filepathForFlux(clusterName string) string {
 	return "applications/overlays/" + clusterName
+}
+
+// refreshSourceSecretCA replaces ca.crt in the flux-system source secret with
+// the current local Gitea CA when it differs. It reads the existing secret,
+// swaps only the CA field, and applies the merged result, preserving the token
+// credentials that flux bootstrap wrote.
+func (s *Service) refreshSourceSecretCA(ctx context.Context, kubeconfigPath, caPath string) error {
+	current, err := os.ReadFile(caPath)
+	if err != nil {
+		return fmt.Errorf("read gitea CA %q: %w", caPath, err)
+	}
+	stored, err := s.getFluxSystemSecretData(ctx, kubeconfigPath, "ca.crt")
+	if err != nil {
+		return err
+	}
+	if stored == "" || bytes.Equal([]byte(stored), current) {
+		return nil // no drift
+	}
+	kubeEnv := map[string]string{"KUBECONFIG": kubeconfigPath}
+	yamlOut, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: "kubectl",
+		Env:  kubeEnv,
+		Args: []string{"-n", "flux-system", "get", "secret", "flux-system", "-o", "yaml"},
+	})
+	if err != nil {
+		return err
+	}
+	oldB64 := base64.StdEncoding.EncodeToString([]byte(stored))
+	newB64 := base64.StdEncoding.EncodeToString(current)
+	manifest := strings.ReplaceAll(string(yamlOut), oldB64, newB64)
+	f, werr := os.CreateTemp("", "flux-src-secret-*.yaml")
+	if werr != nil {
+		return werr
+	}
+	defer os.Remove(f.Name())
+	if _, werr := f.WriteString(manifest); werr != nil {
+		f.Close()
+		return werr
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if _, perr := s.executor.Run(ctx, localdev.RunOptions{
+		Name: "kubectl",
+		Env:  kubeEnv,
+		Args: []string{"apply", "-f", f.Name()},
+	}); perr != nil {
+		return perr
+	}
+	logging.Debugf("flux bootstrap: refreshed flux-system source secret CA from %s", caPath)
+	return nil
+}
+
+// getFluxSystemSecretData reads one field of the flux-system source secret.
+func (s *Service) getFluxSystemSecretData(ctx context.Context, kubeconfigPath, key string) (string, error) {
+	out, err := s.executor.Run(ctx, localdev.RunOptions{
+		Name: "kubectl",
+		Env:  map[string]string{"KUBECONFIG": kubeconfigPath},
+		Args: []string{"-n", "flux-system", "get", "secret", "flux-system", "-o", "jsonpath={.data." + key + "}"},
+	})
+	if err != nil {
+		return "", err
+	}
+	decoded, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if derr != nil {
+		return "", derr
+	}
+	return string(decoded), nil
 }
 
 // parseGitHubURL extracts owner and repository from a GitHub URL.
