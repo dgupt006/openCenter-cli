@@ -43,7 +43,7 @@ The SJC3 profile used by the current deployment includes:
 | Master flavor | `gp.0.4.8` |
 | Worker flavor | `gp.0.8.32` |
 | Bastion flavor | `gp.0.2.4` |
-| Masters / workers | `3 / 3` |
+| Masters / workers | `3 / 5` |
 | Volume type | `local` |
 | External network | `PUBLICNET` |
 | Availability zone | `az1` |
@@ -81,6 +81,7 @@ For a first deployment, initialize a complete configuration from the schema:
 opencenter cluster init "$CLUSTER" \
   --org "$ORG" \
   --type openstack \
+  --region SJC3 \
   --full-schema
 
 CONFIG="$HOME/.config/opencenter/clusters/blueprints/$ORG/$CLUSTER/$CLUSTER-config.yaml"
@@ -99,9 +100,28 @@ If a complete, secret-free OpenStack profile already exists, it can be used inst
 opencenter cluster init "$CLUSTER" \
   --org "$ORG" \
   --type openstack \
+  --region SJC3 \
   --config-file /path/to/sjc3-openstack-profile.yaml \
   --force
 ```
+
+When reusing a profile, replace every old cluster name and regional value. In particular, verify the cluster FQDNs,
+OpenStack and object-storage endpoints, bucket names, GitOps repository URL, repository path, and SSH key path. Give
+each cluster its own clean checkout rather than reusing an organization-wide working tree:
+
+```yaml
+opencenter:
+  gitops:
+    repository:
+      url: https://github.com/<github-user-or-organization>/<cluster-name>-gitops.git
+      path: clusters/<cluster-name>
+      local_dir: /absolute/path/to/gitops/<cluster-name>-gitops
+```
+
+Set `opencenter.gitops.base_repo.release` to the intended release, for example `2026.03-rc2`. Any explicit
+OpenTofu module `source` override must reference a tag, commit, or branch that exists in the remote repository;
+a local-only branch causes `tofu init` to fail before infrastructure is applied. Check custom refs with
+`git ls-remote` before deployment.
 
 Create the empty remote GitOps repository before generating manifests:
 
@@ -143,6 +163,9 @@ opencenter cluster validate "$ORG/$CLUSTER"
 
 Resolve every validation error before generating or deploying the cluster.
 
+The current command performs local validation. It does not prove that a custom remote module ref exists, so perform
+the `git ls-remote` check above whenever the profile overrides an OpenTofu module source.
+
 ## Generate, synchronize, and publish GitOps
 
 Generate the manifests, then synchronize encrypted secrets. Secret synchronization must happen after the final generation because generation can recreate service overlays.
@@ -157,7 +180,7 @@ Before committing, confirm that required `secret.yaml` files exist and contain e
 The deployment command does not commit or push the generated GitOps repository. Publish it before starting deployment:
 
 ```sh
-GITOPS_DIR="$HOME/.config/opencenter/clusters/gitops/$ORG"
+GITOPS_DIR="$HOME/.config/opencenter/clusters/gitops/$CLUSTER-gitops"
 cd "$GITOPS_DIR"
 
 git init
@@ -208,6 +231,17 @@ kubectl get kustomizations -A
 kubectl get helmreleases -A
 ```
 
+## DNS and portal access in SJC3
+
+The current SJC3 OpenStack catalog does not expose a public Designate DNS endpoint, and the rc2 service catalog does
+not deploy ExternalDNS. Keep both OpenStack `use_designate` settings `false`. After the Gateway obtains its external
+IP, create records in the authoritative external DNS service for the generated portal hostnames.
+
+For browser-only validation before authoritative DNS is available, add the Gateway IP and generated portal names to
+the client machine's `/etc/hosts`. This affects only that machine; it does not provide DNS to pods. Services such as
+Headlamp that contact the OIDC issuer from inside the cluster also require the issuer hostname to resolve through DNS
+visible to CoreDNS. Do not enable Designate merely to bypass this requirement when the regional endpoint is absent.
+
 ## What success looks like
 
 An OpenTofu apply completing successfully is only the infrastructure milestone. The cluster is ready when the following layers are healthy:
@@ -238,6 +272,18 @@ OpenStack block storage attachment limits can become the hidden constraint. A wo
 
 Before enabling the full service matrix, calculate the expected volume count per worker. If the count is too high, add workers, move suitable services to filesystem or Longhorn storage, or reduce the initial service footprint.
 
+Nova server-group quota is a separate prerequisite. This topology needs a master group, a worker group, and may create
+a group for each configured additional worker pool even when its count is zero. Check capacity before deployment:
+
+```sh
+openstack --os-cloud "$OS_CLOUD" server group list
+openstack --os-cloud "$OS_CLOUD" quota show
+```
+
+If quota is exhausted, inspect group membership and remove only empty groups belonging to clusters that have already
+been destroyed. Never delete a group that contains instances or belongs to another active cluster. After freeing
+quota, rerun the same `cluster deploy` command; the deployment resumes from its saved state.
+
 ## Release evidence
 
 For each deployment, record:
@@ -258,7 +304,9 @@ Do not record passwords, tokens, application-credential secrets, age private key
 
 ```text
 [ ] Regional image, flavors, network, keypair, and volume type verified
+[ ] Nova server-group quota can accommodate all configured pools
 [ ] Fresh cluster name and unique GitOps path selected
+[ ] GitOps release and all custom module refs exist remotely
 [ ] Flux, Weave GitOps, Calico, and CSI configured intentionally
 [ ] Empty GitOps repository created and its URL added to the cluster configuration
 [ ] Object storage provisioned for every enabled S3-backed service
@@ -269,6 +317,7 @@ Do not record passwords, tokens, application-credential secrets, age private key
 [ ] Generated kubeconfig exported
 [ ] Nodes have provider IDs and are Ready
 [ ] Flux, Calico, CSI, and HelmReleases are healthy
+[ ] Portal hostnames resolve both from the test client and, where required, from cluster pods
 [ ] Deployment evidence captured without secrets
 ```
 
