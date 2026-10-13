@@ -904,7 +904,10 @@ func (s *Service) validateManagedContainer(container *containerInspect, credenti
 	if labels[specHashLabel] != s.specHash() {
 		return fmt.Errorf("RustFS container %q has configuration drift; destroy it explicitly before recreating", s.settings.ContainerName)
 	}
-	if container.Config.Image != s.settings.Image {
+	// podman normalizes "repo:tag@digest" to "repo@digest" on container create,
+	// so compare the digest (or full ref when no digest is present) instead of
+	// doing a literal string compare against settings.Image.
+	if !imageRefMatches(container.Config.Image, s.settings.Image) {
 		return fmt.Errorf("RustFS container %q image drifted from %q to %q", s.settings.ContainerName, s.settings.Image, container.Config.Image)
 	}
 	if container.Config.User != "10001:10001" {
@@ -930,6 +933,19 @@ func (s *Service) validateManagedContainer(container *containerInspect, credenti
 		return fmt.Errorf("RustFS container %q credential state does not match persisted credentials", s.settings.ContainerName)
 	}
 	return nil
+}
+
+// imageRefMatches reports whether an observed container image ref satisfies
+// the expected ref. When both carry a digest, the digests must match (podman
+// drops the tag from "repo:tag@digest" on create). Otherwise the full refs
+// must be identical.
+func imageRefMatches(observed, expected string) bool {
+	od := strings.LastIndex(observed, "@sha256:")
+	ed := strings.LastIndex(expected, "@sha256:")
+	if od >= 0 && ed >= 0 {
+		return strings.ToLower(observed[od:]) == strings.ToLower(expected[ed:])
+	}
+	return observed == expected
 }
 
 func hasPublishedPort(container *containerInspect, containerPort string, hostPort int) bool {

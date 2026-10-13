@@ -70,3 +70,111 @@ jobs:
 
       - name: Run property tests
         run: go test ./internal/... ./cmd/... -count=1 -run 'TestProperty'
+
+  kind-e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted-kvm]
+    needs: go-test
+    timeout-minutes: 45
+    concurrency:
+      # Cancel superseded attempts on the same PR so only the latest commit holds the KVM runner.
+      group: ${{ github.repository }}-kind-e2e-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      SOPS_VERSION: 3.13.3
+      KIND_VERSION: v0.29.0
+      KUBECTL_VERSION: v1.35.4
+      FLUX_VERSION: v2.6.4
+      HELM_VERSION: v3.19.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize runner-local environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          home_dir="${RUNNER_TEMP}/opencenter-home"
+          opencenter_config_dir="${RUNNER_TEMP}/opencenter-config"
+          mkdir -p "${home_dir}" "${opencenter_config_dir}" \
+            "${RUNNER_TEMP}/xdg-config" "${RUNNER_TEMP}/xdg-cache" "${RUNNER_TEMP}/xdg-state" \
+            "${RUNNER_TEMP}/go-cache" "${RUNNER_TEMP}/go-mod-cache"
+          {
+            printf 'HOME=%s\n' "${home_dir}"
+            printf 'OPENCENTER_CONFIG_DIR=%s\n' "${opencenter_config_dir}"
+            printf 'XDG_CONFIG_HOME=%s\n' "${RUNNER_TEMP}/xdg-config"
+            printf 'XDG_CACHE_HOME=%s\n' "${RUNNER_TEMP}/xdg-cache"
+            printf 'XDG_STATE_HOME=%s\n' "${RUNNER_TEMP}/xdg-state"
+            printf 'GOCACHE=%s\n' "${RUNNER_TEMP}/go-cache"
+            printf 'GOMODCACHE=%s\n' "${RUNNER_TEMP}/go-mod-cache"
+          } >> "${GITHUB_ENV}"
+
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install pinned deployment tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_bin="${RUNNER_TEMP}/bin"
+          mkdir -p "${tool_bin}"
+          echo "${tool_bin}" >> "${GITHUB_PATH}"
+          GOBIN="${tool_bin}" go install "github.com/getsops/sops/v3/cmd/sops@v${SOPS_VERSION}"
+
+          download_checked() {
+            local url="$1" checksum_url="$2" output="$3" temporary="${3}.download" expected
+            curl --fail --silent --show-error --location "${url}" -o "${temporary}"
+            expected="$(curl --fail --silent --show-error --location "${checksum_url}" | awk '{print $1; exit}')"
+            [[ "${expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Invalid checksum." >&2; exit 1; }
+            printf '%s  %s\n' "${expected}" "${temporary}" | sha256sum -c -
+            mv "${temporary}" "${output}"
+          }
+
+          download_checked \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+            "${tool_bin}/kubectl.src"
+          install -m 0755 "${tool_bin}/kubectl.src" "${tool_bin}/kubectl"
+
+          download_checked \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum" \
+            "${tool_bin}/kind.src"
+          install -m 0755 "${tool_bin}/kind.src" "${tool_bin}/kind"
+
+          helm_archive="${RUNNER_TEMP}/helm.tar.gz"
+          download_checked \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" \
+            "${helm_archive}"
+          mkdir -p "${RUNNER_TEMP}/helm-extract"
+          tar -xzf "${helm_archive}" -C "${RUNNER_TEMP}/helm-extract"
+          install -m 0755 "${RUNNER_TEMP}/helm-extract/linux-amd64/helm" "${tool_bin}/helm"
+
+          flux_filename="flux_${FLUX_VERSION#v}_linux_amd64.tar.gz"
+          flux_archive="${RUNNER_TEMP}/${flux_filename}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/${flux_filename}" -o "${flux_archive}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/checksums.txt" \
+            -o "${RUNNER_TEMP}/flux-checksums.txt"
+          flux_expected="$(awk -v f="${flux_filename}" '$2 == f || $2 == "*" f {print $1; exit}' "${RUNNER_TEMP}/flux-checksums.txt")"
+          [[ "${flux_expected}" =~ ^[[:xdigit:]]{64}$ ]] || { echo "Flux checksum not found." >&2; exit 1; }
+          printf '%s  %s\n' "${flux_expected}" "${flux_archive}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/flux-extract"
+          tar -xzf "${flux_archive}" -C "${RUNNER_TEMP}/flux-extract"
+          install -m 0755 "${RUNNER_TEMP}/flux-extract/flux" "${tool_bin}/flux"
+
+      - name: Preflight container runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          podman --version && podman info >/dev/null
+          kind version && kubectl version --client && flux --version && helm version --short
+
+      - name: Run Kind end-to-end test
+        shell: bash
+        run: scripts/e2e-kind.sh --runtime podman --org e2e --cluster "pr-e2e-${GITHUB_RUN_ID}"
