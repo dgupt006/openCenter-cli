@@ -934,7 +934,8 @@ const otelTemplate = `collectors:
             queue_size: 2000
 `
 
-const headlampTemplate = `config:
+const headlampTemplate = `replicaCount: 1
+config:
     oidc:
         enabled: true
         externalSecret:
