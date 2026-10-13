@@ -222,6 +222,22 @@ func kubePrometheusStackOverlayFilesRenderer(cfg v2.Config) (map[string]string, 
 	return files, nil
 }
 
+func headlampOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
+	content, err := renderOverlayTemplate(headlampHTTPRouteTemplate, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"headlamp-http-route.yaml": content}, nil
+}
+
+func weaveGitOpsOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
+	content, err := renderOverlayTemplate(weaveGitOpsHTTPRouteTemplate, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"weave-gitops-http-route.yaml": content}, nil
+}
+
 func longhornOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 	files := map[string]string{}
 
@@ -369,7 +385,7 @@ const gatewayListenerKeycloakHTTP = `    - name: keycloak-http
 const gatewayListenerGitopsHTTPS = `    - name: gitops-https
       port: 443
       protocol: HTTPS
-      hostname: {{ (index .OpenCenter.Services "gitops").Hostname | default (printf "gitops.%s" fqdn) }}
+      hostname: {{ printf "gitops.%s" fqdn }}
       allowedRoutes:
         namespaces:
           from: All
@@ -498,6 +514,62 @@ const gatewayListenerLonghornHTTPS = `    - name: longhorn-https
 {{- if (gw).TLSSecretNamespace }}
             namespace: {{ (gw).TLSSecretNamespace }}
 {{- end }}
+`
+
+const headlampHTTPRouteTemplate = `---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: headlamp-gateway-route
+  namespace: headlamp
+spec:
+  hostnames:
+    - {{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: rmpk-gateway
+      namespace: rackspace-system
+      sectionName: headlamp-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: headlamp
+          port: 80
+          weight: 1
+`
+
+const weaveGitOpsHTTPRouteTemplate = `---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: weave-gitops-gateway-route
+  namespace: flux-system
+spec:
+  hostnames:
+    - {{ printf "gitops.%s" fqdn | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: rmpk-gateway
+      namespace: rackspace-system
+      sectionName: gitops-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: weave-gitops
+          port: 9001
+          weight: 1
 `
 
 const longhornHTTPRouteTemplate = `---
