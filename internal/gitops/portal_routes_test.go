@@ -21,6 +21,13 @@ func TestHeadlampOverlayRendersReachableOIDCPortal(t *testing.T) {
 	require.Contains(t, route, "sectionName: headlamp-https")
 	require.Contains(t, route, "name: headlamp")
 	require.Contains(t, route, "port: 80")
+	affinity := files["headlamp-session-affinity.yaml"]
+	require.Contains(t, affinity, "kind: BackendTrafficPolicy")
+	require.Contains(t, affinity, "name: headlamp-gateway-route")
+	require.Contains(t, affinity, "type: ConsistentHash")
+	require.Contains(t, affinity, "name: opencenter-headlamp-affinity")
+	require.Contains(t, files["headlamp-oidc-ca-certificate.yaml"], "secretName: headlamp-oidc-ca")
+	require.Contains(t, files["headlamp-oidc-ca-certificate.yaml"], "name: rackspace-ca")
 }
 
 func TestWeaveGitOpsOverlayRendersReachablePortal(t *testing.T) {
@@ -47,7 +54,9 @@ func TestPortalRoutesAreIncludedInGeneratedOverlays(t *testing.T) {
 
 	headlampKustomization := mustReadFile(t, filepath.Join(overlayRoot, "headlamp", "kustomization.yaml"))
 	require.Contains(t, headlampKustomization, "headlamp-http-route.yaml")
+	require.Contains(t, headlampKustomization, "headlamp-session-affinity.yaml")
 	require.FileExists(t, filepath.Join(overlayRoot, "headlamp", "headlamp-http-route.yaml"))
+	require.FileExists(t, filepath.Join(overlayRoot, "headlamp", "headlamp-session-affinity.yaml"))
 
 	weaveKustomization := mustReadFile(t, filepath.Join(overlayRoot, "weave-gitops", "kustomization.yaml"))
 	require.Contains(t, weaveKustomization, "weave-gitops-http-route.yaml")

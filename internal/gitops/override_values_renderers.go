@@ -942,9 +942,14 @@ const headlampTemplate = `config:
         clientID: opencenter
         clientSecret: {{ .Secrets.Headlamp.OIDCClientSecret }}
         issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
-        scopes: openid profile email groups
+        scopes: profile,email
         callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
+    extraArgs:
+        - -oidc-ca-file=/etc/headlamp/oidc-ca/ca.crt
     pluginsDir: /build/plugins
+podAnnotations:
+    opencenter.cloud/oidc-issuer: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
+    opencenter.cloud/oidc-callback: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
 initContainers:
     - command:
         - /bin/sh
@@ -964,9 +969,15 @@ initContainers:
 volumeMounts:
     - mountPath: /build/plugins
       name: headlamp-plugins
+    - mountPath: /etc/headlamp/oidc-ca
+      name: oidc-ca
+      readOnly: true
 volumes:
     - name: headlamp-plugins
       emptyDir: {}
+    - name: oidc-ca
+      secret:
+        secretName: headlamp-oidc-ca
 `
 
 const harborTemplate = `{{- $harbor := index .OpenCenter.Services "harbor" -}}

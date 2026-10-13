@@ -227,7 +227,11 @@ func headlampOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{"headlamp-http-route.yaml": content}, nil
+	return map[string]string{
+		"headlamp-http-route.yaml":          content,
+		"headlamp-session-affinity.yaml":    headlampSessionAffinity,
+		"headlamp-oidc-ca-certificate.yaml": headlampOIDCCACertificate,
+	}, nil
 }
 
 func weaveGitOpsOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
@@ -298,6 +302,18 @@ metadata:
   name: rackspace-system
 `
 
+const headlampOIDCCACertificate = `---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: headlamp-oidc-ca
+spec:
+  secretName: headlamp-oidc-ca
+  commonName: headlamp-oidc-ca
+  issuerRef:
+    name: rackspace-ca
+    kind: ClusterIssuer
+`
 const gatewayClassContent = `---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -542,6 +558,32 @@ spec:
           name: headlamp
           port: 80
           weight: 1
+`
+
+// Headlamp stores pending OIDC authorization state in process memory. Cookie
+// affinity keeps the authorization request and callback on the same replica
+// without reducing the deployment to a single pod. Consistent hashing still
+// remaps the cookie to a healthy endpoint when a replica disappears.
+const headlampSessionAffinity = `---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: headlamp-session-affinity
+  namespace: headlamp
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: headlamp-gateway-route
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      type: Cookie
+      cookie:
+        name: opencenter-headlamp-affinity
+        ttl: 1h
+        attributes:
+          SameSite: Lax
 `
 
 const weaveGitOpsHTTPRouteTemplate = `---
