@@ -801,6 +801,15 @@ func (v *defaultValidator) ValidateServices(cfg *Config) error {
 		}
 	}
 
+	// OpenStack CCM and MetalLB both reconcile classless LoadBalancer Services.
+	// Running both causes MetalLB to clear the address published by CCM when no
+	// MetalLB pool can satisfy the Service, leaving Gateway and DNS controllers
+	// without an address. Keep a single owner for cloud load balancers.
+	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "openstack") &&
+		metallbEnabled && isServiceEnabled(cfg, "openstack-ccm") {
+		return fmt.Errorf("opencenter.services.metallb cannot be enabled with openstack-ccm: both controllers manage classless LoadBalancer Services; disable metallb when OpenStack CCM owns cloud load balancers")
+	}
+
 	// OCTR-762: validate per-service MetalLB address pool selection. Any service
 	// that names an address_pool must reference a pool declared in
 	// services.metallb.ip_address_pools, which in turn requires metallb enabled.
