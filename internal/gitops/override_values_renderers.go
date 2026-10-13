@@ -51,6 +51,27 @@ func templateRenderer(tmpl string) OverrideValuesRenderer {
 	}
 }
 
+// weaveGitOpsRenderer renders the chart-required bcrypt password hash. Guided
+// configuration commonly supplies only the plaintext password; keeping the
+// fallback here prevents generation of an invalid empty passwordHash value.
+// An explicitly configured hash is preserved unchanged.
+func weaveGitOpsRenderer(cfg v2.Config) (string, error) {
+	if strings.TrimSpace(cfg.Secrets.WeaveGitOps.PasswordHash) == "" && cfg.Secrets.WeaveGitOps.Password != "" {
+		htpasswd, ok := sprig.TxtFuncMap()["htpasswd"].(func(string, string) string)
+		if !ok {
+			return "", fmt.Errorf("weave-gitops: bcrypt password renderer is unavailable")
+		}
+		entry := htpasswd("admin", cfg.Secrets.WeaveGitOps.Password)
+		_, passwordHash, found := strings.Cut(entry, ":")
+		if !found || strings.TrimSpace(passwordHash) == "" {
+			return "", fmt.Errorf("weave-gitops: failed to generate password hash")
+		}
+		cfg.Secrets.WeaveGitOps.PasswordHash = passwordHash
+	}
+
+	return templateRenderer(weaveGitOpsTemplate)(cfg)
+}
+
 type mimirStorageTemplateData struct {
 	Backend                string
 	BucketName             string

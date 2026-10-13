@@ -110,6 +110,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "headlamp", DefaultNamespace: "headlamp", HasOverrideValues: true,
 			SourceName: "opencenter-headlamp", SourceGroup: "headlamp", EmitSource: true,
 			BasePath: "applications/base/services/headlamp", OverrideValuesRenderer: templateRenderer(headlampTemplate),
+			OverlayFilesRenderer: headlampOverlayFilesRenderer,
 		},
 		{
 			ServiceName: "postgres-operator", DefaultNamespace: "postgres-operator", HasOverrideValues: true,
@@ -189,7 +190,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "weave-gitops", DefaultNamespace: "flux-system", HasOverrideValues: true,
 			SourceName: "opencenter-weave-gitops", SourceGroup: "weave-gitops", EmitSource: true,
 			BasePath: "applications/base/services/weave-gitops", OverrideDependsOn: []string{"sources", "envoy-gateway-api-base"},
-			OverrideValuesRenderer: templateRenderer(weaveGitOpsTemplate),
+			OverrideValuesRenderer: weaveGitOpsRenderer, OverlayFilesRenderer: weaveGitOpsOverlayFilesRenderer,
 		},
 		{
 			ServiceName: "longhorn", DefaultNamespace: "longhorn-system", HasOverrideValues: true,
