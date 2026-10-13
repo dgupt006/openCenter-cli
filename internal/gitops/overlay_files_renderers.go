@@ -234,6 +234,22 @@ func longhornOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 	return files, nil
 }
 
+func headlampOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
+	return singleOverlayFile(cfg, "headlamp-http-route.yaml", headlampHTTPRouteTemplate)
+}
+
+func weaveGitOpsOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
+	return singleOverlayFile(cfg, "weave-gitops-http-route.yaml", weaveGitOpsHTTPRouteTemplate)
+}
+
+func singleOverlayFile(cfg v2.Config, name, tmpl string) (map[string]string, error) {
+	content, err := renderOverlayTemplate(tmpl, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{name: content}, nil
+}
+
 func renderOverlayTemplate(tmpl string, cfg v2.Config) (string, error) {
 	funcMap := sprig.TxtFuncMap()
 	// fqdn returns the cluster FQDN for hostname interpolation: the literal
@@ -280,6 +296,62 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: rackspace-system
+`
+
+const headlampHTTPRouteTemplate = `---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: headlamp-gateway-route
+  namespace: headlamp
+spec:
+  hostnames:
+    - {{ (index .OpenCenter.Services "headlamp").Hostname | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ gatewayNameFor "headlamp" }}
+      namespace: rackspace-system
+      sectionName: headlamp-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: headlamp
+          port: 80
+          weight: 1
+`
+
+const weaveGitOpsHTTPRouteTemplate = `---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: weave-gitops-gateway-route
+  namespace: flux-system
+spec:
+  hostnames:
+    - {{ printf "gitops.%s" (fqdn) | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ gatewayNameFor "weave-gitops" }}
+      namespace: rackspace-system
+      sectionName: gitops-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: weave-gitops
+          port: 9001
+          weight: 1
 `
 
 const gatewayClassContent = `---
