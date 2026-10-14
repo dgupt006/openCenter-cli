@@ -485,7 +485,12 @@ func TestOpenStackNetworkPluginInstallCalicoUsesHelmChart(t *testing.T) {
 		t.Fatalf("write override values: %v", err)
 	}
 
-	fakeRunner := &fakeLifecycleRunner{}
+	fakeRunner := &fakeLifecycleRunner{onRun: func(_ string, _ map[string]string, name string, args ...string) ([]byte, error) {
+		if name == "helm" && strings.Join(args, " ") == "version --template {{.Version}}" {
+			return []byte("v4.0.0+g1234"), nil
+		}
+		return nil, nil
+	}}
 	provider := &openstackBootstrapProvider{runner: fakeRunner}
 
 	step := findBootstrapStep(t, provider, cfg, cfg.GitDir(), kubeconfigPath, "openstack-install-network-plugin")
@@ -515,6 +520,38 @@ func TestOpenStackNetworkPluginInstallCalicoUsesHelmChart(t *testing.T) {
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=create tigerastatus/calico --timeout=5m")
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=Available tigerastatus/calico --timeout=10m")
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" -n calico-system wait --for=condition=Ready pods --all --timeout=10m")
+}
+
+func TestRequireHelm4(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		runErr  error
+		wantErr string
+	}{
+		{name: "helm 4", output: "v4.0.0+g1234"},
+		{name: "helm 3", output: "v3.19.0", wantErr: "Helm 4 is required"},
+		{name: "missing helm", runErr: errors.New("executable not found"), wantErr: "unable to determine Helm version"},
+		{name: "empty version", wantErr: "detected Helm version"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeLifecycleRunner{onRun: func(_ string, _ map[string]string, _ string, _ ...string) ([]byte, error) {
+				return []byte(tt.output), tt.runErr
+			}}
+			err := requireHelm4(context.Background(), runner, t.TempDir(), nil)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("requireHelm4() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("requireHelm4() error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func TestOpenStackCalicoSelectionAcceptsAnyVersion(t *testing.T) {

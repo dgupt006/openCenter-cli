@@ -34,6 +34,20 @@ The entry point is `cmd/cluster_deploy.go`. Orchestration lives in `internal/clu
 
 There is deliberately **no automatic git push** — the operator commits and pushes the generated GitOps repository manually after `cluster deploy` completes.
 
+### Helm requirement for Calico
+
+The OpenStack Calico install requires Helm 4. The bootstrap checks the local
+Helm version before applying the Calico chart and fails with an actionable
+error for Helm 3 or an unavailable Helm executable. Calico retries use Helm 4's
+`--force-conflicts` behavior, so Helm 3 compatibility is intentionally not
+provided.
+
+Verify the selected executable before deployment:
+
+```bash
+helm version --template '{{.Version}}'    # must print v4.x.y
+```
+
 ### Why there's no separate Kubespray step anymore
 
 An earlier design added three more steps — `kubespray-venv-create`, `kubespray-pip-install`, `kubespray-ansible-playbook` — to run Kubespray's Ansible playbook explicitly. That code still exists (`buildKubespraySteps`) but is **commented out** in `BuildSteps`, with this reasoning left in the source:

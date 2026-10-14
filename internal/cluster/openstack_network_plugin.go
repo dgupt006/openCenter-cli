@@ -154,6 +154,10 @@ func withBootstrapHelmDirectories(env map[string]string, tmpDir string) (map[str
 //
 //	<organization>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml
 func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.Context, cfg *v2.Config, selection openStackNetworkPluginSelection, kubeconfigPath, tmpDir string, env map[string]string) error {
+	if err := requireHelm4(ctx, p.runner, tmpDir, env); err != nil {
+		return err
+	}
+
 	// Idempotency guard: if Calico is already installed and healthy, skip the
 	// helm upgrade. On an existing cluster the tigera-operator owns fields on the
 	// Installation CR (notably .spec.calicoNetwork.ipPools), so re-running
@@ -219,6 +223,28 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 		"-f", valuesPath,
 	); err != nil {
 		return fmt.Errorf("helm install Calico %s: %w", selection.Version, err)
+	}
+	return nil
+}
+
+// requireHelm4 keeps the Calico bootstrap contract explicit. The Calico
+// operator upgrade relies on Helm 4's --force-conflicts behavior; Helm 3
+// accepts neither the flag nor the ownership semantics required for a safe
+// retry.
+func requireHelm4(ctx context.Context, runner lifecycleCommandRunner, dir string, env map[string]string) error {
+	out, err := runner.Run(ctx, dir, env, "helm", "version", "--template", "{{.Version}}")
+	if err != nil {
+		return fmt.Errorf("Helm 4 is required for Calico installation; unable to determine Helm version: %w", err)
+	}
+
+	version := strings.TrimSpace(string(out))
+	major := version
+	if dot := strings.IndexByte(major, '.'); dot >= 0 {
+		major = major[:dot]
+	}
+	major = strings.TrimPrefix(major, "v")
+	if major != "4" {
+		return fmt.Errorf("Helm 4 is required for Calico installation; detected Helm version %q", version)
 	}
 	return nil
 }
