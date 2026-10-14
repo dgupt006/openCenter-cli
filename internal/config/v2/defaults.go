@@ -31,10 +31,10 @@ const (
 	defaultGitURLPlaceholder          = "ssh://git@example.com/opencenter/cluster-config.git"
 	defaultHTTPSGitURLPlaceholder     = "https://github.com/opencenter/cluster-config.git"
 	defaultGitBaseRepoURL             = "ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git"
-	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc01 tag so
+	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc2 tag so
 	// generated clusters resolve to a reproducible commit. The release (tag) slot
 	// takes precedence over branch, so branch is left empty.
-	defaultGitBaseRepoRelease         = "2026.03-rc01"
+	defaultGitBaseRepoRelease         = "2026.03-rc2"
 	defaultGitBaseRepoBranch          = ""
 	defaultGitopsAuthMethod           = "token"
 	defaultDefaultStorageClass        = "standard"
@@ -294,12 +294,12 @@ func NewV2Default(name, provider string) (*Config, error) {
 				Modules: map[string]ModuleConfig{
 					"kubespray": {
 						Enabled: true,
-						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc01",
+						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2",
 					},
 				},
 				KubesprayCluster: ModuleConfig{
 					Enabled: true,
-					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc01",
+					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2",
 				},
 			},
 		},
@@ -560,7 +560,7 @@ func applyProviderCloudDefaults(cfg *Config, availabilityZone string) {
 			},
 			Modules: OpenStackModulesConfig{
 				OpenstackNova: OpenstackNovaModuleConfig{
-					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc01",
+					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc2",
 				},
 			},
 		}

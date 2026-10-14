@@ -127,14 +127,14 @@ spec:
   # --- token auth (active) ---
   url: https://github.com/opencenter-cloud/openCenter-gitops-base.git
   ref:
-    tag: "2026.03-rc01"
+    tag: "2026.03-rc2"
   # --- ssh auth (alternative) ---
   # url: ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git
   # ref:
-  #   tag: "2026.03-rc01"
+  #   tag: "2026.03-rc2"
 ```
 
-The default base reference is the immutable `2026.03-rc01` tag (set via `cluster init` defaults and
+The default base reference is the immutable `2026.03-rc2` tag (set via `cluster init` defaults and
 the infrastructure OpenTofu module `?ref=` sources). It is configured in the release (tag) slot
 (`opencenter.gitops.base_repo.release`) with the branch left empty, so Flux and the IaC modules both
 resolve to the same reproducible commit. The release (tag) takes precedence over branch: set

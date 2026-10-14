@@ -268,7 +268,7 @@ locals {
 
 {{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
 module "openstack-nova" {
-  source = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Modules.OpenstackNova.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc01" }}"
+  source = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Modules.OpenstackNova.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc2" }}"
   # source = "../../../gitclones/openCenter-gitops-base/iac/cloud/openstack/openstack-nova"
   availability_zone             = local.availability_zone
   additional_block_devices_worker      = local.additional_block_devices_worker
@@ -343,7 +343,7 @@ module "openstack-nova" {
 {{- end }}
 
 module "kubespray-cluster" {
-  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc01" }}"
+  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2" }}"
   # CLI mode makes OpenTofu infrastructure-only; legacy mode preserves
   # Deployment.AutoDeploy through local.deploy_cluster.
 {{- if eq (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
@@ -429,7 +429,7 @@ module "kubespray-cluster" {
 {{- /* Only include Calico Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.InstallMethod | default "helm") "kubespray") }}
 module "calico" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc01" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc2" }}"
 
   calico_interface_autodetect      = local.calico_interface_autodetect
   calico_encapsulation_type        = local.calico_encapsulation_type
@@ -454,7 +454,7 @@ module "calico" {
 {{- /* Only include Cilium Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.InstallMethod | default "helm") "kubespray") }}
 module "cilium" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc01" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc2" }}"
 
   cluster_name                     = local.cluster_name
   deploy_cluster                   = local.deploy_cluster
@@ -471,7 +471,7 @@ module "cilium" {
 {{- /* Only include Kube-OVN Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.InstallMethod | default "helm") "kubespray") }}
 module "kube-ovn" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc01" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc2" }}"
 
   cluster_name                     = local.cluster_name
   deploy_cluster                   = local.deploy_cluster

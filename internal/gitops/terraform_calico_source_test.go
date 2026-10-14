@@ -26,7 +26,7 @@ import (
 // templates must resolve CNI/IaC modules from when no explicit override is
 // configured (OCTR-808). Keep this in sync with
 // internal/config/v2/defaults.go:defaultGitBaseRepoRelease.
-const defaultGitBaseRepoTag = "2026.03-rc01"
+const defaultGitBaseRepoTag = "2026.03-rc2"
 
 // calicoModuleSource matches the quoted source assignment of the rendered
 // Terraform `module "calico"` block, e.g. `source = "github.com/...calico?ref=..."`.
