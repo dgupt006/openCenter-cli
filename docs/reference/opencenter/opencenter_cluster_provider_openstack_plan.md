@@ -12,6 +12,18 @@ tags: [cli, reference]
 
 plan OpenStack provider metadata and selections
 
+### Synopsis
+
+Preview the changes that would bind this cluster to the given OpenStack cloud.
+
+Reads the profile named by --os-cloud from clouds.yaml (override its location with
+--clouds-yaml or OS_CLIENT_CONFIG_FILE), discovers live images, networks, subnets, and
+availability zones read-only, and prints the changes without writing anything: image IDs,
+internal/external network and subnet IDs, availability zone, plus application credential and TLS
+settings when requested. No remote resources are created or modified.
+
+Use 'apply' with identical flags to persist the same change set.
+
 ```
 opencenter cluster provider openstack plan <cluster> [flags]
 ```
@@ -28,7 +40,7 @@ opencenter cluster provider openstack plan <cluster> [flags]
       --import-auth                  write application credential fields from the selected profile
       --import-tls                   persist selected profile TLS settings
       --network-id string            internal network ID
-      --os-cloud string              clouds.yaml profile to use
+      --os-cloud string              profile name inside clouds.yaml to use for discovery
       --replace                      allow replacing populated provider selections
       --subnet-id string             internal subnet ID
       --windows-image-id string      Windows image ID

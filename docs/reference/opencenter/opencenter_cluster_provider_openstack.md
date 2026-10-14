@@ -12,9 +12,18 @@ tags: [cli, reference]
 
 Manage OpenStack provider configuration
 
-```
-opencenter cluster provider openstack [flags]
-```
+### Synopsis
+
+Bind an existing cluster (infrastructure.provider: openstack) to a specific
+OpenStack cloud. Reads a clouds.yaml profile (--os-cloud), discovers images,
+networks, subnets, and availability zones read-only, then plans or applies the
+cluster's OpenStack config values from them: image IDs, internal/external
+network and subnet IDs, availability zone, and optionally application credentials and TLS settings.
+
+This command does not deploy the cluster or create remote resources; it only
+writes the cluster's own configuration file. Use 'cluster deploy' for that.
+With --create-internal-network it switches internal networking to
+OpenTofu-managed mode instead of selecting an existing network.
 
 ### Options
 

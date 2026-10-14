@@ -38,8 +38,17 @@ func newClusterProviderOpenStackCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "openstack",
 		Short: "Manage OpenStack provider configuration",
+		Long: `Bind an existing cluster (infrastructure.provider: openstack) to a specific
+OpenStack cloud. Reads a clouds.yaml profile (--os-cloud), discovers images,
+networks, subnets, and availability zones read-only, then plans or applies the
+cluster's OpenStack config values from them: image IDs, internal/external
+network and subnet IDs, availability zone, and optionally application credentials and TLS settings.
+
+This command does not deploy the cluster or create remote resources; it only
+writes the cluster's own configuration file. Use 'cluster deploy' for that.
+With --create-internal-network it switches internal networking to
+OpenTofu-managed mode instead of selecting an existing network.`,
 		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 	}
 	cmd.AddCommand(newClusterProviderOpenStackOperationCmd("plan", false))
 	cmd.AddCommand(newClusterProviderOpenStackOperationCmd("apply", true))
@@ -48,15 +57,40 @@ func newClusterProviderOpenStackCmd() *cobra.Command {
 
 func newClusterProviderOpenStackOperationCmd(operation string, mutating bool) *cobra.Command {
 	var flags providerOpenStackFlags
+	var shortText, longText string
+	if mutating {
+		shortText = "apply OpenStack provider metadata and selections"
+		longText = `Apply the planned OpenStack selections to the cluster's configuration file.
+
+Reads the profile named by --os-cloud from clouds.yaml (override its location with
+--clouds-yaml or OS_CLIENT_CONFIG_FILE), discovers live images, networks, subnets, and
+availability zones read-only, computes the changes, then writes them to the cluster config after an
+interactive confirmation prompt in text mode (use --yes to skip it). No remote resources are created
+or modified; use 'cluster deploy' for that.
+
+Plan first with 'plan' and pass identical flags so the same change set is applied.`
+	} else {
+		shortText = "plan OpenStack provider metadata and selections"
+		longText = `Preview the changes that would bind this cluster to the given OpenStack cloud.
+
+Reads the profile named by --os-cloud from clouds.yaml (override its location with
+--clouds-yaml or OS_CLIENT_CONFIG_FILE), discovers live images, networks, subnets, and
+availability zones read-only, and prints the changes without writing anything: image IDs,
+internal/external network and subnet IDs, availability zone, plus application credential and TLS
+settings when requested. No remote resources are created or modified.
+
+Use 'apply' with identical flags to persist the same change set.`
+	}
 	cmd := &cobra.Command{
 		Use:   operation + " <cluster>",
-		Short: operation + " OpenStack provider metadata and selections",
+		Short: shortText,
+		Long:  longText,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runClusterProviderOpenStack(cmd, operation, mutating, args[0], flags)
 		},
 	}
-	cmd.Flags().StringVar(&flags.cloudName, "os-cloud", "", "clouds.yaml profile to use")
+	cmd.Flags().StringVar(&flags.cloudName, "os-cloud", "", "profile name inside clouds.yaml to use for discovery")
 	cmd.Flags().StringVar(&flags.cloudsYAML, "clouds-yaml", "", "path to clouds.yaml")
 	cmd.Flags().StringVar(&flags.imageID, "image-id", "", "Linux image ID")
 	cmd.Flags().StringVar(&flags.windowsImageID, "windows-image-id", "", "Windows image ID")
