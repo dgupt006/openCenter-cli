@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	cloudopenstack "github.com/opencenter-cloud/opencenter-cli/internal/cloud/openstack"
@@ -81,21 +84,33 @@ func (f *fakeFS) WriteAtomic(_ string, data []byte) error {
 	f.data = append([]byte(nil), data...)
 	return nil
 }
-func (f *fakeFS) WriteRecovery(_ string, state recoveryJournal) error {
+func (f *fakeFS) WriteRecovery(path string, state recoveryJournal) error {
+	if _, err := os.Stat(path); err == nil {
+		return &os.PathError{Op: "open", Path: path, Err: syscall.EEXIST}
+	}
 	f.recovery = true
 	f.recoveryJournals = append(f.recoveryJournals, state)
 	if strings.Contains(state.CredentialID, "secret") {
 		return errors.New("secret leaked")
 	}
-	return nil
+	return os.WriteFile(path, []byte(`{"service":"`+state.Service+`"}`), 0o600)
 }
-func (f *fakeFS) UpdateRecovery(_ string, state recoveryJournal) error {
-	if err := f.WriteRecovery("", state); err != nil {
+func (f *fakeFS) UpdateRecovery(path string, state recoveryJournal) error {
+	f.recoveryJournals = append(f.recoveryJournals, state)
+	err := OSFileSystem{}.UpdateRecovery(path, state)
+	if err == nil && f.updateRecoveryErr != nil {
+		os.Remove(path)
+		return f.updateRecoveryErr
+	}
+	return err
+}
+func (f *fakeFS) RemoveRecovery(path string) error {
+	f.removed = true
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return f.updateRecoveryErr
+	return nil
 }
-func (f *fakeFS) RemoveRecovery(string) error { f.removed = true; return nil }
 
 func testConfig(t *testing.T) *v2.Config {
 	t.Helper()
@@ -260,12 +275,61 @@ func TestApplyMimirS3RejectsCoincidentBucketsBeforeRemoteActions(t *testing.T) {
 	require.False(t, fs.atomic)
 	require.False(t, fs.recovery)
 }
+func TestApplyBlockedByForeignServiceRecoveryRecordNamesOwner(t *testing.T) {
+	cfg := testConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	require.NoError(t, err)
+
+	stalePath := filepath.Join(t.TempDir(), "prod.yaml.harbor.storage-recovery.json")
+	journal, _ := json.Marshal(RecoveryState{Path: stalePath, Service: "harbor", Backend: "s3", PersistenceState: "persisted-revoke-failed"})
+	require.NoError(t, os.WriteFile(stalePath, journal, 0o600))
+
+	adapter := testAdapter()
+	fs := &fakeFS{data: raw}
+	result, applyErr := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: stalePath, OriginalBytes: raw,
+		Options: Options{Service: "etcd-backup", Backend: "s3", Cluster: "prod"}, Adapter: adapter, FileSystem: fs,
+	})
+	require.Error(t, applyErr)
+	require.NotEqual(t, StatusPartial, result.Status)
+	require.Zero(t, adapter.ec2Creates)
+	require.Zero(t, adapter.appCreates)
+	require.False(t, fs.backup)
+	require.False(t, fs.atomic)
+	require.False(t, fs.recovery)
+	msg := applyErr.Error()
+	for _, want := range []string{"harbor", "stale storage recovery record"} {
+		require.Contains(t, msg, want, "error should name the owning service and stale record: %q", msg)
+	}
+}
+func TestApplyBlockedByOwnServiceRecoveryRecordStaysGeneric(t *testing.T) {
+	cfg := testConfig(t)
+	raw, err := v2.MarshalPublicConfig(cfg)
+	require.NoError(t, err)
+
+	stalePath := filepath.Join(t.TempDir(), "prod.yaml.etcd-backup.storage-recovery.json")
+	journal, _ := json.Marshal(RecoveryState{Path: stalePath, Service: "etcd-backup", Backend: "s3", PersistenceState: "creation-pending"})
+	require.NoError(t, os.WriteFile(stalePath, journal, 0o600))
+
+	fs := &fakeFS{data: raw}
+	result, applyErr := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: stalePath, OriginalBytes: raw,
+		Options: Options{Service: "etcd-backup", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
+	})
+	require.Error(t, applyErr)
+	require.NotEqual(t, StatusPartial, result.Status)
+	require.False(t, fs.atomic)
+	msg := applyErr.Error()
+	require.Contains(t, msg, "stale storage recovery record already exists at prod.yaml.etcd-backup.storage-recovery.json")
+	require.NotContains(t, msg, "for service")
+}
 
 func TestApplyMimirS3EnsuresAllBucketsAndRecordsThemForRecovery(t *testing.T) {
 	cfg := mimirStorageConfig(t)
 	raw, err := v2.MarshalPublicConfig(cfg)
 	require.NoError(t, err)
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	adapter := testAdapter()
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
@@ -283,6 +347,7 @@ func TestApplyMimirS3PersistsAndRotatesCredentials(t *testing.T) {
 	raw, err := v2.MarshalPublicConfig(cfg)
 	require.NoError(t, err)
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	adapter := testAdapter()
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
@@ -469,6 +534,7 @@ func TestApplyHarborS3KeepsAccessKeyPrivateToJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
 		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
@@ -498,6 +564,7 @@ func TestApplyHarborS3PersistsExternallyIssuedCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
 		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs,
@@ -524,6 +591,7 @@ func TestApplyHarborS3RotationRevokesPreviousAccessKey(t *testing.T) {
 	}
 	adapter := testAdapter()
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
 		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod", RotateCredentials: true}, Adapter: adapter, FileSystem: fs,
@@ -607,6 +675,7 @@ func TestApplyCreatesAndPersistsRecoverySafely(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	adapter := testAdapter()
 	result, err := Apply(context.Background(), ApplyInput{ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw, Options: Options{Service: "tempo", Backend: "s3", Cluster: "prod"}, Adapter: adapter, FileSystem: fs})
 	if err != nil {
@@ -627,6 +696,7 @@ func TestApplyReturnsPartialWhenLocalPersistenceFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	fs := &fakeFS{data: raw, atomicErr: errors.New("write denied")}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	result, err := Apply(context.Background(), ApplyInput{ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw, Options: Options{Service: "velero", Backend: "s3", Cluster: "prod"}, Adapter: testAdapter(), FileSystem: fs})
 	if err == nil || result.Status != StatusPartial || !fs.recovery {
 		t.Fatalf("result=%+v err=%v recovery=%v", result, err, fs.recovery)
@@ -645,6 +715,7 @@ func TestApplyRotationKeepsReplacementWhenRevokeFails(t *testing.T) {
 	adapter := testAdapter()
 	adapter.revokeErr = errors.New("revoke unavailable")
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	result, err := Apply(context.Background(), ApplyInput{ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw, Options: Options{Service: "loki", Backend: "swift", Cluster: "prod", RotateCredentials: true}, Adapter: adapter, FileSystem: fs})
 	if err == nil || result.Status != StatusPartial {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -690,6 +761,7 @@ func TestApplyHarborFailureAfterCredentialCreationRetainsPrivateJournalID(t *tes
 		t.Fatal(err)
 	}
 	fs := &fakeFS{data: raw}
+	t.Cleanup(func() { os.Remove("/tmp/prod.recovery") })
 	validationCalls := 0
 	result, err := Apply(context.Background(), ApplyInput{
 		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -382,7 +384,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	if needsCredential {
 		journal = recoveryJournal{RecoveryState: RecoveryState{Path: input.RecoveryPath, CredentialType: credentialType(input.Options.Backend), S3Endpoint: result.S3Endpoint, Containers: append([]string(nil), result.Containers...), Service: result.Service, Backend: result.Backend, PersistenceState: "creation-pending"}}
 		if err := input.FileSystem.WriteRecovery(input.RecoveryPath, journal); err != nil {
-			return Result{}, fmt.Errorf("reserve recovery record: %w", redactError(err, cfg))
+			return Result{}, fmt.Errorf("reserve recovery record: %w", redactError(staleRecoveryConflict(err, input), cfg))
 		}
 		result.Recovery = &journal.RecoveryState
 		var createErr error
@@ -639,6 +641,21 @@ func writeRecoveryExclusive(path string, state recoveryJournal) error {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+func staleRecoveryConflict(err error, input ApplyInput) error {
+	if !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	state := RecoveryState{Path: input.RecoveryPath}
+	if data, readErr := os.ReadFile(input.RecoveryPath); readErr == nil {
+		if json.Unmarshal(data, &state) != nil {
+			state = RecoveryState{}
+		}
+	}
+	if state.Service == "" || state.Service == strings.TrimSpace(input.Options.Service) {
+		return fmt.Errorf("stale storage recovery record already exists at %s; resolve the prior apply before retrying", path.Base(input.RecoveryPath))
+	}
+	return fmt.Errorf("stale storage recovery record for service %q from a previous incomplete apply already exists at %s; resolve it before running %q", state.Service, path.Base(input.RecoveryPath), strings.TrimSpace(input.Options.Service))
 }
 func syncDirectory(path string) error {
 	dir, err := os.Open(path)

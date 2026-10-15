@@ -130,7 +130,7 @@ func runClusterServiceStorage(cmd *cobra.Command, operation string, mutating boo
 		return err
 	}
 	result, applyErr := storageopenstack.Apply(cmd.Context(), storageopenstack.ApplyInput{
-		ConfigPath: configPath, RecoveryPath: configPath + ".storage-recovery.json", OriginalBytes: raw,
+		ConfigPath: configPath, RecoveryPath: storageRecoveryPath(configPath, service), OriginalBytes: raw,
 		Options: opts, Adapter: adapter, FileSystem: storageopenstack.OSFileSystem{}, Validate: validate,
 	})
 	if applyErr != nil {
@@ -141,6 +141,9 @@ func runClusterServiceStorage(cmd *cobra.Command, operation string, mutating boo
 		return NewExitError(1, "apply OpenStack storage", sanitizeStorageError(applyErr))
 	}
 	return writeStorageOutput(cmd, getGlobalOptions(cmd).Output, result)
+}
+func storageRecoveryPath(configPath, service string) string {
+	return configPath + "." + service + ".storage-recovery.json"
 }
 
 func loadStorageConfig(ctx context.Context, identifier string) (*v2.Config, []byte, string, error) {

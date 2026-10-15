@@ -60,3 +60,8 @@ func TestHarborStorageOutputRedactsCredentialIdentifiers(t *testing.T) {
 		t.Fatalf("structured Harbor output exposed access key: %s", text.String())
 	}
 }
+func TestStorageRecoveryPathIsPerService(t *testing.T) {
+	if got, want := storageRecoveryPath("/c/demo-config.yaml", "etcd-backup"), "/c/demo-config.yaml.etcd-backup.storage-recovery.json"; got != want {
+		t.Fatalf("recovery path=%q, want %q (stale records must be scoped per service)", got, want)
+	}
+}
