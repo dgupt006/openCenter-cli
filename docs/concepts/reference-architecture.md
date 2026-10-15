@@ -126,7 +126,7 @@ Key characteristics:
 * Cinder CSI for persistent volumes; default storage class is `csi-cinder-sc-delete` and default boot-volume type is `HA-Standard` (`internal/config/v2/defaults.go`)
 * `loadbalancer_provider` defaults to `"ovn"` (Neutron/OVN load balancer); `octavia` is also a supported value for API/service load balancing, and `vrrp_enabled`/`kube_vip_enabled` both default to `true` for VIP-based API HA
 * Optional Designate DNS integration (`infrastructure.networking.use_designate`)
-* `infrastructure.server_group_affinity` defaults to `["anti-affinity"]`
+* `infrastructure.server_group_affinity` defaults to `["soft-anti-affinity"]`
 * Boot-from-volume: `infrastructure.storage.worker_volume_size`/`master_volume_size` default to 40 GB each, with `worker_volume_destination_type: "volume"` and `worker_volume_source_type: "image"`
 * Region-specific defaults (image IDs, flavors, DNS/NTP servers) are looked up from a provider-defaults registry (`internal/config/defaults/openstack.go`); for example the SJC3 and DFW3 regions both default to flavors `gp.5.2.4` (bastion), `gp.5.4.8` (master), and `gp.5.4.16` (worker)
 * Windows worker pools are supported (`flavor_worker_windows`, `image_id_windows`, `additional_server_pools_worker_windows`), with OpenStack-specific readiness checks requiring `image_id_windows` or a per-pool image
@@ -564,10 +564,10 @@ The cluster-wide default is set at the top level, not per pool:
 opencenter:
   infrastructure:
     server_group_affinity:
-      - "anti-affinity"   # cluster init default
+      - "soft-anti-affinity"   # cluster init default
 ```
 
-`infrastructure.server_group_affinity` is a `[]string`; `cluster init` sets it to `["anti-affinity"]` by default for OpenStack/VMware/bare metal.
+`infrastructure.server_group_affinity` is a `[]string`; `cluster init` sets it to `["soft-anti-affinity"]` by default for OpenStack/VMware/bare metal.
 
 **Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/defaults.go`, `internal/config/defaults/openstack.go`, `schema/opencenter-v2.schema.json`
 

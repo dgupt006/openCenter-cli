@@ -204,7 +204,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 					KeyPath:        sshKeyPath,
 				},
 				OSVersion:           "24",
-				ServerGroupAffinity: []string{"anti-affinity"},
+				ServerGroupAffinity: []string{"soft-anti-affinity"},
 				NodeNaming: NodeNamingConfig{
 					Prefix: name,
 					Suffix: region,

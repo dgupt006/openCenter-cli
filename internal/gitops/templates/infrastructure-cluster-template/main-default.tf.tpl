@@ -74,7 +74,7 @@ locals {
   worker_node_bfv_destination_type        = "{{ .OpenCenter.Infrastructure.Storage.WorkerVolumeDestinationType | default "volume" }}"
   worker_node_bfv_source_type             = "{{ .OpenCenter.Infrastructure.Storage.WorkerVolumeSourceType | default "image" }}"
   worker_node_bfv_volume_type             = "{{ .OpenCenter.Infrastructure.Storage.WorkerVolumeType | default "HA-Performance" }}"
-  wn_server_group_affinity                = {{ if .OpenCenter.Infrastructure.ServerGroupAffinity }}[{{ range $i, $affinity := .OpenCenter.Infrastructure.ServerGroupAffinity }}{{if $i}}, {{end}}"{{ $affinity }}"{{ end }}]{{ else }}["anti-affinity"]{{ end }}
+  wn_server_group_affinity                = {{ if .OpenCenter.Infrastructure.ServerGroupAffinity }}[{{ range $i, $affinity := .OpenCenter.Infrastructure.ServerGroupAffinity }}{{if $i}}, {{end}}"{{ $affinity }}"{{ end }}]{{ else }}["soft-anti-affinity"]{{ end }}
 {{- else }}
   worker_node_bfv_volume_size             = {{ .OpenCenter.Infrastructure.Storage.WorkerVolumeSize | default 20 }}
   worker_node_bfv_destination_type        = "{{ .OpenCenter.Infrastructure.Storage.WorkerVolumeDestinationType | default "volume" }}"
