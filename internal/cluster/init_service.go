@@ -1007,6 +1007,19 @@ func (s *InitService) initGitRepo(clusterPaths *paths.ClusterPaths) error {
 	return nil
 }
 
+// gitIgnoreContent is also the seed content used when initializing a brand-new
+// GitOps repository. A hygiene file that pre-exists in a shared organization
+// repository (for example one created by an earlier cluster's init) belongs to
+// that repository: silently replacing it would desynchronize the openCenter
+// ownership ledger from the on-disk file and block subsequent `cluster generate`
+// runs with an ownership conflict. Existing .gitignore files are therefore
+// preserved, but must already contain the root-only config guards so local
+// *-config.yaml inputs stay out of the generated tree.
+var gitIgnoreRequiredPatterns = []string{
+	"/*-config.yaml",
+	"/.*-config.yaml",
+}
+
 func writeGitOpsHygiene(gitOpsDir string) error {
 	files := map[string]struct {
 		content string
@@ -1034,6 +1047,36 @@ func writeGitOpsHygiene(gitOpsDir string) error {
 		path := filepath.Join(gitOpsDir, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fmt.Errorf("creating %s parent: %w", rel, err)
+		}
+		if info, statErr := os.Stat(path); statErr == nil {
+			if !info.IsDir() && rel == ".gitignore" {
+				existing, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return fmt.Errorf("reading %s: %w", path, readErr)
+				}
+				ok := true
+				for _, pattern := range gitIgnoreRequiredPatterns {
+					found := false
+					for _, line := range strings.Split(string(existing), "\n") {
+						if line == pattern {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ok = false
+						break
+					}
+				}
+				if !ok {
+					return fmt.Errorf("%s exists but is missing required pattern(s) %v; add them manually or remove the file and re-run", path, gitIgnoreRequiredPatterns)
+				}
+				continue // user-owned file in a shared repo: never clobber
+			}
+			// Machine-managed hook/script/workflow (or an unexpected directory):
+			// safe to refresh in place.
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("stat %s: %w", path, statErr)
 		}
 		if err := os.WriteFile(path, []byte(spec.content), spec.mode); err != nil {
 			return fmt.Errorf("writing %s: %w", rel, err)

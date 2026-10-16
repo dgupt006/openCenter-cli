@@ -624,6 +624,90 @@ func TestInitService_initGitRepo(t *testing.T) {
 	// the GitOps directory exists.
 }
 
+// TestWriteGitOpsHygienePreservesExistingUserGitignore verifies that a
+// pre-existing user-owned .gitignore in a shared organization GitOps repo is
+// never clobbered by initializing a second cluster, and machine-managed files
+// are still created. Regression guard for the multi-cluster ownership conflict:
+// silently overwriting a committed .gitignore desynchronizes the ownership
+// ledger and blocks every subsequent `cluster generate`.
+func TestWriteGitOpsHygienePreservesExistingUserGitignore(t *testing.T) {
+	tmpDir := t.TempDir()
+	userGitignore := "# User rules\n__pycache__/\n\n/*-config.yaml\n/.*-config.yaml\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(userGitignore), 0o644); err != nil {
+		t.Fatalf("seed user .gitignore: %v", err)
+	}
+
+	if err := writeGitOpsHygiene(tmpDir); err != nil {
+		t.Fatalf("writeGitOpsHygiene() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if string(data) != userGitignore {
+		t.Errorf("user .gitignore was modified:\n got=%q\nwant=%q", data, userGitignore)
+	}
+	for _, rel := range []string{
+		filepath.Join(".opencenter", "hooks", "pre-commit"),
+		filepath.Join(".opencenter", "scripts", "scan-secrets"),
+		filepath.Join(".github", "workflows", "opencenter-secret-scan.yml"),
+	} {
+		if _, err := os.Stat(filepath.Join(tmpDir, rel)); err != nil {
+			t.Errorf("expected machine-managed file %s to be created: %v", rel, err)
+		}
+	}
+}
+
+// TestWriteGitOpsHygieneSeedsNewRepoAndAcceptsOpenCenterGitignore covers the
+// two other cases: a brand-new repo gets the canonical template, and an
+// existing file already containing the required config guards (for example the
+// canonical template itself) is accepted without modification.
+func TestWriteGitOpsHygieneSeedsNewRepoAndAcceptsOpenCenterGitignore(t *testing.T) {
+	t.Run("new repository gets seeded template", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := writeGitOpsHygiene(tmpDir); err != nil {
+			t.Fatalf("writeGitOpsHygiene() error = %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(tmpDir, ".gitignore"))
+		if err != nil {
+			t.Fatalf("read .gitignore: %v", err)
+		}
+		if string(data) != gitIgnoreContent {
+			t.Errorf("seeded .gitignore mismatch:\n got=%q\nwant=%q", data, gitIgnoreContent)
+		}
+	})
+
+	t.Run("existing openCenter-style gitignore is preserved", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		existing := gitIgnoreContent + "# extra local rule\n.DS_Store\n"
+		if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(existing), 0o644); err != nil {
+			t.Fatalf("seed .gitignore: %v", err)
+		}
+		if err := writeGitOpsHygiene(tmpDir); err != nil {
+			t.Fatalf("writeGitOpsHygiene() error = %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(tmpDir, ".gitignore"))
+		if err != nil {
+			t.Fatalf("read .gitignore: %v", err)
+		}
+		if string(data) != existing {
+			t.Errorf("gitignore with required patterns was modified:\n got=%q\nwant=%q", data, existing)
+		}
+	})
+
+	t.Run("missing required config guards is rejected", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("# user rules without config guards\n*.key\n"), 0o644); err != nil {
+			t.Fatalf("seed .gitignore: %v", err)
+		}
+		err := writeGitOpsHygiene(tmpDir)
+		if err == nil || !strings.Contains(err.Error(), "missing required pattern") {
+			t.Fatalf("writeGitOpsHygiene() error = %v, want missing-required-pattern rejection", err)
+		}
+	})
+}
+
 func TestInitService_Initialize_WithKeyGeneration(t *testing.T) {
 	tmpDir := t.TempDir()
 	pathResolver := paths.NewPathResolver(tmpDir)
