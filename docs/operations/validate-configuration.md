@@ -58,6 +58,14 @@ command again. The repository's workflow fixture demonstrates one rule:
 readiness validator also checks provider-specific required fields and rejects
 placeholder values.
 
+### Load balancer ownership
+
+For OpenStack clusters, OpenStack CCM owns classless `LoadBalancer` Services.
+MetalLB must not be enabled at the same time: both controllers would try to
+reconcile the same Services, which can remove the address published by CCM
+and leave Gateway routes without a reachable load-balancer address. The
+validator reports this configuration conflict before generation or deployment.
+
 ## Evidence
 
 - Command and flags: `cmd/cluster_validate.go`

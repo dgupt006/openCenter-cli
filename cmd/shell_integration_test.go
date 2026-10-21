@@ -43,6 +43,8 @@ printf 'SET:%s\n' "${OPENCENTER_CLUSTER:-}"
 opencenter cluster use --clear >/dev/null
 printf 'CLEAR:%s\n' "${OPENCENTER_CLUSTER-unset}"
 `
+	// Avoid a login shell because system profiles are allowed to replace PATH,
+	// which can hide the isolated fake opencenter executable used by this test.
 	cmd := exec.Command("bash", "--noprofile", "--norc", "-c", script)
 	env := make([]string, 0, len(os.Environ())+6)
 	for _, value := range os.Environ() {
