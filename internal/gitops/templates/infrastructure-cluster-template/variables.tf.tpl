@@ -8,6 +8,12 @@ variable "opencenter_lifecycle_mode" {
   }
 }
 
+variable "inventory_output_dir" {
+  type        = string
+  default     = ""
+  description = "Directory the Kubespray inventory subtree renders into. The CLI passes its state-zone inventory directory with opencenter_lifecycle_mode=cli so the worktree stays clean; legacy mode keeps the module default of ./inventory under the working directory."
+}
+
 variable "os_application_credential_id" {
   type    = string
   default = ""

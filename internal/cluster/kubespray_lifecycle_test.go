@@ -23,22 +23,22 @@ func TestParseKubesprayLifecycleOutputs(t *testing.T) {
 	}{
 		{
 			name:     "terraform envelope",
-			input:    `{"opencenter_kubespray_inventory_path":{"value":"/state/inventory/inventory.yaml"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`,
+			input:    `{"opencenter_kubespray_inventory_path":{"value":"/state/inventory/inventory.yaml"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`,
 			wantPath: "/state/inventory/inventory.yaml",
 			wantAPI:  "10.0.0.5",
 			wantPort: 6443,
 		},
 		{
 			name:     "direct values",
-			input:    `{"opencenter_kubespray_inventory_path":"/state/inventory/inventory.yaml","opencenter_kubespray_lifecycle_contract_version":"1","opencenter_kubespray_api_address":"api.example.test","opencenter_kubespray_api_port":6443}`,
+			input:    `{"opencenter_kubespray_inventory_path":"/state/inventory/inventory.yaml","opencenter_kubespray_lifecycle_contract_version":"2","opencenter_kubespray_api_address":"api.example.test","opencenter_kubespray_api_port":6443}`,
 			wantPath: "/state/inventory/inventory.yaml",
 			wantAPI:  "api.example.test",
 			wantPort: 6443,
 		},
 		{
 			name:    "unsupported contract",
-			input:   `{"opencenter_kubespray_inventory_path":{"value":"/state/inventory/inventory.yaml"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_port":{"value":6443}}`,
-			wantErr: "requires contract 1",
+			input:   `{"opencenter_kubespray_inventory_path":{"value":"/state/inventory/inventory.yaml"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`,
+			wantErr: "requires contract 2",
 		},
 	}
 
@@ -58,6 +58,45 @@ func TestParseKubesprayLifecycleOutputs(t *testing.T) {
 				t.Fatalf("outputs = %#v, want path=%q api=%q port=%d", got, tt.wantPath, tt.wantAPI, tt.wantPort)
 			}
 		})
+	}
+}
+
+// TestStageKubesprayInventoryContract2 covers the contract v2 staging
+// semantics: the module renders directly into the state-zone destination (no-op
+// success), and a module that still renders elsewhere (v1 layout, e.g. inside
+// the GitOps worktree) fails with an actionable regeneration hint instead of
+// producing a second divergent copy.
+func TestStageKubesprayInventoryContract2(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "state", "inventory")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const stateContents = "all:\n"
+	if err := os.WriteFile(filepath.Join(destination, "inventory.yaml"), []byte(stateContents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stageKubesprayInventory(filepath.Join(destination, "inventory.yaml"), destination); err != nil {
+		t.Fatalf("state-zone source must be a no-op, got %v", err)
+	}
+
+	worktree := filepath.Join(root, "repo", "infrastructure", "clusters", "demo", "inventory")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "inventory.yaml"), []byte("stale-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := stageKubesprayInventory(filepath.Join(worktree, "inventory.yaml"), destination)
+	if err == nil || !strings.Contains(err.Error(), "cluster generate") {
+		t.Fatalf("worktree source must fail with regeneration hint, got %v", err)
+	}
+
+	// A rejected v1 layout must never be copied over the state-zone copy.
+	data, readErr := os.ReadFile(filepath.Join(destination, "inventory.yaml"))
+	if readErr != nil || string(data) != stateContents {
+		t.Fatalf("state-zone inventory was modified by staging: data=%q err=%v", data, readErr)
 	}
 }
 
@@ -150,11 +189,12 @@ func TestKubesprayPrepareReusesConfiguredVersionAndUsesVenvBinaries(t *testing.T
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	clusterDir := filepath.Join(root, "gitops")
-	inventorySource := filepath.Join(clusterDir, "inventory")
-	if err := os.MkdirAll(inventorySource, 0o700); err != nil {
+	// Contract v2: the module renders the inventory directly into the state zone.
+	inventoryPath := filepath.Join(stateDir, "inventory")
+	if err := os.MkdirAll(inventoryPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(inventorySource, "inventory.yaml"), []byte("all:\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(inventoryPath, "inventory.yaml"), []byte("all:\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	kubesprayPath := filepath.Join(stateDir, "kubespray")
@@ -163,11 +203,11 @@ func TestKubesprayPrepareReusesConfiguredVersionAndUsesVenvBinaries(t *testing.T
 	}
 	runner := &fakeLifecycleRunner{onRun: func(dir string, env map[string]string, name string, args ...string) ([]byte, error) {
 		if name == "tofu" && len(args) > 0 && args[0] == "output" {
-			return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(inventorySource, "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
+			return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(inventoryPath, "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
 		}
 		return nil, nil
 	}}
-	lifecycle := newKubesprayLifecycle(runner, "tofu", clusterDir, &paths.ClusterPaths{ClusterStateDir: stateDir, InventoryPath: filepath.Join(stateDir, "inventory")}, filepath.Join(stateDir, "kubeconfig"), nil)
+	lifecycle := newKubesprayLifecycle(runner, "tofu", clusterDir, &paths.ClusterPaths{ClusterStateDir: stateDir, InventoryPath: inventoryPath}, filepath.Join(stateDir, "kubeconfig"), nil)
 	cfg := mustNewClusterTestConfig("prepare", "openstack")
 	cfg.Deployment.Kubespray.Version = "2.30.0"
 	if err := lifecycle.prepare(context.Background(), &cfg); err != nil {
@@ -188,7 +228,7 @@ func TestKubesprayPrepareReusesConfiguredVersionAndUsesVenvBinaries(t *testing.T
 		}
 	}
 
-	lifecycle.outputs = kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "1", APIAddress: "10.0.0.5", APIPort: 6443}
+	lifecycle.outputs = kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "2", APIAddress: "10.0.0.5", APIPort: 6443}
 	waitRunner := &fakeLifecycleRunner{}
 	lifecycle.runner = waitRunner
 	if err := lifecycle.waitCloudInit(context.Background(), time.Second); err != nil {
@@ -225,7 +265,7 @@ func TestKubesprayWaitCloudInitRetriesUnreachableAndAcceptsRemoteStatusTwo(t *te
 		stateDir:      t.TempDir(),
 		inventoryPath: t.TempDir(),
 		venvPath:      filepath.Join(t.TempDir(), "venv"),
-		outputs:       kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "1", APIAddress: "10.0.0.5", APIPort: 6443},
+		outputs:       kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "2", APIAddress: "10.0.0.5", APIPort: 6443},
 	}
 	if err := lifecycle.waitCloudInit(context.Background(), 3*time.Second); err != nil {
 		t.Fatalf("waitCloudInit() error = %v", err)
@@ -248,7 +288,7 @@ func TestKubesprayWaitCloudInitDoesNotAcceptAnsibleProcessStatusTwo(t *testing.T
 		stateDir:      t.TempDir(),
 		inventoryPath: t.TempDir(),
 		venvPath:      filepath.Join(t.TempDir(), "venv"),
-		outputs:       kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "1", APIAddress: "10.0.0.5", APIPort: 6443},
+		outputs:       kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "2", APIAddress: "10.0.0.5", APIPort: 6443},
 	}
 	err := lifecycle.waitCloudInit(context.Background(), time.Second)
 	if err == nil || !strings.Contains(err.Error(), "exit status 2") {
@@ -266,7 +306,7 @@ func TestKubesprayExportKubeconfigNormalizesAtomicallyToStateTarget(t *testing.T
 		venvPath:       filepath.Join(stateDir, "venv"),
 		kubeconfigPath: target,
 		kubeconfigTemp: filepath.Join(stateDir, ".kubeconfig.fetch.tmp"),
-		outputs:        kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "1", APIAddress: "api.example.test", APIPort: 7443},
+		outputs:        kubesprayLifecycleOutputs{InventoryPath: "/state/inventory/inventory.yaml", ContractVersion: "2", APIAddress: "api.example.test", APIPort: 7443},
 	}
 	lifecycle.runner.(*fakeLifecycleRunner).onRun = func(_ string, _ map[string]string, _ string, args ...string) ([]byte, error) {
 		for i, arg := range args {
@@ -359,7 +399,8 @@ func TestKubesprayHardeningUsesCLIOwnedLifecycleStep(t *testing.T) {
 func TestKubesprayOSHardeningStagesPinnedRoleAndExistingPlaybookSemantics(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
-	sourceInventory := filepath.Join(root, "inventory")
+	// Contract v2: the module renders the inventory directly into the state zone.
+	sourceInventory := filepath.Join(stateDir, "inventory")
 	if err := os.MkdirAll(sourceInventory, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +412,7 @@ func TestKubesprayOSHardeningStagesPinnedRoleAndExistingPlaybookSemantics(t *tes
 	}
 	runner := &fakeLifecycleRunner{onRun: func(_ string, _ map[string]string, name string, args ...string) ([]byte, error) {
 		if name == "tofu" && len(args) > 0 && args[0] == "output" {
-			return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(sourceInventory, "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
+			return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(sourceInventory, "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_address":{"value":"10.0.0.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
 		}
 		return nil, nil
 	}}

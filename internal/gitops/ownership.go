@@ -422,6 +422,16 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 		}
 		if expected, tracked := known[path]; tracked {
 			if hashBytes(onDisk) != expected.SHA256 || uint32(existingModes[path].Perm()) != expected.Mode {
+				// A tracked global hygiene file (root .gitignore) may have
+				// gained machine-managed deploy-artifact exclusions appended
+				// in place by `cluster init` on a shared repository. When the
+				// staged tree carries the same patterns, the on-disk drift is
+				// openCenter's own edit: heal by promoting the planned file
+				// instead of refusing the run forever.
+				if file, isPlanned := planned[path]; globalOwnershipFiles[path] && isPlanned && trackedHygieneHealable(onDisk, expected, file) {
+					adoption[path] = true
+					continue
+				}
 				return nil, fmt.Errorf("ownership conflict: refusing to overwrite modified tracked file %s", path)
 			}
 			continue
@@ -797,10 +807,11 @@ func isGeneratedTreeCustomPath(path string) bool {
 // deploy-managed (not generator-owned) locations under a cluster's
 // infrastructure directory (infrastructure/clusters/<cluster>/):
 //
-//   - the kubespray inventory subtree (inventory/): the generator only seeds
-//     inventory/.gitkeep; the actual inventory files (inventory.yaml,
-//     group_vars, k8s_hardening.yml, os_hardening_playbook.yml, credentials,
-//     etc.) are populated by kubespray at deploy time.
+//   - the kubespray inventory subtree (inventory/): populated at deploy time in
+//     legacy-mode trees (the module renders ./inventory under the cluster dir).
+//     Since lifecycle contract v2, CLI lifecycle mode renders the inventory
+//     directly into the cluster state zone and no longer writes here; the
+//     exemption stays for legacy-mode and pre-regeneration trees.
 //   - .terraform.lock.hcl and the .terraform/ directory: dependency lock file
 //     and module cache written by `terraform init` at deploy time.
 //   - the SSH key pair (id_rsa, id_rsa.pub): provisioned into the cluster dir
@@ -829,6 +840,36 @@ func isDeployManagedPath(clusterName, path string) bool {
 		return true
 	}
 	return false
+}
+
+// trackedHygieneHealable reports whether a tracked global hygiene file's
+// on-disk drift is openCenter's own in-place append: the planned replacement
+// must contain every non-empty on-disk line (a superset), so a root
+// .gitignore that `cluster init` extended with deploy-artifact exclusions
+// heals via promotion, while a genuine user line the generator does not know
+// still refuses the run.
+func trackedHygieneHealable(onDisk []byte, expected GeneratedFileInfo, plannedFile generatedTreeFile) bool {
+	if expected.Mode != uint32(plannedFile.mode.Perm()) {
+		return false
+	}
+	diskLines := gitIgnoreLineSet(onDisk)
+	plannedLines := gitIgnoreLineSet(plannedFile.data)
+	for line := range diskLines {
+		if !plannedLines[line] {
+			return false
+		}
+	}
+	return true
+}
+
+func gitIgnoreLineSet(data []byte) map[string]bool {
+	set := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			set[trimmed] = true
+		}
+	}
+	return set
 }
 func isTempPath(path string) bool            { return path == ".tmp" || strings.HasPrefix(path, ".tmp/") }
 func hashBytes(data []byte) string           { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }

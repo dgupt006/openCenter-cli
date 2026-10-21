@@ -339,7 +339,7 @@ module "openstack-nova" {
 {{- end }}
 
 module "kubespray-cluster" {
-  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2" }}"
+  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2" }}"
   # CLI mode makes OpenTofu infrastructure-only; legacy mode preserves
   # Deployment.AutoDeploy through local.deploy_cluster.
 {{- if eq (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
@@ -364,6 +364,10 @@ module "kubespray-cluster" {
   kubelet_cloud_provider                  = "external"
   external_cloud_provider                 = "manual"
 {{- end }}
+  # CLI mode renders the inventory directly into the cluster state zone so the
+  # GitOps worktree stays clean and Ansible executes the only copy. Legacy mode
+  # keeps the module default (./inventory under the working directory).
+  inventory_output_dir                    = var.inventory_output_dir
   k8s_hardening_enabled                   = local.k8s_hardening_enabled
   os_hardening_enabled                    = local.os_hardening_enabled
   ssh_user                                = local.ssh_user

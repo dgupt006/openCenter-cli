@@ -534,7 +534,7 @@ creation_rules:
     encrypted_regex: "^(data|stringData)$"
     age: >-
       %s
-  - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)'
+  - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|inventory|\.terraform|\.bin)\/)(.*)'
     encrypted_regex: "^(data|stringData|secret)$"
     age: >-
       %s

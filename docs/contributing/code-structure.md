@@ -152,7 +152,7 @@ BDD scenarios live in `tests/features/*.feature` (Gherkin), executed via [Godog]
 │   └── .sops.yaml
 ├── state/<organization>/<cluster>/
 │   ├── kubeconfig.yaml
-│   ├── inventory/
+│   ├── inventory/                # Kubespray inventory (rendered here by the kubespray module via inventory_output_dir, contract v2)
 │   ├── venv/
 │   └── .bin/
 └── secrets/<organization>/<cluster>/

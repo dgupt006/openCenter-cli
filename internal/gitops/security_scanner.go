@@ -104,6 +104,16 @@ func scanWorktreeGitOpsSecrets(root string) ([]SecretScanFinding, error) {
 			switch d.Name() {
 			case ".git", ".terraform", "venv", ".bin":
 				return filepath.SkipDir
+			case "inventory":
+				// Deploy-time Kubespray inventory under a cluster infrastructure
+				// directory (legacy-mode render target; CLI lifecycle renders it
+				// into the state zone). Node addresses/usernames there are
+				// inventory data, not committed secrets.
+				rel, relErr := filepath.Rel(root, path)
+				if relErr == nil && isClusterInventoryDir(filepath.ToSlash(rel)) {
+					return filepath.SkipDir
+				}
+				return nil
 			default:
 				if strings.HasPrefix(d.Name(), ".opentofu-local") {
 					return filepath.SkipDir
@@ -139,6 +149,18 @@ func scanWorktreeGitOpsSecrets(root string) ([]SecretScanFinding, error) {
 		return nil
 	})
 	return findings, err
+}
+
+// isClusterInventoryDir reports whether a repository-relative slash path is the
+// Kubespray inventory directory of a cluster infrastructure directory:
+// infrastructure/clusters/<cluster>/inventory.
+func isClusterInventoryDir(relSlash string) bool {
+	parts := strings.Split(relSlash, "/")
+	if len(parts) < 4 || parts[len(parts)-1] != "inventory" {
+		return false
+	}
+	return parts[len(parts)-3] == "clusters" &&
+		parts[len(parts)-4] == "infrastructure"
 }
 
 func scanStagedGitOpsSecrets(ctx context.Context, root string) ([]SecretScanFinding, error) {

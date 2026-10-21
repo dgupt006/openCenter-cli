@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,13 @@ import (
 // configured (OCTR-808). Keep this in sync with
 // internal/config/v2/defaults.go:defaultGitBaseRepoRelease.
 const defaultGitBaseRepoTag = "2026.03-rc2"
+
+// kubesprayModuleTag is the gitops-base tag carrying the lifecycle contract v2
+// kubespray module (inventory_output_dir). The kubespray module pins this tag
+// independently of the CNI/IaC modules because the CLI deploy path requires
+// contract v2 while the other modules did not change. Keep in sync with
+// internal/config/v2/defaults.go kubespray module sources.
+const kubesprayModuleTag = "2026.10.21-contract2"
 
 // calicoModuleSource matches the quoted source assignment of the rendered
 // Terraform `module "calico"` block, e.g. `source = "github.com/...calico?ref=..."`.
@@ -105,9 +113,13 @@ func TestTerraformTemplatesPinGitopsBaseTag(t *testing.T) {
 			require.NotEmpty(t, matches, "%s: no gitops-base ?ref= source found", name)
 
 			for _, match := range matches {
-				require.Equal(t, defaultGitBaseRepoTag, match[1],
+				want := defaultGitBaseRepoTag
+				if strings.Contains(match[0], "iac/provider/kubespray") {
+					want = kubesprayModuleTag
+				}
+				require.Equal(t, want, match[1],
 					"%s: gitops-base module ref must pin the immutable tag %q, got %q",
-					name, defaultGitBaseRepoTag, match[1])
+					name, want, match[1])
 			}
 		})
 	}

@@ -25,11 +25,36 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 	utilfs "github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 )
+
+// inventoryStateDir resolves the state-zone inventory directory for a cluster
+// config, or "" when it cannot be derived (missing organization or cluster
+// name, which means legacy rendering applies). Templates call it via the
+// `inventoryStateDir` function so CLI lifecycle mode can pass the state-zone
+// path to the Kubespray module and keep the GitOps worktree clean.
+//
+// The layout mirrors core/paths.OrgBasedStrategy:
+// <clusterStateRoot>/<org>/<cluster>/inventory.
+func inventoryStateDir(cfg v2.Config) string {
+	organization := strings.TrimSpace(cfg.OpenCenter.Meta.Organization)
+	clusterName := strings.TrimSpace(cfg.ClusterName())
+	if organization == "" || clusterName == "" {
+		return ""
+	}
+	return filepath.Join(clusterStateRoot(), organization, clusterName, "inventory")
+}
+
+// clusterStateRoot resolves the per-cluster state zone root, delegating to
+// internal/config so rendering and the path resolver never diverge on the
+// OPENCENTER_CLUSTER_STATE_DIR / CLI-settings / <clustersDir>/state precedence.
+func clusterStateRoot() string {
+	return config.GetClusterStateDir()
+}
 
 // IsGitOpsInitialized checks if a GitOps directory has already been initialized
 // by looking for marker files that indicate a previous setup.
@@ -245,6 +270,14 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 			return false
 		}
 		return secretArtifactTargetMaterialized(cfg, serviceName, artifacts)
+	}
+
+	// inventoryStateDir returns the state-zone inventory directory for the
+	// cluster being rendered ("" when it cannot be derived). The infrastructure
+	// main.tf templates pass it to the Kubespray module in CLI lifecycle mode so
+	// the inventory is written once, in the state zone, never in the worktree.
+	funcMap["inventoryStateDir"] = func() string {
+		return inventoryStateDir(cfg)
 	}
 
 	// autoServices returns service names that use auto-descriptors (no explicit

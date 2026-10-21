@@ -121,7 +121,7 @@ locals {
 
 # Kubespray module for Kubernetes deployment on pre-provisioned VMware VMs
 module "kubespray-cluster" {
-  source = "{{ .Deployment.Kubespray.KubesprayCluster.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2" }}"
+  source = "{{ .Deployment.Kubespray.KubesprayCluster.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2" }}"
   # CLI mode makes OpenTofu infrastructure-only; legacy mode preserves
   # Deployment.AutoDeploy through local.deploy_cluster.
   
@@ -161,6 +161,11 @@ module "kubespray-cluster" {
   # Security hardening
   k8s_hardening_enabled                   = local.k8s_hardening_enabled
   os_hardening_enabled                    = local.os_hardening_enabled
+
+  # CLI mode renders the inventory directly into the cluster state zone so the
+  # GitOps worktree stays clean and Ansible executes the only copy. Legacy mode
+  # keeps the module default (./inventory under the working directory).
+  inventory_output_dir                    = var.inventory_output_dir
   kube_pod_security_exemptions_namespaces = local.kube_pod_security_exemptions_namespaces
   kubelet_rotate_server_certificates      = local.kubelet_rotate_server_certificates
   

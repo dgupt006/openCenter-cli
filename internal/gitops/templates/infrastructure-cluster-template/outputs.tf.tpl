@@ -11,8 +11,8 @@ output "opencenter_kubespray_lifecycle_contract_version" {
     condition = var.opencenter_lifecycle_mode == "legacy" || try(
       tostring(module.kubespray-cluster.lifecycle_contract_version),
       "",
-    ) == "1"
-    error_message = "CLI lifecycle mode requires Kubespray lifecycle contract version 1."
+    ) == "2"
+    error_message = "CLI lifecycle mode requires Kubespray lifecycle contract version 2 (inventory_output_dir support). Regenerate the infrastructure tree with 'opencenter cluster generate' and update the kubespray module source ref."
   }
 }
 

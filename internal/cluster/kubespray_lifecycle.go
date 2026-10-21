@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -20,7 +19,7 @@ import (
 )
 
 const (
-	kubesprayLifecycleContractVersion = "1"
+	kubesprayLifecycleContractVersion = "2"
 	kubesprayOutputsFile              = "kubespray-outputs.json"
 	kubesprayRepositoryURL            = "https://github.com/kubernetes-sigs/kubespray.git"
 	ansibleHardeningRepositoryURL     = "https://opendev.org/openstack/ansible-hardening"
@@ -269,6 +268,13 @@ func validateKubesprayLifecycleOutputs(outputs kubesprayLifecycleOutputs) error 
 	return nil
 }
 
+// stageKubesprayInventory verifies that the OpenTofu-rendered inventory subtree
+// is exactly the state-zone copy the CLI executes against. Contract v2 modules
+// render directly into l.inventoryPath (inventory_output_dir), so source and
+// destination coincide and no copy happens. A module that still renders inside
+// the GitOps worktree (contract v1 layout, pre-regeneration tree) fails with an
+// actionable regeneration hint instead of silently producing two divergent
+// copies.
 func stageKubesprayInventory(source, destination string) error {
 	source = filepath.Clean(strings.TrimSpace(source))
 	destination = filepath.Clean(strings.TrimSpace(destination))
@@ -278,41 +284,7 @@ func stageKubesprayInventory(source, destination string) error {
 	if source == destination {
 		return nil
 	}
-	if err := os.RemoveAll(destination); err != nil {
-		return fmt.Errorf("clear Kubespray inventory destination: %w", err)
-	}
-	if err := copyDirectory(source, destination); err != nil {
-		return fmt.Errorf("stage Kubespray inventory in state zone: %w", err)
-	}
-	return nil
-}
-
-func copyDirectory(source, destination string) error {
-	info, err := os.Stat(source)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", source)
-	}
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(destination, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o600)
-	})
+	return fmt.Errorf("Kubespray inventory rendered at %s outside the cluster state zone %s; the infrastructure tree predates lifecycle contract 2, re-run 'opencenter cluster generate' with the updated kubespray module ref and apply again", source, destination)
 }
 
 func (l *kubesprayLifecycle) prepareOSHardening() error {

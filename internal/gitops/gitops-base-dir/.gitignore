@@ -74,3 +74,14 @@ ansible-hardening/
 .python-version
 credentials/
 .mygitignore
+
+# openCenter deploy-time artifacts: the CLI lifecycle renders the Kubespray
+# inventory into the cluster state zone; the inventory pattern covers
+# legacy-mode trees that still render it under the cluster directory.
+infrastructure/clusters/*/inventory/
+infrastructure/clusters/*/.terraform/
+infrastructure/clusters/*/.terraform.lock.hcl
+
+# Cluster config input is local state, not a GitOps artifact.
+/*-config.yaml
+/.*-config.yaml

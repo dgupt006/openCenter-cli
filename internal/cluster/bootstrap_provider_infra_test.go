@@ -84,11 +84,14 @@ func TestOpenStackBootstrapProviderUsesOpenTofuAndNormalizesKubeconfig(t *testin
 	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
 		t.Fatalf("mkdir cluster dir: %v", err)
 	}
-	inventoryDir := filepath.Join(clusterDir, "inventory")
-	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
-		t.Fatalf("mkdir inventory dir: %v", err)
+	// Contract v2: the module renders the inventory directly into the state
+	// zone (here the fallback .opencenter-state/inventory under clusterDir,
+	// since BuildSteps receives no ClusterPaths).
+	stateInventoryDir := filepath.Join(clusterDir, ".opencenter-state", "inventory")
+	if err := os.MkdirAll(stateInventoryDir, 0o700); err != nil {
+		t.Fatalf("mkdir state inventory dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(inventoryDir, "inventory.yaml"), []byte("all:\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stateInventoryDir, "inventory.yaml"), []byte("all:\n"), 0o600); err != nil {
 		t.Fatalf("write inventory: %v", err)
 	}
 	calicoValuesDir := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", clusterName, "services", "calico", "helm-values")
@@ -121,7 +124,7 @@ users:
 	fakeRunner := &fakeLifecycleRunner{
 		onRun: func(dir string, env map[string]string, name string, args ...string) ([]byte, error) {
 			if name == "tofu" && len(args) > 0 && args[0] == "output" {
-				return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(dir, "inventory", "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.2.128.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
+				return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(dir, ".opencenter-state", "inventory", "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_address":{"value":"10.2.128.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
 			}
 			if len(args) > 0 && args[0] == "apply" {
 				sourceKubeconfig := filepath.Join(clusterDir, "kubeconfig.yaml")
@@ -255,7 +258,7 @@ func TestBootstrapServiceOpenStackProvisionInfrastructureHonorsSavedState(t *tes
 	fakeRunner := &fakeLifecycleRunner{
 		onRun: func(dir string, env map[string]string, name string, args ...string) ([]byte, error) {
 			if name == "tofu" && len(args) > 0 && args[0] == "output" {
-				return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(dir, "inventory", "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":1},"opencenter_kubespray_api_address":{"value":"10.2.128.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
+				return []byte(`{"opencenter_kubespray_inventory_path":{"value":"` + filepath.Join(tmpDir, "state", organization, clusterName, "inventory", "inventory.yaml") + `"},"opencenter_kubespray_lifecycle_contract_version":{"value":2},"opencenter_kubespray_api_address":{"value":"10.2.128.5"},"opencenter_kubespray_api_port":{"value":6443}}`), nil
 			}
 			if len(args) > 0 && args[0] == "apply" {
 				sourceKubeconfig := filepath.Join(dir, "kubeconfig.yaml")
@@ -305,8 +308,9 @@ func TestBootstrapServiceOpenStackProvisionInfrastructureHonorsSavedState(t *tes
 	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
 		t.Fatalf("mkdir cluster dir: %v", err)
 	}
-	inventoryDir := filepath.Join(clusterDir, "inventory")
-	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+	// Contract v2: the module renders the inventory into the state zone.
+	inventoryDir := clusterPaths.InventoryPath
+	if err := os.MkdirAll(inventoryDir, 0o700); err != nil {
 		t.Fatalf("mkdir inventory dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(inventoryDir, "inventory.yaml"), []byte("all:\n"), 0o600); err != nil {

@@ -1012,12 +1012,24 @@ func (s *InitService) initGitRepo(clusterPaths *paths.ClusterPaths) error {
 // repository (for example one created by an earlier cluster's init) belongs to
 // that repository: silently replacing it would desynchronize the openCenter
 // ownership ledger from the on-disk file and block subsequent `cluster generate`
-// runs with an ownership conflict. Existing .gitignore files are therefore
-// preserved, but must already contain the root-only config guards so local
-// *-config.yaml inputs stay out of the generated tree.
+// runs, so existing files are preserved. The root-only config guards are a hard
+// requirement: silently rewriting user patterns could un-ignore tracked files,
+// so a file missing them fails with an actionable error. The deploy-time
+// exclusions below are machine hygiene, not user content: when an existing file
+// lacks them, they are appended (idempotently) so OpenTofu/Kubespray artifacts
+// (legacy-mode inventory, module cache, lock file) stop dirtying the worktree.
 var gitIgnoreRequiredPatterns = []string{
 	"/*-config.yaml",
 	"/.*-config.yaml",
+}
+
+// gitIgnoreDeployArtifactPatterns keep deploy-time outputs out of the GitOps
+// worktree's git status. The inventory subtree is the legacy-mode render
+// target; CLI lifecycle mode writes it into the state zone directly.
+var gitIgnoreDeployArtifactPatterns = []string{
+	"infrastructure/clusters/*/inventory/",
+	"infrastructure/clusters/*/.terraform/",
+	"infrastructure/clusters/*/.terraform.lock.hcl",
 }
 
 func writeGitOpsHygiene(gitOpsDir string) error {
@@ -1054,22 +1066,18 @@ func writeGitOpsHygiene(gitOpsDir string) error {
 				if readErr != nil {
 					return fmt.Errorf("reading %s: %w", path, readErr)
 				}
-				ok := true
+				missingGuards := false
 				for _, pattern := range gitIgnoreRequiredPatterns {
-					found := false
-					for _, line := range strings.Split(string(existing), "\n") {
-						if line == pattern {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ok = false
+					if !gitIgnoreContainsLine(existing, pattern) {
+						missingGuards = true
 						break
 					}
 				}
-				if !ok {
+				if missingGuards {
 					return fmt.Errorf("%s exists but is missing required pattern(s) %v; add them manually or remove the file and re-run", path, gitIgnoreRequiredPatterns)
+				}
+				if err := appendMissingGitIgnorePatterns(path, existing, gitIgnoreDeployArtifactPatterns); err != nil {
+					return err
 				}
 				continue // user-owned file in a shared repo: never clobber
 			}
@@ -1099,7 +1107,58 @@ id_ed25519*
 # Cluster config input is local state, not a GitOps artifact.
 /*-config.yaml
 /.*-config.yaml
+
+# Deploy-time OpenTofu/Kubespray artifacts are state-zone files, not GitOps
+# content. CLI lifecycle renders the inventory into the cluster state zone;
+# the inventory pattern covers legacy-mode trees that still render it here.
+infrastructure/clusters/*/inventory/
+infrastructure/clusters/*/.terraform/
+infrastructure/clusters/*/.terraform.lock.hcl
 `
+
+// gitIgnoreContainsLine reports whether data has pattern as a whole line.
+func gitIgnoreContainsLine(data []byte, pattern string) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimRight(line, "\r") == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+// appendMissingGitIgnorePatterns appends the patterns missing from the
+// existing file content, once, under a marker comment. Idempotent: a file that
+// already contains every pattern is left byte-identical.
+func appendMissingGitIgnorePatterns(path string, existing []byte, patterns []string) error {
+	var missing []string
+	for _, pattern := range patterns {
+		if !gitIgnoreContainsLine(existing, pattern) {
+			missing = append(missing, pattern)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	content := string(existing)
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += "\n# Deploy-time OpenTofu/Kubespray artifacts (managed by openCenter).\n"
+	for _, pattern := range missing {
+		content += pattern + "\n"
+	}
+	info, err := os.Stat(path)
+	mode := os.FileMode(0o644)
+	if err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		return fmt.Errorf("updating %s: %w", path, err)
+	}
+	return nil
+}
 
 const preCommitHookContent = `#!/usr/bin/env sh
 set -eu

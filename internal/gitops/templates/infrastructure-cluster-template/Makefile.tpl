@@ -16,7 +16,9 @@ K9S_VERSION := 0.50.18
 export PATH := $(BIN):$(PATH)
 export TF_CLI_CONFIG_FILE=config.tfrc
 
-export ANSIBLE_INVENTORY = {{ if .OpenCenter.GitOps.Repository.LocalDir }}{{ .OpenCenter.GitOps.Repository.LocalDir }}/infrastructure/clusters/{{ .OpenCenter.Cluster.ClusterName }}/inventory/inventory.yaml{{ else }}/tmp/inventory/inventory.yaml{{ end }}
+# CLI lifecycle renders the inventory into the cluster state zone; the worktree
+# path is the legacy fallback when no state-zone directory can be derived.
+export ANSIBLE_INVENTORY = {{ if $inv := inventoryStateDir }}{{ $inv }}/inventory.yaml{{ else if .OpenCenter.GitOps.Repository.LocalDir }}{{ .OpenCenter.GitOps.Repository.LocalDir }}/infrastructure/clusters/{{ .OpenCenter.Cluster.ClusterName }}/inventory/inventory.yaml{{ else }}/tmp/inventory/inventory.yaml{{ end }}
 
 # SOPS Configuration
 SOPS_SCRIPT := ./sops_manager.sh

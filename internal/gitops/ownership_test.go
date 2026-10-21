@@ -966,6 +966,58 @@ func TestFreshRepositoryBootstrapClaimsInitializerGlobalFileWithBackup(t *testin
 	}
 }
 
+// TestTrackedGitIgnoreHealsAfterInitAppend guards the contract-v2 hygiene
+// flow: `cluster init` appends machine-managed deploy-artifact exclusions to
+// a tracked root .gitignore in place; the next `cluster generate` must heal
+// the ledger by promoting the (superset) planned file instead of refusing
+// forever with a modified-tracked-file conflict.
+func TestTrackedGitIgnoreHealsAfterInitAppend(t *testing.T) {
+	repo := t.TempDir()
+	stage := t.TempDir()
+	writeTestFile(t, filepath.Join(stage, ".gitignore"), "base\n")
+	if _, err := promoteGeneratedTree(stage, repo, "heal-cluster", PromoteOptions{}); err != nil {
+		t.Fatalf("first promotion failed: %v", err)
+	}
+	// Simulate init's idempotent in-place append of deploy-artifact patterns.
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "base\ninfrastructure/clusters/*/inventory/\n")
+	writeTestFile(t, filepath.Join(stage, ".gitignore"), "base\ninfrastructure/clusters/*/inventory/\ninfrastructure/clusters/*/.terraform/\n")
+
+	result, err := promoteGeneratedTree(stage, repo, "heal-cluster", PromoteOptions{})
+	if err != nil {
+		t.Fatalf("hygiene drift was not healed: %v", err)
+	}
+	if got := readTestFile(t, filepath.Join(repo, ".gitignore")); got != "base\ninfrastructure/clusters/*/inventory/\ninfrastructure/clusters/*/.terraform/\n" {
+		t.Fatalf("healed .gitignore = %q", got)
+	}
+	if len(result.Updated) == 0 {
+		t.Fatalf("heal was not reported as an update: %+v", result)
+	}
+	// Ledger now matches the healed file: a second run is a clean no-op.
+	if _, err := promoteGeneratedTree(stage, repo, "heal-cluster", PromoteOptions{}); err != nil {
+		t.Fatalf("post-heal promotion failed: %v", err)
+	}
+}
+
+// TestTrackedGitIgnoreUserEditStillRefuses verifies the heal is limited to
+// superset drift: a user line the generator does not know must still refuse
+// the promotion and leave the file untouched.
+func TestTrackedGitIgnoreUserEditStillRefuses(t *testing.T) {
+	repo := t.TempDir()
+	stage := t.TempDir()
+	writeTestFile(t, filepath.Join(stage, ".gitignore"), "base\n")
+	if _, err := promoteGeneratedTree(stage, repo, "user-edit", PromoteOptions{}); err != nil {
+		t.Fatalf("first promotion failed: %v", err)
+	}
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "base\n!important-artifact/\n")
+
+	if _, err := promoteGeneratedTree(stage, repo, "user-edit", PromoteOptions{}); err == nil || !strings.Contains(err.Error(), "modified tracked file") {
+		t.Fatalf("user edit was not refused: %v", err)
+	}
+	if got := readTestFile(t, filepath.Join(repo, ".gitignore")); got != "base\n!important-artifact/\n" {
+		t.Fatalf("refused promotion mutated .gitignore: %q", got)
+	}
+}
+
 func TestRepositoryOwnershipRejectsLegacyAndInvalidAuthorityBeforeMutation(t *testing.T) {
 	repo := t.TempDir()
 	cluster := "authority-cluster"

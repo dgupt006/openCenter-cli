@@ -677,7 +677,7 @@ creation_rules:
 	}
 
 	// Add fourth rule for infrastructure clusters
-	config += fmt.Sprintf(`  - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)'
+	config += fmt.Sprintf(`  - path_regex: '^infrastructure\/clusters\/%s\/(?!(?:venv|kubespray|inventory|\.terraform|\.bin)\/)(.*)'
     encrypted_regex: "^(data|stringData|secret)$"
     age: >-
 `, cluster)

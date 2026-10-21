@@ -32,11 +32,11 @@ func TestSOPSConfigInfrastructurePathExclusions(t *testing.T) {
 	clusterName := "test-cluster"
 
 	// This is the pattern used in the SOPS configuration for infrastructure files
-	// Pattern: ^infrastructure/clusters/<cluster-name>/(?!(?:venv|kubespray|\.terraform|\.bin)/)(.*)
+	// Pattern: ^infrastructure/clusters/<cluster-name>/(?!(?:venv|kubespray|inventory|\.terraform|\.bin)/)(.*)
 	//
 	// The negative lookahead (?!...) ensures paths starting with venv/, kubespray/, .terraform/, or .bin/
 	// are NOT matched, effectively excluding those directories from encryption.
-	expectedPattern := `^infrastructure\/clusters\/` + clusterName + `\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)`
+	expectedPattern := `^infrastructure\/clusters\/` + clusterName + `\/(?!(?:venv|kubespray|inventory|\.terraform|\.bin)\/)(.*)`
 
 	t.Logf("Expected SOPS pattern: %s", expectedPattern)
 
@@ -64,6 +64,12 @@ func TestSOPSConfigInfrastructurePathExclusions(t *testing.T) {
 		"infrastructure/clusters/" + clusterName + "/kubespray/inventory/sample/hosts.yaml",
 		"infrastructure/clusters/" + clusterName + "/kubespray/roles/kubernetes/node/tasks/main.yml",
 		"infrastructure/clusters/" + clusterName + "/kubespray/",
+
+		// inventory directory and contents (legacy-mode deploy-time inventory;
+		// CLI lifecycle renders it into the state zone instead)
+		"infrastructure/clusters/" + clusterName + "/inventory/inventory.yaml",
+		"infrastructure/clusters/" + clusterName + "/inventory/group_vars/all/all.yml",
+		"infrastructure/clusters/" + clusterName + "/inventory/",
 
 		// .terraform directory and contents
 		"infrastructure/clusters/" + clusterName + "/.terraform/providers/registry.terraform.io/hashicorp/aws/5.0.0/darwin_arm64/terraform-provider-aws_v5.0.0",
@@ -95,6 +101,9 @@ func TestSOPSConfigInfrastructurePathExclusions(t *testing.T) {
 	if !strings.Contains(expectedPattern, "|kubespray|") {
 		t.Error("Pattern missing kubespray exclusion")
 	}
+	if !strings.Contains(expectedPattern, "|inventory|") {
+		t.Error("Pattern missing inventory exclusion")
+	}
 	if !strings.Contains(expectedPattern, "\\.terraform|") {
 		t.Error("Pattern missing .terraform exclusion")
 	}
@@ -119,7 +128,7 @@ func TestSOPSConfigInfrastructurePathExclusionsMultipleClusters(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.clusterName, func(t *testing.T) {
-			expectedPattern := `^infrastructure\/clusters\/` + tc.clusterName + `\/(?!(?:venv|kubespray|\.terraform|\.bin)\/)(.*)`
+			expectedPattern := `^infrastructure\/clusters\/` + tc.clusterName + `\/(?!(?:venv|kubespray|inventory|\.terraform|\.bin)\/)(.*)`
 
 			t.Logf("Expected SOPS pattern for %s: %s", tc.clusterName, expectedPattern)
 

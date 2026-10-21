@@ -294,12 +294,12 @@ func NewV2Default(name, provider string) (*Config, error) {
 				Modules: map[string]ModuleConfig{
 					"kubespray": {
 						Enabled: true,
-						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2",
+						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2",
 					},
 				},
 				KubesprayCluster: ModuleConfig{
 					Enabled: true,
-					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2",
+					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2",
 				},
 			},
 		},

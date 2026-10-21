@@ -46,10 +46,16 @@ Every directory role below is resolved the same way (see [Configuration Preceden
     └── ssh/<cluster>                         # cluster SSH keypair
 ```
 
-The CLI-owned Kubespray lifecycle keeps its copied inventory, Kubespray checkout,
+The CLI-owned Kubespray lifecycle keeps its inventory, Kubespray checkout,
 Python virtual environment, and `kubespray-outputs.json` under the cluster state
-directory. The rendered GitOps infrastructure directory is used only for
-OpenTofu initialization/apply and is not used as the Kubespray execution root.
+directory. Since lifecycle contract v2 the OpenTofu `kubespray-cluster` module
+renders the inventory directly into `state/<organization>/<cluster>/inventory/`
+(the rendered `main.tf` passes `inventory_output_dir`), so exactly one copy
+exists and it is the one Ansible executes. The rendered GitOps infrastructure
+directory is used only for OpenTofu initialization/apply. Legacy-mode trees
+(`deploy_cluster = true`) still render `inventory/` under the infrastructure
+directory; that subtree is git-ignored. Clusters rendered before contract v2
+must re-run `opencenter cluster generate` before `cluster deploy`.
 
 See [Cluster Init Details](../contributing/cluster-init-details.md) for exactly which of these paths `cluster init` writes into the config (`opencenter.gitops.repository.local_dir`, `infrastructure.ssh.key_path`, `secrets.ssh_key.private`/`.public`, `secrets.sops_age_key_file`, `secrets.sops.age_key_file`). Legacy co-located layouts are migration inputs, not the canonical paths above.
 

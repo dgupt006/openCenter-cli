@@ -69,6 +69,51 @@ sops:
 	}
 }
 
+// TestSecretScannerSkipsClusterInventorySubtree guards the contract-v2
+// posture: deploy-time Kubespray inventory (legacy-mode render target under
+// infrastructure/clusters/<cluster>/inventory) contains node addresses and
+// users, is never committed, and must stay out of the secret-scan scope. An
+// unrelated directory named "inventory" elsewhere in the tree stays scanned.
+func TestSecretScannerSkipsClusterInventorySubtree(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "infrastructure/clusters/demo/inventory/inventory.yaml", `all:
+  children:
+    kube_node:
+      hosts:
+        node-0:
+          ansible_host: 10.0.0.5
+          ansible_password: ghp_1234567890abcdefghijklmnopqrstuvwx
+`)
+	writeFile(t, root, "applications/overlays/demo/custom/inventory/notes.txt", "remote=https://ghp_1234567890abcdefghijklmnopqrstuvwx@example.invalid/repo.git\n")
+
+	findings, err := ScanGitOpsSecrets(root)
+	if err != nil {
+		t.Fatalf("ScanGitOpsSecrets() error = %v", err)
+	}
+	for _, finding := range findings {
+		if strings.HasPrefix(finding.Path, "infrastructure/clusters/demo/inventory/") {
+			t.Fatalf("cluster inventory subtree must be skipped, got %+v", finding)
+		}
+	}
+	assertFinding(t, findings, "git-token")
+}
+
+func TestIsClusterInventoryDir(t *testing.T) {
+	t.Parallel()
+
+	if !isClusterInventoryDir("infrastructure/clusters/demo/inventory") {
+		t.Fatal("cluster inventory must match")
+	}
+	if isClusterInventoryDir("applications/overlays/demo/custom/inventory") {
+		t.Fatal("unrelated inventory directory must not match")
+	}
+	if isClusterInventoryDir("infrastructure/clusters/inventory") {
+		t.Fatal("missing cluster segment must not match")
+	}
+}
+
 func TestSecretScannerRejectsInvalidSOPSMetadata(t *testing.T) {
 	t.Parallel()
 

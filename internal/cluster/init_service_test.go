@@ -626,10 +626,12 @@ func TestInitService_initGitRepo(t *testing.T) {
 
 // TestWriteGitOpsHygienePreservesExistingUserGitignore verifies that a
 // pre-existing user-owned .gitignore in a shared organization GitOps repo is
-// never clobbered by initializing a second cluster, and machine-managed files
-// are still created. Regression guard for the multi-cluster ownership conflict:
-// silently overwriting a committed .gitignore desynchronizes the ownership
-// ledger and blocks every subsequent `cluster generate`.
+// never clobbered by initializing a second cluster: user rules stay verbatim
+// and only the managed deploy-artifact exclusions are appended (idempotently).
+// Machine-managed files are still created. Regression guard for the
+// multi-cluster ownership conflict: silently overwriting a committed .gitignore
+// desynchronizes the ownership ledger and blocks every subsequent
+// `cluster generate`.
 func TestWriteGitOpsHygienePreservesExistingUserGitignore(t *testing.T) {
 	tmpDir := t.TempDir()
 	userGitignore := "# User rules\n__pycache__/\n\n/*-config.yaml\n/.*-config.yaml\n"
@@ -645,8 +647,25 @@ func TestWriteGitOpsHygienePreservesExistingUserGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if string(data) != userGitignore {
-		t.Errorf("user .gitignore was modified:\n got=%q\nwant=%q", data, userGitignore)
+	if !strings.HasPrefix(string(data), userGitignore) {
+		t.Errorf("user .gitignore rules were modified:\n got=%q\nwant prefix=%q", data, userGitignore)
+	}
+	for _, pattern := range gitIgnoreDeployArtifactPatterns {
+		if !gitIgnoreContainsLine(data, pattern) {
+			t.Errorf("deploy-artifact pattern %q was not appended:\n%s", pattern, data)
+		}
+	}
+
+	// Idempotent: a second run must not duplicate the managed block.
+	if err := writeGitOpsHygiene(tmpDir); err != nil {
+		t.Fatalf("second writeGitOpsHygiene() error = %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(tmpDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if string(second) != string(data) {
+		t.Errorf("second hygiene run modified .gitignore:\n got=%q\nwant=%q", second, data)
 	}
 	for _, rel := range []string{
 		filepath.Join(".opencenter", "hooks", "pre-commit"),

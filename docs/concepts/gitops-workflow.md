@@ -69,16 +69,18 @@ openCenter generates a standardized GitOps repository:
         ├── main.tf                # Terraform/OpenTofu
         ├── provider.tf
         ├── variables.tf
-        ├── inventory/             # Kubespray Ansible
-        │   ├── inventory.yaml
-        │   ├── group_vars/
-        │   └── credentials/
         └── kubeconfig.yaml        # Generated after deployment
 
 └── clusters/<cluster>/             # Flux bootstrap path and bridge
     ├── flux-system/                 # Written by flux bootstrap
     └── services.yaml                # openCenter-generated bridge
 ```
+
+The Kubespray Ansible inventory is **not** part of this tree: since lifecycle
+contract v2 the `kubespray-cluster` module renders it directly into the cluster
+state zone (`state/<org>/<cluster>/inventory/`) via `inventory_output_dir`.
+Legacy-mode trees (`deploy_cluster = true`) still render `inventory/` under
+`infrastructure/clusters/<cluster>/`; that subtree is git-ignored.
 
 **Design Rationale:**
 
@@ -135,7 +137,7 @@ spec:
 ```
 
 The default base reference is the immutable `2026.03-rc2` tag (set via `cluster init` defaults and
-the infrastructure OpenTofu module `?ref=` sources). It is configured in the release (tag) slot
+the infrastructure OpenTofu module `?ref=` sources; the `kubespray-cluster` module alone pins the newer `2026.10.21-contract2` tag, which adds `inventory_output_dir` for lifecycle contract v2). It is configured in the release (tag) slot
 (`opencenter.gitops.base_repo.release`) with the branch left empty, so Flux and the IaC modules both
 resolve to the same reproducible commit. The release (tag) takes precedence over branch: set
 `opencenter.gitops.base_repo.branch` (with release empty) to track a mutable branch instead, or set a
