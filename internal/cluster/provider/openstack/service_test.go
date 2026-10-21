@@ -378,6 +378,106 @@ func TestPlanPreservesUppercaseDFW3Region(t *testing.T) {
 	}
 }
 
+// TestPlanPropagatesDiscoveredRegionToClusterFields covers the init→plan→apply
+// contract: `cluster init` bakes meta.region from the CLI default long before
+// any cloud is chosen, so binding the cluster to an IAD3 cloud must repoint
+// every region-derived field, not just the provider block.
+func TestPlanPropagatesDiscoveredRegionToClusterFields(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("precondition: init default meta.region = %q, want DFW3", cfg.OpenCenter.Meta.Region)
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}
+
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prospective.OpenCenter.Meta.Region != "IAD3" {
+		t.Fatalf("meta.region = %q, want discovered IAD3", prospective.OpenCenter.Meta.Region)
+	}
+	if prospective.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "IAD3" {
+		t.Fatalf("cloud.openstack.region = %q, want discovered IAD3", prospective.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+	}
+	if prospective.OpenCenter.Secrets.Barbican.Region != "IAD3" {
+		t.Fatalf("barbican.region = %q, want discovered IAD3", prospective.OpenCenter.Secrets.Barbican.Region)
+	}
+	if cfg.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("Plan mutated the original meta.region to %q", cfg.OpenCenter.Meta.Region)
+	}
+	if cfg.OpenCenter.Secrets.Barbican.Region != "" {
+		t.Fatalf("Plan mutated the original barbican.region to %q", cfg.OpenCenter.Secrets.Barbican.Region)
+	}
+	found := false
+	for _, change := range result.Changes {
+		if change.Path == "opencenter.meta.region" && change.Old == "DFW3" && change.New == "IAD3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("changes do not report the meta.region rewrite: %#v", result.Changes)
+	}
+}
+
+// TestPlanBlocksPopulatedMetaRegionWithoutReplace guards the identity fields:
+// a region the operator set deliberately is never silently rewritten by a
+// provider binding, and the plan refuses to half-propagate.
+func TestPlanBlocksPopulatedMetaRegionWithoutReplace(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Meta.Region = "SJC3"
+	cfg.OpenCenter.Secrets.Barbican.Region = "SJC3"
+	snapshot := &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}
+
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked {
+		t.Fatalf("status = %q, want blocked", result.Status)
+	}
+	if prospective.OpenCenter.Meta.Region != "SJC3" {
+		t.Fatalf("meta.region = %q, want preserved SJC3", prospective.OpenCenter.Meta.Region)
+	}
+	if prospective.OpenCenter.Secrets.Barbican.Region != "SJC3" {
+		t.Fatalf("barbican.region = %q, want unchanged SJC3: the follower set is all-or-nothing, so a protected meta.region must not leave barbican half-repointed", prospective.OpenCenter.Secrets.Barbican.Region)
+	}
+	var named bool
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "opencenter.meta.region") && strings.Contains(warning, "--replace") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("warnings do not name the protected region: %#v", result.Warnings)
+	}
+}
+
+// TestPlanReplacesPopulatedMetaRegionWithReplace verifies --replace repoints
+// the whole cluster at the discovered region.
+func TestPlanReplacesPopulatedMetaRegionWithReplace(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Meta.Region = "SJC3"
+	cfg.OpenCenter.Secrets.Barbican.Region = "SJC3"
+	snapshot := &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}
+
+	_, prospective, err := Plan(context.Background(), cfg, snapshot, Options{Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prospective.OpenCenter.Meta.Region != "IAD3" || prospective.OpenCenter.Secrets.Barbican.Region != "IAD3" {
+		t.Fatalf("--replace did not repoint region fields: meta=%q barbican=%q", prospective.OpenCenter.Meta.Region, prospective.OpenCenter.Secrets.Barbican.Region)
+	}
+}
+
 func TestPlanRequiresReplaceForExplicitConflictingSelection(t *testing.T) {
 	cfg, err := v2.NewV2Default("prod", "openstack")
 	if err != nil {
@@ -526,19 +626,29 @@ func TestPlanPreservesPopulatedClusterValuesDuringCreateInternalNetworkImport(t 
 	if len(result.Selections) != 0 {
 		t.Fatalf("preserved values unexpectedly produced selections: %#v", result)
 	}
+	// The region fields are the exception to "preserved": the discovered
+	// region is authoritative and repoints the provider block, meta.region,
+	// and the Barbican backend even without --replace (meta.region was the
+	// init default here). Everything else must stay untouched.
+	regionPaths := map[string]bool{
+		"opencenter.infrastructure.cloud.openstack.availability_zones": true,
+		"opencenter.infrastructure.cloud.openstack.region":             true,
+		"opencenter.meta.region":                                       true,
+		"opencenter.secrets.barbican.region":                           true,
+	}
 	for _, change := range result.Changes {
-		if change.Path != "opencenter.infrastructure.cloud.openstack.availability_zones" {
+		if !regionPaths[change.Path] {
 			t.Fatalf("preserved values unexpectedly produced change: %#v", result.Changes)
 		}
 	}
 	warnings := strings.Join(result.Warnings, " ")
-	for _, unwanted := range []string{"image_id", "image_id_windows", "project_domain_name", "region", "availability_zone", "--replace", "--image-name", "--availability-zone"} {
+	for _, unwanted := range []string{"image_id", "image_id_windows", "project_domain_name", "availability_zone", "--replace", "--image-name", "--availability-zone"} {
 		if strings.Contains(warnings, unwanted) {
 			t.Fatalf("warning %q unexpectedly present: %s", unwanted, warnings)
 		}
 	}
 	osCfg := prospective.OpenCenter.Infrastructure.Cloud.OpenStack
-	if osCfg.Region != "dfw3" || osCfg.ProjectDomainName != "default" || osCfg.ImageID != "discovered-linux" || osCfg.ImageIDWindows != "discovered-windows" || osCfg.AvailabilityZone != "existing-zone" {
+	if osCfg.Region != "RegionOne" || prospective.OpenCenter.Meta.Region != "RegionOne" || osCfg.ProjectDomainName != "default" || osCfg.ImageID != "discovered-linux" || osCfg.ImageIDWindows != "discovered-windows" || osCfg.AvailabilityZone != "existing-zone" {
 		t.Fatalf("populated cluster values were not preserved: %#v", osCfg)
 	}
 }
@@ -614,6 +724,68 @@ func TestApplyPersistenceWritesBackupOnlyForRealPatch(t *testing.T) {
 		t.Fatalf("no-op created backup: %v", err)
 	}
 
+}
+
+// TestApplyPersistencePersistsPropagatedRegion proves the end of the
+// init→plan→apply chain: the discovered region must land in the written
+// cluster file, in both meta.region and the provider block.
+func TestApplyPersistencePersistsPropagatedRegion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cluster.yaml")
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Provider = "openstack"
+	// Empty provider block: the init-baked floating_ip_pool default would
+	// otherwise block the plan on a populated value unrelated to the region
+	// contract under test.
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
+	originalBytes, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, originalBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		AuthURL:          "https://identity.example/v3",
+		Region:           "IAD3",
+		ProjectID:        "project-1",
+		Images:           []cloudopenstack.Resource{{ID: "img-linux", Name: "Ubuntu 24.04"}},
+		Networks:         []cloudopenstack.Resource{{ID: "net-1", Name: "cluster-net"}},
+		Subnets:          []cloudopenstack.Subnet{{Resource: cloudopenstack.Resource{ID: "subnet-1", Name: "cluster-subnet"}, NetworkID: "net-1"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "public-1", Name: "public"}},
+	}
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusPlanned {
+		t.Fatalf("status = %q, want planned: %#v", result.Status, result.Warnings)
+	}
+	fileSystem := fs.NewDefaultFileSystem(utilerrors.NewDefaultErrorHandlerWithoutMasking())
+	result, err = (ApplyPersistence{FileSystem: fileSystem, Validate: func(context.Context, *v2.Config) error { return nil }}).Apply(context.Background(), path, cfg, prospective, originalBytes, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusApplied {
+		t.Fatalf("status = %q, want applied", result.Status)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := v2.DecodePublicConfig(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.OpenCenter.Meta.Region != "IAD3" {
+		t.Fatalf("persisted meta.region = %q, want IAD3", reloaded.OpenCenter.Meta.Region)
+	}
+	if reloaded.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "IAD3" {
+		t.Fatalf("persisted cloud.openstack.region = %q, want IAD3", reloaded.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+	}
 }
 
 func TestPlanExcludesExternalNetworksFromInternalSelection(t *testing.T) {

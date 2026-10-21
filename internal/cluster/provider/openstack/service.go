@@ -147,21 +147,93 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		changes = append(changes, Change{Path: path, Old: redact(currentValue, sensitive), New: redact(desired, sensitive)})
 	}
 
+	// isDerived reports whether a stored provider value is a `cluster init`
+	// guess rather than an operator selection. Most baked defaults contain a
+	// placeholder marker; the region is the exception — init copies a real
+	// region name (the CLI default, else InitDefaultRegion) straight into the
+	// provider block, so the init default is the second replaceable shape.
+	// Every other populated value is an explicit choice and needs --replace.
+	initDefaultRegion := strings.TrimSpace(v2.InitDefaultRegion)
+	isDerived := func(value string) bool {
+		value = strings.TrimSpace(value)
+		return isPlaceholder(value) || strings.EqualFold(value, initDefaultRegion)
+	}
 	setDerived := func(path string, current *string, desired string) {
 		currentValue := strings.TrimSpace(*current)
 		desired = strings.TrimSpace(desired)
 		if desired == "" || currentValue == desired {
 			return
 		}
-		if !isPlaceholder(currentValue) && !opts.Replace {
+		if !isDerived(currentValue) && !opts.Replace {
 			return
 		}
 		*current = desired
 		changes = append(changes, Change{Path: path, Old: currentValue, New: desired})
 	}
 
+	// setRegionFollowers repoints the fields OUTSIDE the provider block that
+	// are derived from the cloud region (meta.region, the Barbican secret
+	// backend). `cluster init` bakes a default region long before any cloud
+	// is chosen, and that guess is not an operator decision worth protecting:
+	// a stored region equal to the init default (or empty/placeholder) is
+	// corrected silently. A region that differs from the discovered cloud AND
+	// from the init default was set deliberately, so it blocks the plan and
+	// names --replace rather than half-propagating.
+	//
+	// The init default is recognised by value, not by provenance: the CLI
+	// config (cluster_defaults.region) is deliberately not consulted here,
+	// because the cloud selected by --os-cloud outranks a global default.
+	setRegionFollowers := func(desired string) {
+		desired = strings.TrimSpace(desired)
+		if desired == "" {
+			return
+		}
+		followers := []struct {
+			path    string
+			current *string
+		}{
+			// meta.region is the human-facing cluster region: `cluster
+			// describe`, `cluster use`, and the GitOps renderers that fall
+			// back to it all read this field.
+			{"opencenter.meta.region", &prospective.OpenCenter.Meta.Region},
+			// The Barbican secret backend authenticates against the same
+			// Keystone scope as the infrastructure provider; its region must
+			// track the cloud, or `opencenter secrets` would target the wrong
+			// endpoint.
+			{"opencenter.secrets.barbican.region", &prospective.OpenCenter.Secrets.Barbican.Region},
+		}
+		// All-or-nothing: a cluster whose meta.region and Barbican region
+		// point at different clouds is either mid-migration or hand-edited,
+		// and rewriting only the unguarded half would leave it split across
+		// two regions. Any protected follower blocks the whole set.
+		for _, follower := range followers {
+			currentValue := strings.TrimSpace(*follower.current)
+			if currentValue != desired && !isDerived(currentValue) && !opts.Replace {
+				blocked = true
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s is populated with %q; the discovered cloud region is %q; use --replace to repoint the cluster", follower.path, currentValue, desired))
+				return
+			}
+		}
+		for _, follower := range followers {
+			currentValue := strings.TrimSpace(*follower.current)
+			if currentValue == desired {
+				continue
+			}
+			*follower.current = desired
+			changes = append(changes, Change{Path: follower.path, Old: currentValue, New: desired})
+		}
+	}
+
+	// The region is the load-bearing value the profile carries: OpenTofu
+	// renders the Swift/S3 service regions and the GitOps provider block from
+	// cloud.openstack.region, and describe/use/reporting read meta.region.
+	// `cluster init` bakes a default region long before any cloud is chosen,
+	// so a cluster bound to a different cloud would otherwise deploy against
+	// init's guess. The discovered region is authoritative and propagates to
+	// every dependent field.
 	setDerived("opencenter.infrastructure.cloud.openstack.auth_url", &osCfg.AuthURL, snapshot.AuthURL)
 	setDerived("opencenter.infrastructure.cloud.openstack.region", &osCfg.Region, snapshot.Region)
+	setRegionFollowers(snapshot.Region)
 	setDerived("opencenter.infrastructure.cloud.openstack.project_id", &osCfg.ProjectID, snapshot.ProjectID)
 	setDerived("opencenter.infrastructure.cloud.openstack.project_name", &osCfg.ProjectName, snapshot.ProjectName)
 	setDerived("opencenter.infrastructure.cloud.openstack.tenant_name", &osCfg.TenantName, snapshot.ProjectName)
@@ -508,6 +580,12 @@ func findResource(candidates []cloudopenstack.Resource, id string) (cloudopensta
 func cloneProviderConfig(cfg *v2.Config) *v2.Config {
 	copyCfg := *cfg
 	copyCfg.OpenCenter = cfg.OpenCenter
+	// Meta and Secrets are value structs that Plan may rewrite (meta.region
+	// follows the discovered cloud region; the Barbican block inherits it).
+	// Copying them by value keeps every write confined to the prospective
+	// config, exactly like the OpenStack block below.
+	copyCfg.OpenCenter.Meta = cfg.OpenCenter.Meta
+	copyCfg.OpenCenter.Secrets = cfg.OpenCenter.Secrets
 	copyCfg.OpenCenter.Infrastructure = cfg.OpenCenter.Infrastructure
 	copyCfg.OpenCenter.Infrastructure.Cloud = cfg.OpenCenter.Infrastructure.Cloud
 	original := *cfg.OpenCenter.Infrastructure.Cloud.OpenStack

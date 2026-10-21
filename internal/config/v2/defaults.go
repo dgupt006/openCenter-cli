@@ -20,11 +20,17 @@ const DefaultGitBaseRepoURLSSH = "ssh://git@github.com/opencenter-cloud/openCent
 // DefaultGitBaseRepoURLHTTPS is the HTTPS URL for the shared openCenter-gitops-base repo.
 const DefaultGitBaseRepoURLHTTPS = "https://github.com/opencenter-cloud/openCenter-gitops-base.git"
 
+// InitDefaultRegion is the region `cluster init` bakes into a cluster when no
+// CLI default overrides it. It is exported so provider binding can recognise
+// the baked guess as replaceable: the cloud selected by --os-cloud is the
+// authority on the region once a cluster is bound to one.
+const InitDefaultRegion = "DFW3"
+
 const (
 	defaultSchemaVersion          = "2.0"
 	defaultOrganization           = "opencenter"
 	defaultProvider               = "openstack"
-	defaultRegion                 = "DFW3"
+	defaultRegion                 = InitDefaultRegion
 	defaultEnvironment            = "dev"
 	defaultBaseDomain             = "k8s.opencenter.cloud"
 	defaultGitBranch              = "main"

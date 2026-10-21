@@ -106,7 +106,7 @@ func LoadProfile(path, name string) (Profile, error) {
 	return Profile{
 		Name: name, AuthURL: strings.TrimSpace(selected.Auth.AuthURL), Username: selected.Auth.Username,
 		UserID: selected.Auth.UserID, Password: selected.Auth.Password, ProjectID: selected.Auth.ProjectID,
-		ProjectName: selected.Auth.ProjectName, Region: selected.RegionName, S3Endpoint: selected.S3Endpoint, Interface: selected.Interface,
+		ProjectName: selected.Auth.ProjectName, Region: profileRegionName(selected.RegionName), S3Endpoint: selected.S3Endpoint, Interface: selected.Interface,
 		DomainName: selected.Auth.DomainName, UserDomain: selected.Auth.UserDomainName,
 		ProjectDomain: selected.Auth.ProjectDomainName, AppCredID: selected.Auth.ApplicationCredentialID,
 		AppCredName: selected.Auth.ApplicationCredentialName, AppCredSecret: selected.Auth.ApplicationCredentialSecret,
@@ -189,4 +189,17 @@ func firstProfileValue(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// profileRegionName resolves the region for a clouds.yaml profile. The
+// OS_REGION_NAME environment variable is the conventional OpenStack client
+// override for the selected profile, so an operator who exports it intends
+// that region to be used even when clouds.yaml omits region_name. The
+// clouds.yaml value wins when set: the profile is the explicit selection
+// made with --os-cloud, and OS_REGION_NAME only fills the gap it leaves.
+func profileRegionName(fromFile string) string {
+	if fromFile = strings.TrimSpace(fromFile); fromFile != "" {
+		return fromFile
+	}
+	return strings.TrimSpace(os.Getenv("OS_REGION_NAME"))
 }

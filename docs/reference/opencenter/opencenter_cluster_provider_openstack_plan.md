@@ -30,6 +30,12 @@ project inventory and reported as a warning; if the project does not have it, th
 candidate list is printed instead. --windows-image-name is only required when the
 cluster runs Windows workers.
 
+The region discovered from the selected profile (clouds.yaml region_name, or
+OS_REGION_NAME when the profile omits it) is authoritative: it repoints the
+provider block, opencenter.meta.region, and the Barbican secret backend, so
+plan and apply bind the whole cluster to the chosen cloud. A meta.region that
+was set deliberately (not the init default) blocks the plan until --replace.
+
 Use 'apply' with identical flags to persist the same change set.
 
 ```

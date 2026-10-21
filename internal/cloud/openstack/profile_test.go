@@ -46,6 +46,45 @@ func TestLoadProfileRetainsAuthRegionAndTLSInputs(t *testing.T) {
 	}
 }
 
+// TestLoadProfileFillsRegionFromEnvironment covers the common clouds.yaml
+// shape where the profile omits region_name and the operator exports
+// OS_REGION_NAME: the discovered region must come from the environment, or
+// plan would leave the cluster bound to the init default.
+func TestLoadProfileFillsRegionFromEnvironment(t *testing.T) {
+	t.Setenv("OS_REGION_NAME", "IAD3")
+	path := filepath.Join(t.TempDir(), "clouds.yaml")
+	contents := "clouds:\n  iad:\n    auth:\n      auth_url: https://identity.example/v3\n      project_id: project-1\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := LoadProfile(path, "iad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Region != "IAD3" {
+		t.Fatalf("profile region = %q, want OS_REGION_NAME override IAD3", profile.Region)
+	}
+}
+
+// TestLoadProfilePrefersFileRegionOverEnvironment keeps --os-cloud
+// deterministic: an explicit region_name in the selected profile is never
+// shadowed by a stale exported OS_REGION_NAME pointing at another cloud.
+func TestLoadProfilePrefersFileRegionOverEnvironment(t *testing.T) {
+	t.Setenv("OS_REGION_NAME", "SJC3")
+	path := filepath.Join(t.TempDir(), "clouds.yaml")
+	contents := "clouds:\n  iad:\n    region_name: IAD3\n    auth:\n      auth_url: https://identity.example/v3\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := LoadProfile(path, "iad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Region != "IAD3" {
+		t.Fatalf("profile region = %q, want clouds.yaml region IAD3", profile.Region)
+	}
+}
+
 func TestProfileProviderHonorsCanceledContextBeforeAuthentication(t *testing.T) {
 	profile := Profile{AuthURL: "https://identity.example/v3"}
 	ctx, cancel := context.WithCancel(context.Background())

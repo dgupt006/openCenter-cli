@@ -52,6 +52,13 @@ opencenter cluster provider openstack plan my-org/demo \
   --os-cloud my-profile
 ```
 
+Plan binds the cluster to the profile's region: the region is read from the
+clouds.yaml profile (`region_name`, or `OS_REGION_NAME` when the profile omits
+it) and repoints `opencenter.infrastructure.cloud.openstack.region`,
+`opencenter.meta.region`, and the Barbican secret backend. `cluster init`
+bakes a default region before any cloud exists, so plan corrects it; a region
+you set deliberately blocks the plan until you pass `--replace`.
+
 Selectors include `--image-name`, `--windows-image-name`, `--network-id`,
 `--external-network-id`, `--subnet-id`, and `--availability-zone`. Each accepts a
 resource **name or ID** — the name printed by the `Selection required:` list is
