@@ -112,6 +112,10 @@ func runClusterDeploy(cmd *cobra.Command, args []string) error {
 	opts.Organization = organization
 
 	if !opts.DryRun {
+		if err := checkDeployPrerequisites(); err != nil {
+			return err
+		}
+
 		// Acquire lock for deploy operation (with prompt if lock exists)
 		lockResult, err := AcquireLockWithPrompt(ctx, cmd, name, "deploy", 1*time.Hour, map[string]string{
 			"operation": "deploy",
