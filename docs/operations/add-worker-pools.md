@@ -6,7 +6,7 @@ description: Add a worker pool definition to an openCenter cluster configuration
 doc_type: how-to
 audience: openCenter operators
 tags: [worker-pools, configuration]
-last_updated: 2026-09-25
+last_updated: 2026-10-20
 ---
 # Add a worker pool
 
@@ -24,7 +24,10 @@ opencenter cluster pool add batch \
 
 Supported add flags include `--image`, `--os linux|windows`,
 `--boot-volume-size`, `--boot-volume-type`, repeatable `--label key=value`, and
-repeatable `--taint key=value:effect`. `--flavor` is required.
+repeatable `--taint key=value:effect`. `--flavor` is required. `cluster pool
+update` accepts the same `--label`/`--taint` flags; there they replace the
+pool's existing labels/taints wholesale -- see [Manage worker
+pools](manage-worker-pools.md).
 
 The command stores Linux pools under
 `opencenter.infrastructure.compute.additional_server_pools_worker` and Windows

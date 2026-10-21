@@ -6,7 +6,7 @@ description: List, update, and scale worker pool definitions in an openCenter co
 doc_type: how-to
 audience: openCenter operators
 tags: [worker-pools, scaling]
-last_updated: 2026-09-25
+last_updated: 2026-10-20
 ---
 # Manage worker pools
 
@@ -25,11 +25,20 @@ opencenter cluster pool list --cluster ORG/CLUSTER --output yaml
 opencenter cluster pool update batch --cluster ORG/CLUSTER \
   --count 3 --flavor NEW_FLAVOR --image IMAGE
 
+opencenter cluster pool update gpu-wg1 --cluster ORG/CLUSTER \
+  --label workload=gpu --label gpu=true \
+  --taint nvidia.com/gpu=present:NoSchedule
+
 opencenter cluster pool scale batch --cluster ORG/CLUSTER --count 0
 ```
 
-`update` accepts count, flavor, image, boot-volume size, and boot-volume type.
-`scale` changes only the target count. Both commands support global `--dry-run`.
+`update` accepts count, flavor, image, boot-volume size, boot-volume type,
+labels, and taints. `--label`/`--taint` are repeatable and **replace** the
+pool's existing labels/taints wholesale when provided; omitting them leaves
+those fields untouched. Pass an empty value (`--label=` / `--taint=`) to clear.
+Taint format is `key=value:effect` with effect one of `NoSchedule`,
+`PreferNoSchedule`, `NoExecute`. `scale` changes only the target count. Both
+commands support global `--dry-run`.
 
 ## Remove
 

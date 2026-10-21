@@ -124,6 +124,8 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 		image          string
 		bootVolumeSize int
 		bootVolumeType string
+		labels         []string
+		taints         []string
 		cluster        string
 	)
 	cmd := &cobra.Command{
@@ -140,6 +142,14 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 			cfg, err := loadCanonicalConfig(clusterName)
 			if err != nil {
 				return fmt.Errorf("failed to load cluster configuration: %w", err)
+			}
+
+			// Parse label/taint overrides before any mutation so a malformed
+			// value aborts without touching the saved configuration.
+			parsedLabels := parseKeyValues(labels)
+			parsedTaints, err := parseTaintFlags(taints)
+			if err != nil {
+				return err
 			}
 
 			updated := false
@@ -160,6 +170,12 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 					}
 					if cmd.Flags().Changed("boot-volume-type") {
 						p.BootVolume.Type = bootVolumeType
+					}
+					if cmd.Flags().Changed("label") {
+						p.Labels = parsedLabels
+					}
+					if cmd.Flags().Changed("taint") {
+						p.Taints = parsedTaints
 					}
 					updated = true
 					break
@@ -183,6 +199,12 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 						}
 						if cmd.Flags().Changed("boot-volume-type") {
 							p.BootVolume.Type = bootVolumeType
+						}
+						if cmd.Flags().Changed("label") {
+							p.Labels = parsedLabels
+						}
+						if cmd.Flags().Changed("taint") {
+							p.Taints = parsedTaints
 						}
 						updated = true
 						break
@@ -210,6 +232,8 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&image, "image", "", "OS image override")
 	cmd.Flags().IntVar(&bootVolumeSize, "boot-volume-size", 0, "Boot volume size in GB")
 	cmd.Flags().StringVar(&bootVolumeType, "boot-volume-type", "", "Boot volume type")
+	cmd.Flags().StringSliceVar(&labels, "label", nil, "Replace node labels with these (key=value, repeatable)")
+	cmd.Flags().StringSliceVar(&taints, "taint", nil, "Replace node taints with these (key=value:effect, repeatable)")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster name")
 	return cmd
 }

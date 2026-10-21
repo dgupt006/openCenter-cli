@@ -26,6 +26,8 @@ opencenter cluster pool update <pool-name> [flags]
       --flavor string             Instance flavor
   -h, --help                      help for update
       --image string              OS image override
+      --label strings             Replace node labels with these (key=value, repeatable)
+      --taint strings             Replace node taints with these (key=value:effect, repeatable)
 ```
 
 ### Options inherited from parent commands
