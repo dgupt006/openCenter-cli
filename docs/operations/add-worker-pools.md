@@ -53,6 +53,15 @@ The command edits configuration and prints a reminder to generate. It does not
 by itself prove that a provider has capacity or that a node joined Kubernetes.
 Those checks require the provider lifecycle and a live cluster.
 
+Generation wires the pool into the cluster: the rendered
+`infrastructure/clusters/<cluster>/main.tf` passes
+`additional_server_pools_worker` to the OpenStack Nova module and concatenates
+the resulting `additional_worker_pools_nodes` into the Kubespray module's
+`worker_nodes`, so pool nodes land in the Ansible inventory group
+`oc_worker_nodes` (child of `kube_node`). Windows pools concatenate into
+`windows_nodes` the same way. Additional pools are an OpenStack feature: the
+baremetal and VMware templates do not render them.
+
 - Worker-pool command: `cmd/cluster_pool.go`
 - Pool fields: `internal/config/v2/infrastructure.go`
 - Pool command tests: `cmd/cluster_pool_test.go`

@@ -384,7 +384,17 @@ module "kubespray-cluster" {
   k8s_api_ip                              = local.k8s_api_ip
   k8s_internal_ip                         = local.vrrp_ip
 {{- else }}
-  worker_nodes                            = module.openstack-nova.worker_nodes
+  # Additional Linux worker pools are provisioned by openstack-nova but are only
+  # joined to the cluster when they reach the Kubespray inventory: concat them
+  # with the default worker pool so kube_node contains every worker node.
+  # additional_worker_pools_nodes is an empty map when no pools are configured,
+  # so the flatten yields [] and the default pool is unchanged.
+  worker_nodes = concat(
+    module.openstack-nova.worker_nodes,
+    flatten([
+      for pool_name, pool_nodes in module.openstack-nova.additional_worker_pools_nodes : pool_nodes
+    ])
+  )
   k8s_api_ip                              = module.openstack-nova.k8s_api_ip
   k8s_internal_ip                         = module.openstack-nova.k8s_internal_ip
 {{- end }}
