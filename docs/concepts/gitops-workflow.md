@@ -69,7 +69,6 @@ openCenter generates a standardized GitOps repository:
         ├── main.tf                # Terraform/OpenTofu
         ├── provider.tf
         ├── variables.tf
-        └── kubeconfig.yaml        # Generated after deployment
 
 └── clusters/<cluster>/             # Flux bootstrap path and bridge
     ├── flux-system/                 # Written by flux bootstrap
@@ -81,6 +80,10 @@ contract v2 the `kubespray-cluster` module renders it directly into the cluster
 state zone (`state/<org>/<cluster>/inventory/`) via `inventory_output_dir`.
 Legacy-mode trees (`deploy_cluster = true`) still render `inventory/` under
 `infrastructure/clusters/<cluster>/`; that subtree is git-ignored.
+
+The generated kubeconfig is **not** part of this tree either: it is written to
+the cluster state zone (`state/<org>/<cluster>/kubeconfig.yaml`) after
+deployment, never into the Git-tracked GitOps tree.
 
 **Design Rationale:**
 

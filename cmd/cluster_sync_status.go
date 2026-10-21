@@ -18,14 +18,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
-	corepaths "github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/security"
 )
 
@@ -100,7 +99,7 @@ The command requires:
 			}
 
 			// Get kubeconfig path
-			kubeconfigPath := getKubeconfigPathForSync(&cfg, clusterName)
+			kubeconfigPath := getKubeconfigPathForSync(ctx, &cfg)
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 				return fmt.Errorf("kubeconfig not found at %s - cluster may not be deployed yet", kubeconfigPath)
 			}
@@ -202,19 +201,14 @@ func runClusterStatusSync(cmd *cobra.Command, args []string, dryRun bool, output
 	return syncCmd.Execute()
 }
 
-// getKubeconfigPathForSync returns the kubeconfig path for the cluster.
-func getKubeconfigPathForSync(cfg *v2.Config, clusterName string) string {
-	if cfg.OpenCenter.GitOps.Repository.LocalDir != "" {
-		gitDir := corepaths.ExpandPath(cfg.OpenCenter.GitOps.Repository.LocalDir)
-		kubeconfigPath := filepath.Join(gitDir, "infrastructure", "clusters", clusterName, "kubeconfig.yaml")
-		if _, err := os.Stat(kubeconfigPath); err == nil {
-			return kubeconfigPath
-		}
+// getKubeconfigPathForSync returns the cluster-owned kubeconfig path from the
+// cluster state zone.
+func getKubeconfigPathForSync(ctx context.Context, cfg *v2.Config) string {
+	pathResolver := config.NewPathResolverFromConfig()
+	if clusterPaths, err := pathResolver.Resolve(ctx, cfg.ClusterName(), cfg.Organization()); err == nil && clusterPaths != nil {
+		return clusterPaths.KubeconfigPath
 	}
-
-	// Fallback to default location
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kube", "config")
+	return ""
 }
 
 // collectEnabledServices returns a map of enabled services from the config.

@@ -24,6 +24,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	corepaths "github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/resilience"
@@ -307,7 +308,7 @@ func printGitOpsStatus(cmd *cobra.Command, cfg *v2.Config, clusterName string) e
 	fmt.Fprintln(cmd.OutOrStdout(), "\nGitOps Status:")
 
 	// Check if kubeconfig exists
-	kubeconfigPath := getKubeconfigPath(cfg, clusterName)
+	kubeconfigPath := getKubeconfigPath(cmd.Context(), cfg)
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		fmt.Fprintln(cmd.OutOrStdout(), "  Kubeconfig not found - cluster may not be deployed yet")
 		return nil
@@ -352,21 +353,14 @@ func printGitOpsStatus(cmd *cobra.Command, cfg *v2.Config, clusterName string) e
 	return nil
 }
 
-// getKubeconfigPath returns the path to the kubeconfig file for the cluster
-func getKubeconfigPath(cfg *v2.Config, clusterName string) string {
-	// Try to get from GitOps directory first
-	if cfg.OpenCenter.GitOps.Repository.LocalDir != "" {
-		gitDir := corepaths.ExpandPath(cfg.OpenCenter.GitOps.Repository.LocalDir)
-
-		kubeconfigPath := filepath.Join(gitDir, "infrastructure", "clusters", clusterName, "kubeconfig.yaml")
-		if _, err := os.Stat(kubeconfigPath); err == nil {
-			return kubeconfigPath
-		}
+// getKubeconfigPath returns the cluster-owned kubeconfig path from the
+// cluster state zone.
+func getKubeconfigPath(ctx context.Context, cfg *v2.Config) string {
+	pathResolver := config.NewPathResolverFromConfig()
+	if clusterPaths, err := pathResolver.Resolve(ctx, cfg.ClusterName(), cfg.Organization()); err == nil && clusterPaths != nil {
+		return clusterPaths.KubeconfigPath
 	}
-
-	// Fallback to default location
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kube", "config")
+	return ""
 }
 
 // FluxKustomization represents a Flux Kustomization resource

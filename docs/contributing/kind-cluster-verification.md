@@ -20,12 +20,8 @@ tags: [kind, verification, testing, fluxcd, troubleshooting]
 * On ARM hosts, Rosetta emulation for amd64 containers, which Harbor requires (see [Pods `CrashLoopBackOff`](#pods-crashloopbackoff)).
 
 ```bash
-CLUSTER_NAME="my-cluster"
-GITOPS_DIR=$(opencenter cluster describe "$CLUSTER_NAME" 2>/dev/null | grep "git_dir:" | awk '{print $2}')
-export KUBECONFIG="$GITOPS_DIR/infrastructure/clusters/$CLUSTER_NAME/kubeconfig.yaml"
+eval "$(opencenter cluster env "$CLUSTER_NAME")"
 ```
-
-(`git_dir` is printed by `cmd/cluster_describe.go` from `opencenter.gitops.repository.local_dir`.)
 
 ## How service Kustomizations are actually wired
 
