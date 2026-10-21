@@ -139,6 +139,30 @@ func (cl *ConfigLoader) normalize(cfg *Config) error {
 		cfg.Deployment.Kubespray.CloudInitTimeout = defaultKubesprayCloudInitTimeout
 	}
 
+	// Contract v2 backfill: the CLI deploy path renders inventory_output_dir
+	// into the kubespray module call, and OpenTofu fails `init` with
+	// "Unsupported argument" when the module resolves to a pre-contract-2
+	// ref. Configs written before the module source fields existed (or
+	// hand-edited to drop them) would otherwise render a stale pin; backfill
+	// the contract v2 source whenever it is unset so every render resolves
+	// the module that satisfies the contract. Explicit user sources are
+	// never overwritten.
+	if cfg.Deployment.Kubespray != nil && strings.EqualFold(strings.TrimSpace(cfg.Deployment.Method), "kubespray") {
+		if strings.TrimSpace(cfg.Deployment.Kubespray.KubesprayCluster.Source) == "" {
+			cfg.Deployment.Kubespray.KubesprayCluster.Source = defaultKubesprayModuleSourceURL
+			cfg.Deployment.Kubespray.KubesprayCluster.Enabled = true
+		}
+		if cfg.Deployment.Kubespray.Modules == nil {
+			cfg.Deployment.Kubespray.Modules = map[string]ModuleConfig{}
+		}
+		module := cfg.Deployment.Kubespray.Modules["kubespray"]
+		if strings.TrimSpace(module.Source) == "" {
+			module.Source = defaultKubesprayModuleSourceURL
+			module.Enabled = true
+			cfg.Deployment.Kubespray.Modules["kubespray"] = module
+		}
+	}
+
 	// Handle empty string vs null for optional fields
 	// Ensure consistent representation
 

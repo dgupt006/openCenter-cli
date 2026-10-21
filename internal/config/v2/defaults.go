@@ -34,7 +34,13 @@ const (
 	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc2 tag so
 	// generated clusters resolve to a reproducible commit. The release (tag) slot
 	// takes precedence over branch, so branch is left empty.
-	defaultGitBaseRepoRelease         = "2026.03-rc2"
+	defaultGitBaseRepoRelease = "2026.03-rc2"
+	// kubesprayModuleTag pins the gitops-base tag carrying the lifecycle
+	// contract v2 kubespray module (inventory_output_dir). The kubespray
+	// module needs contract v2 while the CNI/IaC modules stay on the base
+	// release, so it is pinned independently.
+	kubesprayModuleTag                = "2026.10.21-contract2"
+	defaultKubesprayModuleSourceURL   = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=" + kubesprayModuleTag
 	defaultGitBaseRepoBranch          = ""
 	defaultGitopsAuthMethod           = "token"
 	defaultDefaultStorageClass        = "standard"
@@ -294,12 +300,12 @@ func NewV2Default(name, provider string) (*Config, error) {
 				Modules: map[string]ModuleConfig{
 					"kubespray": {
 						Enabled: true,
-						Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2",
+						Source:  defaultKubesprayModuleSourceURL,
 					},
 				},
 				KubesprayCluster: ModuleConfig{
 					Enabled: true,
-					Source:  "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2",
+					Source:  defaultKubesprayModuleSourceURL,
 				},
 			},
 		},
