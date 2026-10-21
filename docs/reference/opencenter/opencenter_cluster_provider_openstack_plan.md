@@ -22,6 +22,14 @@ availability zones read-only, and prints the changes without writing anything: i
 internal/external network and subnet IDs, availability zone, plus application credential and TLS
 settings when requested. No remote resources are created or modified.
 
+Selector flags (--image-name, --windows-image-name, --network-id, --subnet-id,
+--external-network-id, --availability-zone) accept a resource name or ID; a name
+that matches several discovered resources is rejected so nothing is picked
+silently. With no --image-name, the name Ubuntu 24.04 is resolved against the
+project inventory and reported as a warning; if the project does not have it, the
+candidate list is printed instead. --windows-image-name is only required when the
+cluster runs Windows workers.
+
 Use 'apply' with identical flags to persist the same change set.
 
 ```
@@ -31,19 +39,19 @@ opencenter cluster provider openstack plan <cluster> [flags]
 ### Options
 
 ```
-      --availability-zone string     availability zone
+      --availability-zone string     availability zone name or ID
       --clouds-yaml string           path to clouds.yaml
       --create-internal-network      let OpenTofu create and manage the internal network and subnet
-      --external-network-id string   external network ID
+      --external-network-id string   external network name or ID
   -h, --help                         help for plan
-      --image-id string              Linux image ID
+      --image-name string            Linux image name or ID
       --import-auth                  write application credential fields from the selected profile
       --import-tls                   persist selected profile TLS settings
-      --network-id string            internal network ID
+      --network-id string            internal network name or ID
       --os-cloud string              profile name inside clouds.yaml to use for discovery
       --replace                      allow replacing populated provider selections
-      --subnet-id string             internal subnet ID
-      --windows-image-id string      Windows image ID
+      --subnet-id string             internal subnet name or ID
+      --windows-image-name string    Windows image name or ID
 ```
 
 ### Options inherited from parent commands
