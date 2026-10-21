@@ -59,6 +59,24 @@ func ValidateGeneration(cfg *Config) GenerationValidationReport {
 	for _, issue := range readiness.Issues {
 		report.addIssue(issue)
 	}
+
+	// Lifecycle contract v2: the CLI deploy path always renders the
+	// infrastructure in cli lifecycle mode, which requires the kubespray
+	// module to support inventory_output_dir. A config whose module slots pin
+	// a pre-contract-2 gitops-base ref renders the inventory inside the
+	// GitOps worktree, and `cluster deploy` then fails in kubespray-prepare
+	// with "inventory rendered outside the cluster state zone". Block
+	// generation with the exact repair command instead.
+	if RequiresKubesprayModuleContract2Upgrade(cfg) {
+		report.addIssue(ValidationIssue{
+			Severity: SeverityError,
+			Category: CategorySchema,
+			Path:     "deployment.kubespray",
+			Message: fmt.Sprintf(
+				"Kubespray module source pins a ref older than lifecycle contract 2 (inventory_output_dir); run: opencenter cluster set %s deployment.kubespray.kubespray_cluster.source=%q deployment.kubespray.modules.kubespray.source=%q",
+				cfg.ClusterName(), DefaultKubesprayModuleSourceURL, DefaultKubesprayModuleSourceURL),
+		})
+	}
 	return report
 }
 

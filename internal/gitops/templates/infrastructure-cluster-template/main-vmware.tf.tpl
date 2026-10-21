@@ -121,7 +121,7 @@ locals {
 
 # Kubespray module for Kubernetes deployment on pre-provisioned VMware VMs
 module "kubespray-cluster" {
-  source = "{{ .Deployment.Kubespray.KubesprayCluster.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2" }}"
+  source = "{{ .Deployment.Kubespray.KubesprayCluster.Source | default defaultKubesprayModuleSource }}"
   # CLI mode makes OpenTofu infrastructure-only; legacy mode preserves
   # Deployment.AutoDeploy through local.deploy_cluster.
   

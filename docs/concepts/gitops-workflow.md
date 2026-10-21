@@ -137,7 +137,7 @@ spec:
 ```
 
 The default base reference is the immutable `2026.03-rc2` tag (set via `cluster init` defaults and
-the infrastructure OpenTofu module `?ref=` sources; the `kubespray-cluster` module alone pins the newer `2026.10.21-contract2` tag, which adds `inventory_output_dir` for lifecycle contract v2). It is configured in the release (tag) slot
+the infrastructure OpenTofu module `?ref=` sources; the `kubespray-cluster` module alone pins the newer `2026.10.21-contract2` tag, which adds `inventory_output_dir` for lifecycle contract v2, and the config loader upgrades any stale pre-contract-2 `deployment.kubespray.kubespray_cluster.source` / `deployment.kubespray.modules.kubespray.source` pin to that ref at load time). It is configured in the release (tag) slot
 (`opencenter.gitops.base_repo.release`) with the branch left empty, so Flux and the IaC modules both
 resolve to the same reproducible commit. The release (tag) takes precedence over branch: set
 `opencenter.gitops.base_repo.branch` (with release empty) to track a mutable branch instead, or set a

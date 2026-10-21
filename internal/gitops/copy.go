@@ -280,6 +280,14 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 		return inventoryStateDir(cfg)
 	}
 
+	// defaultKubesprayModuleSource is the contract v2 kubespray module source
+	// (single constant in internal/config/v2). Templates use it as the
+	// `default` fallback for the module slot so the rendered pin can never
+	// drift from the value the loader backfills.
+	funcMap["defaultKubesprayModuleSource"] = func() string {
+		return v2.DefaultKubesprayModuleSourceURL
+	}
+
 	// autoServices returns service names that use auto-descriptors (no explicit
 	// descriptor) and own their own source (not shared). Used by aggregate templates
 	// to include dynamically-added services.

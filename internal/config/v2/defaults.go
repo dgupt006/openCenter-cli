@@ -46,7 +46,7 @@ const (
 	// module needs contract v2 while the CNI/IaC modules stay on the base
 	// release, so it is pinned independently.
 	kubesprayModuleTag                = "2026.10.21-contract2"
-	defaultKubesprayModuleSourceURL   = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=" + kubesprayModuleTag
+	DefaultKubesprayModuleSourceURL   = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=" + kubesprayModuleTag
 	defaultGitBaseRepoBranch          = ""
 	defaultGitopsAuthMethod           = "token"
 	defaultDefaultStorageClass        = "standard"
@@ -306,12 +306,12 @@ func NewV2Default(name, provider string) (*Config, error) {
 				Modules: map[string]ModuleConfig{
 					"kubespray": {
 						Enabled: true,
-						Source:  defaultKubesprayModuleSourceURL,
+						Source:  DefaultKubesprayModuleSourceURL,
 					},
 				},
 				KubesprayCluster: ModuleConfig{
 					Enabled: true,
-					Source:  defaultKubesprayModuleSourceURL,
+					Source:  DefaultKubesprayModuleSourceURL,
 				},
 			},
 		},

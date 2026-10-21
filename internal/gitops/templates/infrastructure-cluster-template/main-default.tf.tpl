@@ -339,7 +339,7 @@ module "openstack-nova" {
 {{- end }}
 
 module "kubespray-cluster" {
-  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2" }}"
+  source = "{{ (index .Deployment.Kubespray.Modules "kubespray").Source | default defaultKubesprayModuleSource }}"
   # CLI mode makes OpenTofu infrastructure-only; legacy mode preserves
   # Deployment.AutoDeploy through local.deploy_cluster.
 {{- if eq (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
