@@ -401,6 +401,7 @@ func TestKindLifecycleSmoke(t *testing.T) {
 
 	dir := t.TempDir()
 	prepareCommandTestEnv(t, dir)
+	installFakeHelm4ForDeployTests(t)
 	clusterName := "kind-smoke-int"
 
 	initCmd := newClusterInitCmd()

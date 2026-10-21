@@ -76,6 +76,7 @@ func TestClusterDeployDryRunMake(t *testing.T) {
 
 	writeTestConfig(t, cfgDir, "demo", "openstack", gitDir)
 	prepareCommandTestEnv(t, cfgDir)
+	installFakeHelm4ForDeployTests(t)
 
 	cmd := newClusterDeployCmd()
 	cmd.SetContext(context.WithValue(context.Background(), globalOptionsContextKey{}, GlobalOptions{DryRun: true, Output: OutputText}))
