@@ -28,12 +28,6 @@ If no cluster name is provided, the active cluster will be destroyed.
 If an existing lock is found, you will be prompted to break it. Use --break-lock
 to automatically break any existing lock without prompting.
 
-**OpenStack CSI volume cleanup** — When an OpenStack cluster is destroyed, Cinder
-volumes that were dynamically provisioned by the CSI driver (`cinder.csi.openstack.org`)
-are not removed by OpenTofu because they were created by Kubernetes, not Terraform.
-By default, `cluster destroy` reports any orphaned volumes so you can clean them up
-manually. Use `--delete-volumes` to delete them automatically.
-
 ```
 opencenter cluster destroy [name] [flags]
 ```
@@ -58,12 +52,6 @@ opencenter cluster destroy [name] [flags]
 
   # Destroy active cluster
   opencenter cluster destroy --force
-
-  # Destroy and automatically delete orphaned CSI Cinder volumes (OpenStack only)
-  opencenter cluster destroy my-cluster --force --delete-volumes
-
-  # Destroy without deleting volumes — orphaned volumes are reported instead
-  opencenter cluster destroy my-cluster --force
 ```
 
 ### Options
@@ -90,4 +78,3 @@ opencenter cluster destroy [name] [flags]
 ### SEE ALSO
 
 * [opencenter cluster](opencenter_cluster.md)	 - Manage cluster configurations
-* [Destroy an OpenStack cluster](../../operations/destroy-openstack-cluster.md) - Step-by-step teardown guide including CSI volume cleanup
