@@ -43,8 +43,17 @@ printf 'SET:%s\n' "${OPENCENTER_CLUSTER:-}"
 opencenter cluster use --clear >/dev/null
 printf 'CLEAR:%s\n' "${OPENCENTER_CLUSTER-unset}"
 `
-	cmd := exec.Command("bash", "-lc", script)
-	cmd.Env = append(os.Environ(),
+	cmd := exec.Command("bash", "--noprofile", "--norc", "-c", script)
+	env := make([]string, 0, len(os.Environ())+6)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "BASH_ENV=") || strings.HasPrefix(value, "ENV=") {
+			continue
+		}
+		env = append(env, value)
+	}
+	cmd.Env = append(env,
+		"BASH_ENV=",
+		"ENV=",
 		"HOME="+dir,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"OPENCENTER_SESSION_FILE="+filepath.Join(dir, "session"),

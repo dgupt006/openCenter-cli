@@ -2,9 +2,19 @@ package cmd
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func installFakeHelm4ForDeployTests(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	writeFakeExecutable(t, filepath.Join(binDir, "helm"), "#!/bin/sh\nprintf '%s\\n' 'v4.0.0+test'\n")
+	writeFakeExecutable(t, filepath.Join(binDir, "sops"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 func TestCheckDeployPrerequisitesAcceptsHelm4AndSOPS(t *testing.T) {
 	err := checkDeployPrerequisitesWith(deployPrerequisiteRunner{

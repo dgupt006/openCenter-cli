@@ -34,6 +34,12 @@ Provider prerequisites and configuration details vary. Start with the
 [documentation index](docs/index.md), especially [Getting Started](docs/getting-started/getting-started.md)
 and the [provider reference](docs/reference/providers.md).
 
+### Deploy prerequisites
+
+Before changing infrastructure, `cluster deploy` verifies that SOPS is
+available in `PATH` and that Helm 4 is available. Missing prerequisites are
+reported together so they can be installed before retrying the deployment.
+
 ## Documentation
 
 - [Documentation index](docs/index.md) — reader-facing source index.
