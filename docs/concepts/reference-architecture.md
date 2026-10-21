@@ -535,7 +535,7 @@ provider, so those values should not be read as supported deploy paths.
 
 ### Additional Worker Pools
 
-`opencenter.infrastructure.compute.additional_server_pools_worker` is an array whose items require `name` and `flavor`; the other real fields are `count`, `image`, `labels` (map of strings), `taints` (each with required `key`/`effect`), `boot_volume` (with required `size`, plus `destination_type`/`source_type`/`type`/`delete_on_termination`), and `additional_volumes`. There is **no** `worker_count`, `flavor_worker`, `node_worker`, `server_group_affinity`, or `worker_node_bfv_volume_size` field on this object — those names do not exist in `schema/opencenter-v2.schema.json`:
+`opencenter.infrastructure.compute.additional_server_pools_worker` is an array whose items require `name` and `flavor`; the other real fields are `count`, `image`, `labels` (map of strings), `taints` (each with required `key`/`effect`), `boot_volume` (with required `size`, plus `destination_type`/`source_type`/`type`/`delete_on_termination`), `additional_volumes`, and `pf9_onboard` (bool). Unset `boot_volume` fields default to `size: 256`, `destination_type: volume`, `source_type: image`, `type: HA-Performance`, `delete_on_termination: true` (applied by `cluster pool add`/`update` and again at render time); each rendered pool also carries `additional_block_devices_worker = []` and `pf9_onboard = false` unless set. There is **no** `worker_count`, `flavor_worker`, `node_worker`, or `server_group_affinity` field on this object — those names do not exist in `schema/opencenter-v2.schema.json`:
 
 ```yaml
 opencenter:

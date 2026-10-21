@@ -19,8 +19,8 @@ opencenter cluster pool update <pool-name> [flags]
 ### Options
 
 ```
-      --boot-volume-size int      Boot volume size in GB
-      --boot-volume-type string   Boot volume type
+      --boot-volume-size int      Boot volume size in GB (default 256 for Linux pools)
+      --boot-volume-type string   Boot volume type (default HA-Performance for Linux pools)
       --cluster string            Cluster name
       --count int                 Number of nodes
       --flavor string             Instance flavor

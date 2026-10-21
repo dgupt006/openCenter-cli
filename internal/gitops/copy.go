@@ -1031,6 +1031,13 @@ func RenderInfrastructureClusterAtomic(cfg v2.Config, workspace *GitOpsWorkspace
 		mainTfTemplate = "main-default.tf.tpl"
 	}
 
+	// Linux worker pools always render a complete boot-from-volume block;
+	// pools created outside `cluster pool add` (hand-edited config, cluster
+	// set) get the platform boot-volume defaults at render time.
+	for i := range cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker {
+		v2.ApplyWorkerPoolBootVolumeDefaults(&cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[i])
+	}
+
 	// Walk embedded infrastructure-cluster-template files
 	return fs.WalkDir(Files, "templates/infrastructure-cluster-template", func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

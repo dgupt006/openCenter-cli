@@ -190,6 +190,40 @@ type WorkerPoolConfig struct {
 	AdditionalVolumes []VolumeConfig    `yaml:"additional_volumes,omitempty" json:"additional_volumes,omitempty"`
 	Labels            map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Taints            []TaintConfig     `yaml:"taints,omitempty" json:"taints,omitempty"`
+	// PF9Onboard requests PF9 onboarding for this pool's nodes.
+	PF9Onboard bool `yaml:"pf9_onboard,omitempty" json:"pf9_onboard,omitempty"`
+}
+
+// Worker pool boot-volume defaults applied when a pool omits boot_volume
+// fields. These match the platform reference boot-from-volume configuration:
+// 256 GB HA-Performance volumes created from the pool image, deleted with the
+// node, no PF9 onboarding.
+const (
+	DefaultWorkerPoolBootVolumeSize            = 256
+	DefaultWorkerPoolBootVolumeDestinationType = "volume"
+	DefaultWorkerPoolBootVolumeSourceType      = "image"
+	DefaultWorkerPoolBootVolumeType            = "HA-Performance"
+	DefaultWorkerPoolBootVolumeDeleteOnTerm    = true
+)
+
+// ApplyWorkerPoolBootVolumeDefaults fills unset boot-volume fields on a Linux
+// worker pool with the platform defaults. Fields already set are preserved.
+func ApplyWorkerPoolBootVolumeDefaults(pool *WorkerPoolConfig) {
+	if pool.BootVolume.Size == 0 {
+		pool.BootVolume.Size = DefaultWorkerPoolBootVolumeSize
+	}
+	if pool.BootVolume.DestinationType == "" {
+		pool.BootVolume.DestinationType = DefaultWorkerPoolBootVolumeDestinationType
+	}
+	if pool.BootVolume.SourceType == "" {
+		pool.BootVolume.SourceType = DefaultWorkerPoolBootVolumeSourceType
+	}
+	if pool.BootVolume.Type == "" {
+		pool.BootVolume.Type = DefaultWorkerPoolBootVolumeType
+	}
+	if !pool.BootVolume.DeleteOnTermination {
+		pool.BootVolume.DeleteOnTermination = DefaultWorkerPoolBootVolumeDeleteOnTerm
+	}
 }
 
 // WindowsWorkerPoolConfig represents an additional Windows worker pool.

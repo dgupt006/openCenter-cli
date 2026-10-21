@@ -98,22 +98,16 @@ locals {
     worker_count                        = {{ $pool.Count }}
     flavor_worker                       = "{{ $pool.Flavor }}"
     node_worker                         = "{{ $pool.Name }}"
+    worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size | default 256 }}
+    worker_node_bfv_destination_type    = "{{ $pool.BootVolume.DestinationType | default "volume" }}"
+    worker_node_bfv_source_type         = "{{ $pool.BootVolume.SourceType | default "image" }}"
+    worker_node_bfv_volume_type         = "{{ $pool.BootVolume.Type | default "HA-Performance" }}"
+    worker_node_bfv_delete_on_termination = {{ $pool.BootVolume.DeleteOnTermination | default true }}
+    additional_block_devices_worker     = []
+    pf9_onboard                         = {{ $pool.PF9Onboard | default false }}
     {{- if $pool.Image }}
     image_id                            = "{{ $pool.Image }}"
     {{- end }}
-    {{- if $pool.BootVolume.Size }}
-    worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size }}
-    {{- end }}
-    {{- if $pool.BootVolume.DestinationType }}
-    worker_node_bfv_destination_type    = "{{ $pool.BootVolume.DestinationType }}"
-    {{- end }}
-    {{- if $pool.BootVolume.SourceType }}
-    worker_node_bfv_source_type         = "{{ $pool.BootVolume.SourceType }}"
-    {{- end }}
-    {{- if $pool.BootVolume.Type }}
-    worker_node_bfv_volume_type         = "{{ $pool.BootVolume.Type }}"
-    {{- end }}
-    worker_node_bfv_delete_on_termination = {{ $pool.BootVolume.DeleteOnTermination }}
   }{{ end }}]{{ else }}[]{{ end }}
 
   # ===================================

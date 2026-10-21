@@ -23,11 +23,13 @@ opencenter cluster pool add batch \
 ```
 
 Supported add flags include `--image`, `--os linux|windows`,
-`--boot-volume-size`, `--boot-volume-type`, repeatable `--label key=value`, and
-repeatable `--taint key=value:effect`. `--flavor` is required. `cluster pool
-update` accepts the same `--label`/`--taint` flags; there they replace the
-pool's existing labels/taints wholesale -- see [Manage worker
-pools](manage-worker-pools.md).
+`--boot-volume-size`, `--boot-volume-type`, repeatable `--label key=value`,
+repeatable `--taint key=value:effect`, and `--pf9-onboard`. `--flavor` is
+required. Linux pools default their boot volume to 256 GB `HA-Performance`
+(destination `volume`, source `image`, delete on termination) when those
+fields are not passed. `cluster pool update` accepts the same `--label`/
+`--taint` flags; there they replace the pool's existing labels/taints
+wholesale -- see [Manage worker pools](manage-worker-pools.md).
 
 The command stores Linux pools under
 `opencenter.infrastructure.compute.additional_server_pools_worker` and Windows

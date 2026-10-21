@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 )
 
 func TestKubeletRotateServerCertsRendering(t *testing.T) {
@@ -83,6 +85,57 @@ func TestOpenStackWorkerGroupAffinityRender(t *testing.T) {
 	mainTfHard := mustReadFile(t, filepath.Join(tmpDir2, "infrastructure", "clusters", "os-hard-anti", "main.tf"))
 	assert.Contains(t, mainTfHard, "wn_server_group_affinity                = [\"anti-affinity\"]",
 		"explicit hard anti-affinity must be preserved when set in config")
+}
+
+func TestWorkerPoolBootVolumeDefaultsRender(t *testing.T) {
+	// A pool with no boot_volume configured must render the full
+	// boot-from-volume block with platform defaults, an empty per-pool
+	// additional_block_devices_worker, and pf9_onboard = false.
+	tmpDir := t.TempDir()
+	cfg := mustNewGitOpsTestConfig("os-pool-defaults", "openstack")
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+		{Name: "gpu-wg1", Flavor: "gpu0.10.98.32", Count: 2},
+	}
+	cfg.OpenCenter.GitOps.Repository.LocalDir = tmpDir
+	require.NoError(t, RenderInfrastructureCluster(cfg))
+
+	mainTf := mustReadFile(t, filepath.Join(tmpDir, "infrastructure", "clusters", "os-pool-defaults", "main.tf"))
+	assert.Contains(t, mainTf, "worker_node_bfv_volume_size         = 256")
+	assert.Contains(t, mainTf, `worker_node_bfv_destination_type    = "volume"`)
+	assert.Contains(t, mainTf, `worker_node_bfv_source_type         = "image"`)
+	assert.Contains(t, mainTf, `worker_node_bfv_volume_type         = "HA-Performance"`)
+	assert.Contains(t, mainTf, "worker_node_bfv_delete_on_termination = true")
+	assert.Contains(t, mainTf, "additional_block_devices_worker     = []")
+	assert.Contains(t, mainTf, "pf9_onboard                         = false")
+}
+
+func TestWorkerPoolBootVolumeExplicitRender(t *testing.T) {
+	// Explicit pool boot-volume values and pf9_onboard = true must survive
+	// rendering unchanged.
+	tmpDir := t.TempDir()
+	cfg := mustNewGitOpsTestConfig("os-pool-explicit", "openstack")
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+		{
+			Name:   "gpu-wg2",
+			Flavor: "gpu0.10.98.32",
+			Count:  1,
+			BootVolume: v2.VolumeConfig{
+				Size:            512,
+				DestinationType: "volume",
+				SourceType:      "snapshot",
+				Type:            "HA-Standard",
+			},
+			PF9Onboard: true,
+		},
+	}
+	cfg.OpenCenter.GitOps.Repository.LocalDir = tmpDir
+	require.NoError(t, RenderInfrastructureCluster(cfg))
+
+	mainTf := mustReadFile(t, filepath.Join(tmpDir, "infrastructure", "clusters", "os-pool-explicit", "main.tf"))
+	assert.Contains(t, mainTf, "worker_node_bfv_volume_size         = 512")
+	assert.Contains(t, mainTf, `worker_node_bfv_source_type         = "snapshot"`)
+	assert.Contains(t, mainTf, `worker_node_bfv_volume_type         = "HA-Standard"`)
+	assert.Contains(t, mainTf, "pf9_onboard                         = true")
 }
 
 func TestOpenStackCpServerGroupAffinityRender(t *testing.T) {

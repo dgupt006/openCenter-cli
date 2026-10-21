@@ -33,6 +33,7 @@ func newClusterPoolAddCmd() *cobra.Command {
 		bootVolumeType string
 		labels         []string
 		taints         []string
+		pf9Onboard     bool
 		cluster        string
 	)
 	cmd := &cobra.Command{
@@ -78,16 +79,18 @@ func newClusterPoolAddCmd() *cobra.Command {
 					cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorkerWindows, pool)
 			} else {
 				pool := v2.WorkerPoolConfig{
-					Name:   poolName,
-					Count:  count,
-					Flavor: flavor,
-					Image:  image,
-					Labels: parsedLabels,
-					Taints: parsedTaints,
+					Name:       poolName,
+					Count:      count,
+					Flavor:     flavor,
+					Image:      image,
+					Labels:     parsedLabels,
+					Taints:     parsedTaints,
+					PF9Onboard: pf9Onboard,
 				}
 				if bootVolumeSize > 0 {
 					pool.BootVolume = v2.VolumeConfig{Size: bootVolumeSize, Type: bootVolumeType}
 				}
+				v2.ApplyWorkerPoolBootVolumeDefaults(&pool)
 				cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = append(
 					cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker, pool)
 			}
@@ -108,10 +111,11 @@ func newClusterPoolAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flavor, "flavor", "", "Instance flavor (required)")
 	cmd.Flags().StringVar(&image, "image", "", "OS image override")
 	cmd.Flags().StringVar(&osType, "os", "linux", "Pool OS type (linux|windows)")
-	cmd.Flags().IntVar(&bootVolumeSize, "boot-volume-size", 0, "Boot volume size in GB")
-	cmd.Flags().StringVar(&bootVolumeType, "boot-volume-type", "", "Boot volume type")
+	cmd.Flags().IntVar(&bootVolumeSize, "boot-volume-size", 0, "Boot volume size in GB (default 256 for Linux pools)")
+	cmd.Flags().StringVar(&bootVolumeType, "boot-volume-type", "", "Boot volume type (default HA-Performance for Linux pools)")
 	cmd.Flags().StringSliceVar(&labels, "label", nil, "Node label (key=value, repeatable)")
 	cmd.Flags().StringSliceVar(&taints, "taint", nil, "Node taint (key=value:effect, repeatable)")
+	cmd.Flags().BoolVar(&pf9Onboard, "pf9-onboard", false, "Request PF9 onboarding for this Linux pool's nodes")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster name")
 	_ = cmd.MarkFlagRequired("flavor")
 	return cmd
@@ -177,6 +181,9 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 					if cmd.Flags().Changed("taint") {
 						p.Taints = parsedTaints
 					}
+					// Linux pools always carry the full boot-volume block;
+					// explicit flags above win, unset fields get defaults.
+					v2.ApplyWorkerPoolBootVolumeDefaults(p)
 					updated = true
 					break
 				}
@@ -230,8 +237,8 @@ func newClusterPoolUpdateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&count, "count", 0, "Number of nodes")
 	cmd.Flags().StringVar(&flavor, "flavor", "", "Instance flavor")
 	cmd.Flags().StringVar(&image, "image", "", "OS image override")
-	cmd.Flags().IntVar(&bootVolumeSize, "boot-volume-size", 0, "Boot volume size in GB")
-	cmd.Flags().StringVar(&bootVolumeType, "boot-volume-type", "", "Boot volume type")
+	cmd.Flags().IntVar(&bootVolumeSize, "boot-volume-size", 0, "Boot volume size in GB (default 256 for Linux pools)")
+	cmd.Flags().StringVar(&bootVolumeType, "boot-volume-type", "", "Boot volume type (default HA-Performance for Linux pools)")
 	cmd.Flags().StringSliceVar(&labels, "label", nil, "Replace node labels with these (key=value, repeatable)")
 	cmd.Flags().StringSliceVar(&taints, "taint", nil, "Replace node taints with these (key=value:effect, repeatable)")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster name")

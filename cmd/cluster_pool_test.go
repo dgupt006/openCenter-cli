@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -368,6 +369,103 @@ func mustPool(t *testing.T, cfgDir, cluster, poolName string) v2.WorkerPoolConfi
 	}
 	t.Fatalf("pool %q not found in config", poolName)
 	return v2.WorkerPoolConfig{}
+}
+
+func TestClusterPoolAdd_AppliesBootVolumeDefaults(t *testing.T) {
+	cfgDir := t.TempDir()
+	writeTestConfig(t, cfgDir, "demo", "openstack", "")
+	prepareCommandTestEnv(t, cfgDir)
+
+	runPool(t, "add", "gpu-wg1", "--cluster=demo", "--flavor=gpu0.10.98.32", "--count=2")
+
+	pool := mustPool(t, cfgDir, "demo", "gpu-wg1")
+	want := v2.VolumeConfig{
+		Size:                256,
+		DestinationType:     "volume",
+		SourceType:          "image",
+		Type:                "HA-Performance",
+		DeleteOnTermination: true,
+	}
+	if pool.BootVolume != want {
+		t.Fatalf("boot_volume = %+v, want %+v", pool.BootVolume, want)
+	}
+	if pool.PF9Onboard {
+		t.Fatal("pf9_onboard = true, want false by default")
+	}
+}
+
+func TestClusterPoolAdd_ExplicitBootVolumeWins(t *testing.T) {
+	cfgDir := t.TempDir()
+	writeTestConfig(t, cfgDir, "demo", "openstack", "")
+	prepareCommandTestEnv(t, cfgDir)
+
+	runPool(t, "add", "custom-pool", "--cluster=demo", "--flavor=m1.large", "--count=1",
+		"--boot-volume-size=100", "--boot-volume-type=HA-Standard", "--pf9-onboard")
+
+	pool := mustPool(t, cfgDir, "demo", "custom-pool")
+	if pool.BootVolume.Size != 100 || pool.BootVolume.Type != "HA-Standard" {
+		t.Fatalf("explicit boot volume overridden: %+v", pool.BootVolume)
+	}
+	if pool.BootVolume.DestinationType != "volume" || pool.BootVolume.SourceType != "image" || !pool.BootVolume.DeleteOnTermination {
+		t.Fatalf("unset boot-volume fields should get defaults: %+v", pool.BootVolume)
+	}
+	if !pool.PF9Onboard {
+		t.Fatal("pf9_onboard = false, want true with --pf9-onboard")
+	}
+}
+
+func TestClusterPoolUpdate_BackfillsBootVolumeDefaults(t *testing.T) {
+	cfgDir := t.TempDir()
+	writeTestConfig(t, cfgDir, "demo", "openstack", "")
+	prepareCommandTestEnv(t, cfgDir)
+
+	runPool(t, "add", "legacy-pool", "--cluster=demo", "--flavor=m1.large", "--count=1")
+
+	// Strip the persisted boot_volume block to simulate a pool created
+	// before defaults existed (hand-written config / cluster set).
+	cfgPath := filepath.Join(cfgDir, "clusters", "blueprints", "opencenter", "demo", "demo-config.yaml")
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var kept []string
+	inBootVolume := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "boot_volume:" {
+			inBootVolume = true
+			continue
+		}
+		if inBootVolume {
+			if strings.HasPrefix(line, "          ") {
+				continue
+			}
+			inBootVolume = false
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(cfgPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+		t.Fatalf("strip boot_volume: %v", err)
+	}
+	if p := mustPool(t, cfgDir, "demo", "legacy-pool"); p.BootVolume.Size != 0 {
+		t.Fatalf("fixture strip failed: boot_volume still %+v", p.BootVolume)
+	}
+
+	runPool(t, "update", "legacy-pool", "--cluster=demo", "--count=3")
+
+	pool := mustPool(t, cfgDir, "demo", "legacy-pool")
+	if pool.Count != 3 {
+		t.Fatalf("count = %d, want 3", pool.Count)
+	}
+	want := v2.VolumeConfig{
+		Size:                256,
+		DestinationType:     "volume",
+		SourceType:          "image",
+		Type:                "HA-Performance",
+		DeleteOnTermination: true,
+	}
+	if pool.BootVolume != want {
+		t.Fatalf("boot_volume = %+v, want defaults %+v", pool.BootVolume, want)
+	}
 }
 
 // Suppress unused import warning for v2 — used by other test files in same package.

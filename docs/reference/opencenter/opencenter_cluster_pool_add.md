@@ -19,8 +19,8 @@ opencenter cluster pool add <pool-name> [flags]
 ### Options
 
 ```
-      --boot-volume-size int      Boot volume size in GB
-      --boot-volume-type string   Boot volume type
+      --boot-volume-size int      Boot volume size in GB (default 256 for Linux pools)
+      --boot-volume-type string   Boot volume type (default HA-Performance for Linux pools)
       --cluster string            Cluster name
       --count int                 Number of nodes in the pool (default 1)
       --flavor string             Instance flavor (required)
@@ -28,6 +28,7 @@ opencenter cluster pool add <pool-name> [flags]
       --image string              OS image override
       --label strings             Node label (key=value, repeatable)
       --os string                 Pool OS type (linux|windows) (default "linux")
+      --pf9-onboard               Request PF9 onboarding for this Linux pool's nodes
       --taint strings             Node taint (key=value:effect, repeatable)
 ```
 

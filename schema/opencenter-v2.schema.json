@@ -1920,6 +1920,9 @@
                         "pattern": "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$",
                         "type": "string"
                       },
+                      "pf9_onboard": {
+                        "type": "boolean"
+                      },
                       "taints": {
                         "items": {
                           "additionalProperties": false,

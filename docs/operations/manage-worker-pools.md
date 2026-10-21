@@ -37,8 +37,11 @@ labels, and taints. `--label`/`--taint` are repeatable and **replace** the
 pool's existing labels/taints wholesale when provided; omitting them leaves
 those fields untouched. Pass an empty value (`--label=` / `--taint=`) to clear.
 Taint format is `key=value:effect` with effect one of `NoSchedule`,
-`PreferNoSchedule`, `NoExecute`. `scale` changes only the target count. Both
-commands support global `--dry-run`.
+`PreferNoSchedule`, `NoExecute`. Linux pools always end up with a complete
+boot-volume block: unset fields are filled with the platform defaults (256 GB
+`HA-Performance`, destination `volume`, source `image`, delete on termination)
+on add and on the first update after they were introduced. `scale` changes
+only the target count. Both commands support global `--dry-run`.
 
 ## Remove
 
