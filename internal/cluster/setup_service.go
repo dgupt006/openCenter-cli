@@ -232,7 +232,7 @@ func (s *SetupService) generateGitOpsManifestsWithPromotion(ctx context.Context,
 	generationOptions := gitops.StagedGenerationOptions{
 		Encrypt:               s.overlayEncryptor.EncryptServiceOverrideValues,
 		IncludeInfrastructure: strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider)) != "magnum",
-		IncludeFluxBridge:     true,
+		IncludeFluxBridge:     cfg.ShouldRenderFluxBridge(),
 		Promote:               promoteOpts,
 	}
 	provider := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider))

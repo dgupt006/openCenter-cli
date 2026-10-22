@@ -119,12 +119,7 @@ func resolveFluxBootstrapParams(cfg *v2.Config) (*fluxBootstrapParams, error) {
 	if clusterName == "" {
 		return nil, fmt.Errorf("cluster name must be set for flux bootstrap path")
 	}
-	bootstrapPath := "clusters/" + clusterName
-
-	// Allow the user to override the path via gitops.repository.path.
-	if configPath := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.Path); configPath != "" {
-		bootstrapPath = configPath
-	}
+	bootstrapPath := cfg.FluxBootstrapPath()
 
 	tokenFile := strings.TrimSpace(cfg.OpenCenter.GitOps.Auth.Token.TokenFile)
 	if tokenFile == "" {

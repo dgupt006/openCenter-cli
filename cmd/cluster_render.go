@@ -145,7 +145,7 @@ func renderAllServicesWithOptionsAndValidator(cfg *v2.Config, force bool, dryRun
 			Encrypt:               encryptRenderedServiceOverrides,
 			ValidateManifest:      manifestValidator,
 			IncludeInfrastructure: true,
-			IncludeFluxBridge:     true,
+			IncludeFluxBridge:     cfg.ShouldRenderFluxBridge(),
 			Promote: gitops.PromoteOptions{
 				Prune:          &prune,
 				DryRun:         true,
@@ -171,7 +171,7 @@ func renderAllServicesWithOptionsAndValidator(cfg *v2.Config, force bool, dryRun
 		Encrypt:               encryptRenderedServiceOverrides,
 		ValidateManifest:      manifestValidator,
 		IncludeInfrastructure: true,
-		IncludeFluxBridge:     true,
+		IncludeFluxBridge:     cfg.ShouldRenderFluxBridge(),
 		BeforePromote: func() error {
 			if !force {
 				return nil
@@ -248,7 +248,7 @@ func renderServicesOnlyWithOptions(cfg *v2.Config, force bool, dryRun, prune, ad
 		}
 		promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
 			Encrypt:           encryptRenderedServiceOverrides,
-			IncludeFluxBridge: true,
+			IncludeFluxBridge: cfg.ShouldRenderFluxBridge(),
 			Promote: gitops.PromoteOptions{
 				Prune:          &prune,
 				DryRun:         true,
@@ -271,7 +271,7 @@ func renderServicesOnlyWithOptions(cfg *v2.Config, force bool, dryRun, prune, ad
 	fmt.Fprintf(cmd.OutOrStdout(), "Rendering all services (no infrastructure) for cluster: %s\n", clusterName)
 	promotion, _, err := gitops.GenerateClusterTree(cmd.Context(), *cfg, gitops.StagedGenerationOptions{
 		Encrypt:           encryptRenderedServiceOverrides,
-		IncludeFluxBridge: true,
+		IncludeFluxBridge: cfg.ShouldRenderFluxBridge(),
 		BeforePromote: func() error {
 			if !force {
 				return nil

@@ -154,7 +154,10 @@ func (s *Service) Bootstrap(ctx context.Context, clusterIdentifier string) (*Boo
 		return nil, err
 	}
 
-	bootstrapPath := filepathForFlux(cluster.ClusterName)
+	bootstrapPath := cluster.Config.FluxBootstrapPath()
+	if bootstrapPath == "" {
+		bootstrapPath = filepathForFlux(cluster.ClusterName)
+	}
 	kubeconfigEnv := map[string]string{"KUBECONFIG": cluster.Paths.KubeconfigPath}
 
 	// Build provider-specific flux bootstrap arguments

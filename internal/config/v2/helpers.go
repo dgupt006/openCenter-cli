@@ -361,6 +361,30 @@ func (c Config) KindDisableDefaultCNI() bool {
 	return c.OpenCenter.Infrastructure.Kind != nil && c.OpenCenter.Infrastructure.Kind.DisableDefaultCNI
 }
 
+// FluxBootstrapPath returns the repository path where Flux should be bootstrapped.
+// Defaults to "applications/overlays/" + clusterName, matching the standard
+// overlay layout, unless overridden by opencenter.gitops.repository.path.
+func (c Config) FluxBootstrapPath() string {
+	if configPath := strings.TrimSpace(c.OpenCenter.GitOps.Repository.Path); configPath != "" {
+		return configPath
+	}
+	clusterName := c.ClusterName()
+	if clusterName == "" {
+		return ""
+	}
+	return "applications/overlays/" + clusterName
+}
+
+// ShouldRenderFluxBridge reports whether the Flux bridge under clusters/<cluster>/
+// is needed. When the Flux bootstrap path is under applications/overlays/<cluster>,
+// the root overlay kustomization already references ./services/fluxcd, so the bridge
+// is redundant. It is only needed when the repository path is explicitly configured
+// to a legacy location under clusters/.
+func (c Config) ShouldRenderFluxBridge() bool {
+	p := strings.TrimSpace(c.OpenCenter.GitOps.Repository.Path)
+	return strings.HasPrefix(p, "clusters/")
+}
+
 // ToJSON marshals the public configuration to indented JSON.
 func (c Config) ToJSON() ([]byte, error) {
 	return MarshalPublicConfigJSON(&c)

@@ -274,7 +274,7 @@ func NewV2Default(name, provider string) (*Config, error) {
 			GitOps: GitOpsConfig{
 				Repository: GitOpsRepository{
 					Branch:   defaultGitBranch,
-					Path:     filepath.ToSlash(filepath.Join("clusters", name)),
+					Path:     filepath.ToSlash(filepath.Join("applications", "overlays", name)),
 					LocalDir: filepath.ToSlash(filepath.Join("clusters", organization)),
 				},
 				BaseRepo: GitOpsBaseRepo{

@@ -43,6 +43,10 @@ openCenter generates a standardized GitOps repository:
 │   └── overlays/<cluster>/
 │       ├── .sops.yaml             # Cluster-specific encryption
 │       ├── kustomization.yaml
+│       ├── flux-system/           # Written by flux bootstrap
+│       │   ├── gotk-components.yaml
+│       │   ├── gotk-sync.yaml
+│       │   └── kustomization.yaml
 │       │
 │       ├── services/              # Platform services
 │       │   ├── sources/           # GitRepository sources
@@ -68,11 +72,7 @@ openCenter generates a standardized GitOps repository:
     └── clusters/<cluster>/
         ├── main.tf                # Terraform/OpenTofu
         ├── provider.tf
-        ├── variables.tf
-
-└── clusters/<cluster>/             # Flux bootstrap path and bridge
-    ├── flux-system/                 # Written by flux bootstrap
-    └── services.yaml                # openCenter-generated bridge
+        └── variables.tf
 ```
 
 The Kubespray deployment artifacts (`inventory/`, `venv/`, `kubespray/`, `.bin/`, `kubespray-outputs.json`)
@@ -96,7 +96,7 @@ Generated files are tracked by repository-relative ownership records in separate
 .opencenter/ownership/global.json
 ```
 
-The cluster ledger covers only the active cluster's explicit recursive scopes: `applications/overlays/<cluster>/`, `infrastructure/clusters/<cluster>/`, and `clusters/<cluster>/`, excluding Flux bootstrap files below `clusters/<cluster>/flux-system/` but including the generated bridge files beside that directory. `global.json` is an exact-file allowlist for `.gitignore`, `README.md`, `applications/overlays/.gitkeep`, and `infrastructure/clusters/.gitkeep`; it is not authority over every repository file. Full generation may use all applicable scopes and the global allowlist, while applications-only and single-service promotion inspect and prune only their active scope. Sibling clusters and their ledger records remain isolated. A staged default may seed a missing file under a service's `custom/` directory, but existing custom files are not scanned as generator-owned, overwritten, or pruned; secret-sync-owned artifacts with matching hashes are also excluded from generator ownership.
+The cluster ledger covers only the active cluster's explicit recursive scopes: `applications/overlays/<cluster>/` and `infrastructure/clusters/<cluster>/` (and legacy `clusters/<cluster>/` if explicitly configured), excluding Flux bootstrap files below `flux-system/` but including any generated files beside that directory. `global.json` is an exact-file allowlist for `.gitignore`, `README.md`, `applications/overlays/.gitkeep`, and `infrastructure/clusters/.gitkeep`; it is not authority over every repository file. Full generation may use all applicable scopes and the global allowlist, while applications-only and single-service promotion inspect and prune only their active scope. Sibling clusters and their ledger records remain isolated. A staged default may seed a missing file under a service's `custom/` directory, but existing custom files are not scanned as generator-owned, overwritten, or pruned; secret-sync-owned artifacts with matching hashes are also excluded from generator ownership.
 
 The pre-v1 transition is intentionally fail-fast: a repository-root or current overlay `.opencenter-generated.json` legacy manifest stops promotion before any mutation, with no automatic migration. Dry-run performs the same ownership preflight without writing; disabling prune reports candidates without deleting them; `--adopt-generated` is explicit and limited to an untracked planned collision, backing up the replaced file during a real apply. Modified tracked files and unknown files still block, and `--force` does not bypass ownership safety. See [Rendering Ownership and Secret Artifacts](../CODEMAPS/rendering-ownership-and-secret-artifacts.md).
 

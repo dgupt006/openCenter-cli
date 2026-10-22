@@ -27,7 +27,7 @@ func TestResolveFluxBootstrapParams_GitHub(t *testing.T) {
 	assert.Equal(t, "my-org", params.Owner)
 	assert.Equal(t, "my-repo", params.Repository)
 	assert.Equal(t, "main", params.Branch)
-	assert.Equal(t, "clusters/prod-east", params.Path)
+	assert.Equal(t, "applications/overlays/prod-east", params.Path)
 	assert.Equal(t, "/tmp/token", params.TokenFile)
 	assert.True(t, params.Personal)
 }
@@ -48,7 +48,7 @@ func TestResolveFluxBootstrapParams_Gitea(t *testing.T) {
 	assert.Equal(t, "team", params.Owner)
 	assert.Equal(t, "infra", params.Repository)
 	assert.Equal(t, "develop", params.Branch)
-	assert.Equal(t, "clusters/dev-cluster", params.Path)
+	assert.Equal(t, "applications/overlays/dev-cluster", params.Path)
 }
 
 func TestResolveFluxBootstrapParams_GitLab(t *testing.T) {
@@ -66,7 +66,7 @@ func TestResolveFluxBootstrapParams_GitLab(t *testing.T) {
 	assert.Equal(t, "group/subgroup", params.Owner)
 	assert.Equal(t, "repo", params.Repository)
 	assert.Equal(t, "main", params.Branch) // default
-	assert.Equal(t, "clusters/staging", params.Path)
+	assert.Equal(t, "applications/overlays/staging", params.Path)
 }
 
 func TestResolveFluxBootstrapParams_OwnerOverride(t *testing.T) {
