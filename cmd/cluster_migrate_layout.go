@@ -704,6 +704,11 @@ func buildLayoutMigrationPlan(legacyOrgDir, organization string, clusters []stri
 			})
 		}
 
+		legacyKubeconfig := filepath.Join(legacyOrgDir, "infrastructure", "clusters", clusterName, "kubeconfig.yaml")
+		if fileExists(legacyKubeconfig) {
+			movePlan = append(movePlan, layoutMove{from: legacyKubeconfig, to: clusterPaths.KubeconfigPath, mode: 0o600})
+		}
+
 		legacySOPSKey := filepath.Join(legacyOrgDir, "secrets", "age", "keys", clusterName+"-key.txt")
 		if fileExists(legacySOPSKey) {
 			movePlan = append(movePlan, layoutMove{from: legacySOPSKey, to: clusterPaths.SOPSKeyPath, mode: 0o600})
@@ -723,6 +728,12 @@ func buildLayoutMigrationPlan(legacyOrgDir, organization string, clusters []stri
 	movePlan = append(movePlan, gitOpsMoves...)
 
 	sort.SliceStable(movePlan, func(i, j int) bool {
+		if strings.HasPrefix(movePlan[j].from, movePlan[i].from+string(filepath.Separator)) {
+			return false
+		}
+		if strings.HasPrefix(movePlan[i].from, movePlan[j].from+string(filepath.Separator)) {
+			return true
+		}
 		if movePlan[i].from == movePlan[j].from {
 			return movePlan[i].to < movePlan[j].to
 		}
@@ -733,23 +744,24 @@ func buildLayoutMigrationPlan(legacyOrgDir, organization string, clusters []stri
 
 func migrationClusterPaths(organization, clusterName string) *paths.ClusterPaths {
 	gitopsDir := filepath.Join(config.GetGitOpsDir(), organization)
-	clusterStateDir := filepath.Join(config.GetClusterStateDir(), organization, clusterName)
+	blueprintsDir := filepath.Join(config.GetBlueprintsDir(), organization, clusterName)
 	secretsDir := filepath.Join(config.GetSecretsDir(), organization, clusterName)
+	clusterDir := filepath.Join(gitopsDir, "infrastructure", "clusters", clusterName)
 
 	return &paths.ClusterPaths{
 		OrganizationDir: gitopsDir,
 		GitOpsDir:       gitopsDir,
-		ClusterStateDir: clusterStateDir,
-		ClusterDir:      filepath.Join(gitopsDir, "infrastructure", "clusters", clusterName),
+		ClusterStateDir: clusterDir,
+		ClusterDir:      clusterDir,
 		ApplicationsDir: filepath.Join(gitopsDir, "applications", "overlays", clusterName),
 		SecretsDir:      secretsDir,
 		SOPSKeyPath:     filepath.Join(secretsDir, "age", "keys", clusterName+"-key.txt"),
 		SOPSConfigPath:  filepath.Join(gitopsDir, ".sops.yaml"),
-		KubeconfigPath:  filepath.Join(clusterStateDir, "kubeconfig.yaml"),
-		InventoryPath:   filepath.Join(clusterStateDir, "inventory"),
-		VenvPath:        filepath.Join(clusterStateDir, "venv"),
-		BinPath:         filepath.Join(clusterStateDir, ".bin"),
-		ConfigPath:      filepath.Join(clusterStateDir, clusterName+"-config.yaml"),
+		KubeconfigPath:  filepath.Join(secretsDir, "kubernetes", "kubeconfig.yaml"),
+		InventoryPath:   filepath.Join(clusterDir, "inventory"),
+		VenvPath:        filepath.Join(clusterDir, "venv"),
+		BinPath:         filepath.Join(clusterDir, ".bin"),
+		ConfigPath:      filepath.Join(blueprintsDir, clusterName+"-config.yaml"),
 		SSHKeyPath:      filepath.Join(secretsDir, "ssh", clusterName),
 	}
 }

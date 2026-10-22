@@ -50,7 +50,7 @@ func TestClusterDeployIntegration(t *testing.T) {
 		t.Fatalf("expected next steps in deploy output, got:\n%s", stdout.String())
 	}
 
-	kubeconfigPath := filepath.Join(dir, "clusters", "state", "opencenter", "kind-bootstrap-int", "kubeconfig.yaml")
+	kubeconfigPath := filepath.Join(dir, "clusters", "secrets", "opencenter", "kind-bootstrap-int", "kubernetes", "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		t.Fatalf("expected kubeconfig at cluster-owned path: %v", err)
 	}

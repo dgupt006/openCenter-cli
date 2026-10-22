@@ -218,7 +218,7 @@ Save the log path as part of the release evidence.
 The generated kubeconfig is written to:
 
 ```sh
-export KUBECONFIG="$HOME/.config/opencenter/clusters/state/$ORG/$CLUSTER/kubeconfig.yaml"
+export KUBECONFIG="$HOME/.config/opencenter/clusters/secrets/$ORG/$CLUSTER/kubernetes/kubeconfig.yaml"
 ```
 
 Monitor bootstrap and, once the API is reachable, Flux reconciliation:

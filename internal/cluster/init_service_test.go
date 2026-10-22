@@ -122,8 +122,9 @@ func TestInitServiceInitializeUsesSecureLayoutAndHygiene(t *testing.T) {
 			t.Fatalf("mode %s = %#o, want %#o", path, got, want)
 		}
 	}
-	assertMode(clusterPaths.ClusterStateDir, 0o700)
+	assertMode(clusterPaths.ClusterDir, 0o755)
 	assertMode(clusterPaths.SecretsDir, 0o700)
+	assertMode(filepath.Dir(clusterPaths.KubeconfigPath), 0o700)
 	assertMode(clusterPaths.ConfigPath, 0o600)
 	assertMode(clusterPaths.SOPSKeyPath, 0o600)
 	assertMode(clusterPaths.SSHKeyPath, 0o600)

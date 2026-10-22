@@ -102,13 +102,12 @@ func scanWorktreeGitOpsSecrets(root string) ([]SecretScanFinding, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".terraform", "venv", ".bin":
+			case ".git", ".terraform", "venv", ".bin", "kubespray":
 				return filepath.SkipDir
 			case "inventory":
 				// Deploy-time Kubespray inventory under a cluster infrastructure
-				// directory (legacy-mode render target; CLI lifecycle renders it
-				// into the state zone). Node addresses/usernames there are
-				// inventory data, not committed secrets.
+				// directory. Node addresses/usernames there are inventory data,
+				// not committed secrets.
 				rel, relErr := filepath.Rel(root, path)
 				if relErr == nil && isClusterInventoryDir(filepath.ToSlash(rel)) {
 					return filepath.SkipDir
@@ -122,9 +121,9 @@ func scanWorktreeGitOpsSecrets(root string) ([]SecretScanFinding, error) {
 			}
 		}
 
-		// Skip known OpenTofu-generated key files in infrastructure directories.
+		// Skip known OpenTofu-generated key files and deploy outputs in infrastructure directories.
 		baseName := d.Name()
-		if baseName == "id_rsa" || baseName == "id_rsa.pub" {
+		if baseName == "id_rsa" || baseName == "id_rsa.pub" || baseName == "kubespray-outputs.json" {
 			return nil
 		}
 

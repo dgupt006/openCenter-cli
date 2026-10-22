@@ -34,6 +34,7 @@ func TestProperty_ValidateAcceptsDisjointZones(t *testing.T) {
 				ClusterStateDir: stateDir,
 				SecretsDir:      secretsDir,
 				ConfigPath:      filepath.Join(stateDir, cluster+"-config.yaml"),
+				KubeconfigPath:  filepath.Join(secretsDir, "kubernetes", "kubeconfig.yaml"),
 				SOPSKeyPath:     filepath.Join(secretsDir, "age", "keys", cluster+"-key.txt"),
 				SSHKeyPath:      filepath.Join(secretsDir, "ssh", cluster),
 			}
@@ -59,6 +60,7 @@ func TestProperty_ValidateAcceptsDisjointZones(t *testing.T) {
 				ClusterStateDir: stateDir,
 				SecretsDir:      secretsDir,
 				ConfigPath:      filepath.Join(stateDir, cluster+"-config.yaml"),
+				KubeconfigPath:  filepath.Join(secretsDir, "kubernetes", "kubeconfig.yaml"),
 				SOPSKeyPath:     filepath.Join(secretsDir, "age", "keys", cluster+"-key.txt"),
 				SSHKeyPath:      filepath.Join(secretsDir, "ssh", cluster),
 			}
@@ -66,8 +68,7 @@ func TestProperty_ValidateAcceptsDisjointZones(t *testing.T) {
 			// Force one zone to overlap with gitops
 			switch overlapTarget % 5 {
 			case 0:
-				p.ClusterStateDir = filepath.Join(gitopsDir, "state")
-				p.ConfigPath = filepath.Join(p.ClusterStateDir, cluster+"-config.yaml")
+				p.KubeconfigPath = filepath.Join(gitopsDir, "kubeconfig.yaml")
 			case 1:
 				p.SecretsDir = filepath.Join(gitopsDir, "secrets")
 				p.SOPSKeyPath = filepath.Join(p.SecretsDir, "age", "keys", cluster+"-key.txt")
@@ -87,7 +88,7 @@ func TestProperty_ValidateAcceptsDisjointZones(t *testing.T) {
 		gen.IntRange(0, 100),
 	))
 
-	properties.Property("equality of gitops and state is rejected", prop.ForAll(
+	properties.Property("containment of kubeconfig in gitops is rejected", prop.ForAll(
 		func(org, cluster string) bool {
 			root := t.TempDir()
 			gitopsDir := filepath.Join(root, "shared", org)
@@ -97,9 +98,10 @@ func TestProperty_ValidateAcceptsDisjointZones(t *testing.T) {
 
 			p := ClusterPaths{
 				GitOpsDir:       gitopsDir,
-				ClusterStateDir: gitopsDir, // same as gitops
+				ClusterStateDir: filepath.Join(gitopsDir, "infrastructure", "clusters", cluster),
 				SecretsDir:      filepath.Join(root, "secrets", org, cluster),
-				ConfigPath:      filepath.Join(gitopsDir, cluster+"-config.yaml"),
+				KubeconfigPath:  filepath.Join(gitopsDir, "kubeconfig.yaml"),
+				ConfigPath:      filepath.Join(root, "blueprints", org, cluster, cluster+"-config.yaml"),
 				SOPSKeyPath:     filepath.Join(root, "secrets", org, cluster, "age", "keys", cluster+"-key.txt"),
 				SSHKeyPath:      filepath.Join(root, "secrets", org, cluster, "ssh", cluster),
 			}

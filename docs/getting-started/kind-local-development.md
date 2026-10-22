@@ -182,7 +182,7 @@ clears a stale operation lock.
 
 ```bash
 opencenter cluster status local/dev --refresh
-export KUBECONFIG=~/.config/opencenter/clusters/state/local/dev/kubeconfig.yaml
+export KUBECONFIG=~/.config/opencenter/clusters/secrets/local/dev/kubernetes/kubeconfig.yaml
 kubectl get nodes                          # all Ready
 flux get sources git -n flux-system        # flux-system True
 kubectl get kustomizations -n flux-system  # flux-system True

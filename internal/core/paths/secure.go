@@ -66,7 +66,7 @@ func expandPathRoots(roots PathRoots) PathRoots {
 	return roots
 }
 
-// Validate enforces that local state and secrets cannot resolve into the
+// Validate enforces that blueprints, secrets, and credentials cannot resolve into the
 // GitOps worktree, including through pre-existing symlinked parents.
 func (p *ClusterPaths) Validate() error {
 	gitopsDir, err := secureAbs(p.GitOpsDir)
@@ -75,11 +75,11 @@ func (p *ClusterPaths) Validate() error {
 	}
 
 	checks := map[string]string{
-		"cluster state dir": p.ClusterStateDir,
-		"secrets dir":       p.SecretsDir,
-		"config path":       p.ConfigPath,
-		"SOPS key path":     p.SOPSKeyPath,
-		"SSH key path":      p.SSHKeyPath,
+		"secrets dir":     p.SecretsDir,
+		"kubeconfig path": p.KubeconfigPath,
+		"config path":     p.ConfigPath,
+		"SOPS key path":   p.SOPSKeyPath,
+		"SSH key path":    p.SSHKeyPath,
 	}
 	for label, candidate := range checks {
 		if candidate == "" {

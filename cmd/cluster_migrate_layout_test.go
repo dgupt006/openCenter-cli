@@ -25,7 +25,7 @@ func TestClusterMigrateLayoutDryRunPrintsMoveDiffWithoutChanges(t *testing.T) {
 	output := out.String()
 	for _, want := range []string{
 		"Dry run: no files will be changed",
-		"MOVE " + filepath.Join(legacyOrgDir, ".prod-config.yaml") + " -> " + filepath.Join(dir, "clusters", "state", "acme", "prod", "prod-config.yaml"),
+		"MOVE " + filepath.Join(legacyOrgDir, ".prod-config.yaml") + " -> " + filepath.Join(dir, "clusters", "blueprints", "acme", "prod", "prod-config.yaml"),
 		"MOVE " + filepath.Join(legacyOrgDir, "secrets", "age", "keys", "prod-key.txt") + " -> " + filepath.Join(dir, "clusters", "secrets", "acme", "prod", "age", "keys", "prod-key.txt"),
 		"MOVE " + filepath.Join(legacyOrgDir, "infrastructure") + " -> " + filepath.Join(dir, "clusters", "gitops", "acme", "infrastructure"),
 	} {
@@ -37,7 +37,7 @@ func TestClusterMigrateLayoutDryRunPrintsMoveDiffWithoutChanges(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(legacyOrgDir, ".prod-config.yaml")); err != nil {
 		t.Fatalf("dry-run moved legacy config: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "clusters", "state", "acme", "prod", "prod-config.yaml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "clusters", "blueprints", "acme", "prod", "prod-config.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("dry-run created destination config, stat error = %v", err)
 	}
 }
@@ -55,8 +55,8 @@ func TestClusterMigrateLayoutMovesZonesAndRewritesConfig(t *testing.T) {
 		t.Fatalf("migrate layout failed: %v\n%s", err, out.String())
 	}
 
-	stateConfig := filepath.Join(dir, "clusters", "state", "acme", "prod", "prod-config.yaml")
-	data, err := os.ReadFile(stateConfig)
+	blueprintConfig := filepath.Join(dir, "clusters", "blueprints", "acme", "prod", "prod-config.yaml")
+	data, err := os.ReadFile(blueprintConfig)
 	if err != nil {
 		t.Fatalf("read migrated config: %v", err)
 	}

@@ -108,13 +108,13 @@ for fields in an already loaded cluster config.
 ├── blueprints/<organization>/<cluster>/<cluster>-config.yaml  # local input
 ├── gitops/<organization>/                                     # Git repository
 │   ├── applications/overlays/<cluster>/                       # Flux/application output
-│   └── infrastructure/clusters/<cluster>/                     # provider output
-├── state/<organization>/<cluster>/                            # kubeconfig/inventory/runtime state
-└── secrets/<organization>/<cluster>/                          # Age and SSH key material
+│   └── infrastructure/clusters/<cluster>/                     # provider output + gitignored runtime state
+└── secrets/<organization>/<cluster>/                          # Age/SSH keys and kubeconfig
 ```
 
-The GitOps tree contains generated repository content; kubeconfig, inventory,
-and private keys are deliberately in separate zones. OpenTofu materialization
+The GitOps tree contains generated repository content and self-contained runtime build artifacts
+(`inventory/`, `venv/`, `kubespray/`, `.bin/`, `kubespray-outputs.json`) ignored by `.gitignore`.
+Admin credentials (`kubernetes/kubeconfig.yaml`) and private keys are deliberately isolated in the secrets zone.
 is skipped for Kind and Magnum, and lifecycle implementation differs by
 provider.
 

@@ -171,23 +171,22 @@ func TestOrgBasedStrategy_Resolve(t *testing.T) {
 					t.Errorf("SOPSConfigPath = %s, want %s", paths.SOPSConfigPath, expectedSOPSConfig)
 				}
 
-				expectedStateDir := filepath.Join(tmpDir, "state", "test-org", "test-cluster")
-				expectedKubeconfig := filepath.Join(expectedStateDir, "kubeconfig.yaml")
+				expectedKubeconfig := filepath.Join(expectedSecretsDir, "kubernetes", "kubeconfig.yaml")
 				if paths.KubeconfigPath != expectedKubeconfig {
 					t.Errorf("KubeconfigPath = %s, want %s", paths.KubeconfigPath, expectedKubeconfig)
 				}
 
-				expectedInventory := filepath.Join(expectedStateDir, "inventory")
+				expectedInventory := filepath.Join(expectedClusterDir, "inventory")
 				if paths.InventoryPath != expectedInventory {
 					t.Errorf("InventoryPath = %s, want %s", paths.InventoryPath, expectedInventory)
 				}
 
-				expectedVenv := filepath.Join(expectedStateDir, "venv")
+				expectedVenv := filepath.Join(expectedClusterDir, "venv")
 				if paths.VenvPath != expectedVenv {
 					t.Errorf("VenvPath = %s, want %s", paths.VenvPath, expectedVenv)
 				}
 
-				expectedBin := filepath.Join(expectedStateDir, ".bin")
+				expectedBin := filepath.Join(expectedClusterDir, ".bin")
 				if paths.BinPath != expectedBin {
 					t.Errorf("BinPath = %s, want %s", paths.BinPath, expectedBin)
 				}

@@ -148,16 +148,17 @@ BDD scenarios live in `tests/features/*.feature` (Gherkin), executed via [Godog]
 ├── blueprints/<organization>/<cluster>/<cluster>-config.yaml
 ├── gitops/<organization>/
 │   ├── infrastructure/clusters/<cluster>/
+│   │   ├── inventory/                # Kubespray inventory (gitignored)
+│   │   ├── venv/                     # Python virtualenv (gitignored)
+│   │   ├── kubespray/                # Kubespray checkout (gitignored)
+│   │   ├── .bin/                     # local binaries (gitignored)
+│   │   └── kubespray-outputs.json    # Tofu outputs (gitignored)
 │   ├── applications/overlays/<cluster>/
 │   └── .sops.yaml
-├── state/<organization>/<cluster>/
-│   ├── kubeconfig.yaml
-│   ├── inventory/                # Kubespray inventory (rendered here by the kubespray module via inventory_output_dir, contract v2)
-│   ├── venv/
-│   └── .bin/
 └── secrets/<organization>/<cluster>/
     ├── age/keys/<cluster>-key.txt
-    └── ssh/<cluster> (+ .pub)
+    ├── ssh/<cluster> (+ .pub)
+    └── kubernetes/kubeconfig.yaml
 ```
 
 See [File Locations](../reference/file-locations.md) for the full, verified path list and the environment variables that override each root.

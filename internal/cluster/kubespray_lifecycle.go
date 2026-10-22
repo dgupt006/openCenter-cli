@@ -77,6 +77,10 @@ func newKubesprayLifecycle(runner lifecycleCommandRunner, openTofuPath, clusterD
 	if _, err := os.Stat(shortTempDir); err != nil {
 		shortTempDir = os.TempDir()
 	}
+	kubeconfigTemp := filepath.Join(stateDir, ".kubeconfig.fetch.tmp")
+	if strings.TrimSpace(kubeconfigPath) != "" {
+		kubeconfigTemp = filepath.Join(filepath.Dir(kubeconfigPath), ".kubeconfig.fetch.tmp")
+	}
 	return &kubesprayLifecycle{
 		runner:         runner,
 		openTofuPath:   openTofuPath,
@@ -87,7 +91,7 @@ func newKubesprayLifecycle(runner lifecycleCommandRunner, openTofuPath, clusterD
 		venvPath:       filepath.Join(stateDir, "venv"),
 		kubesprayPath:  filepath.Join(stateDir, "kubespray"),
 		kubeconfigPath: kubeconfigPath,
-		kubeconfigTemp: filepath.Join(stateDir, ".kubeconfig.fetch.tmp"),
+		kubeconfigTemp: kubeconfigTemp,
 		outputsPath:    filepath.Join(stateDir, kubesprayOutputsFile),
 		sshControlPath: filepath.Join(shortTempDir, "oc-ssh-"+clusterLabel),
 	}

@@ -34,25 +34,20 @@ The package is built around three core components:
 The package supports organization-based directory structures:
 
 	~/.config/opencenter/clusters/
-	└── <organization>/
-	    ├── infrastructure/
-	    │   └── clusters/
-	    │       └── <cluster>/
-	    │           ├── .<cluster>-config.yaml
-	    │           ├── kubeconfig.yaml
-	    │           ├── inventory/
-	    │           ├── venv/
-	    │           └── .bin/
-	    ├── applications/
-	    │   └── overlays/
-	    │       └── <cluster>/
-	    ├── secrets/
-	    │   ├── age/
-	    │   │   └── keys/
-	    │   │       └── <cluster>-key.txt
-	    │   └── ssh/
-	    │       └── <cluster>
-	    └── .sops.yaml
+	├── blueprints/<organization>/<cluster>/
+	│   └── <cluster>-config.yaml
+	├── gitops/<organization>/
+	│   ├── infrastructure/clusters/<cluster>/
+	│   │   ├── inventory/
+	│   │   ├── venv/
+	│   │   ├── kubespray/
+	│   │   └── .bin/
+	│   ├── applications/overlays/<cluster>/
+	│   └── .sops.yaml
+	└── secrets/<organization>/<cluster>/
+	    ├── age/keys/<cluster>-key.txt
+	    ├── ssh/<cluster>
+	    └── kubernetes/kubeconfig.yaml
 
 # Basic Usage
 

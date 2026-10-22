@@ -32,7 +32,7 @@ func TestRenderInfrastructurePassesStateZoneInventoryDir(t *testing.T) {
 			require.NoError(t, err)
 			content := string(data)
 
-			wantDir := filepath.Join(dst, "state-zone", organization, "inv-zone", "inventory")
+			wantDir := filepath.Join(dst, "infrastructure", "clusters", "inv-zone", "inventory")
 			require.Contains(t, content, `inventory_output_dir                    = var.inventory_output_dir`,
 				"%s: module must forward the rendered inventory_output_dir variable", provider)
 
@@ -42,7 +42,7 @@ func TestRenderInfrastructurePassesStateZoneInventoryDir(t *testing.T) {
 			require.Contains(t, string(varData), `variable "inventory_output_dir"`,
 				"variables.tf must declare inventory_output_dir")
 
-			// The rendered state-zone dir is exercised through the funcMap;
+			// The rendered inventory dir is exercised through the funcMap;
 			// verify the helper directly against the same config.
 			require.Equal(t, wantDir, inventoryStateDir(cfg))
 		})
@@ -79,7 +79,7 @@ func TestRenderedMakefileExportsStateZoneInventory(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dst, "infrastructure", "clusters", "inv-make", "Makefile")) //nolint:gosec // test reads a file it just rendered
 	require.NoError(t, err)
 	require.Contains(t, string(data),
-		"export ANSIBLE_INVENTORY = "+filepath.Join(dst, "state-zone", "acme", "inv-make", "inventory", "inventory.yaml"))
+		"export ANSIBLE_INVENTORY = "+filepath.Join(dst, "infrastructure", "clusters", "inv-make", "inventory", "inventory.yaml"))
 
 	// No organization: legacy worktree fallback.
 	dst2 := t.TempDir()

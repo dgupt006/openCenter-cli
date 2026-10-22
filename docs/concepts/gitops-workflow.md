@@ -75,14 +75,11 @@ openCenter generates a standardized GitOps repository:
     └── services.yaml                # openCenter-generated bridge
 ```
 
-The Kubespray Ansible inventory is **not** part of this tree: since lifecycle
-contract v2 the `kubespray-cluster` module renders it directly into the cluster
-state zone (`state/<org>/<cluster>/inventory/`) via `inventory_output_dir`.
-Legacy-mode trees (`deploy_cluster = true`) still render `inventory/` under
-`infrastructure/clusters/<cluster>/`; that subtree is git-ignored.
+The Kubespray deployment artifacts (`inventory/`, `venv/`, `kubespray/`, `.bin/`, `kubespray-outputs.json`)
+are maintained under `infrastructure/clusters/<cluster>/` and excluded from Git tracking via `.gitignore`.
 
-The generated kubeconfig is **not** part of this tree either: it is written to
-the cluster state zone (`state/<org>/<cluster>/kubeconfig.yaml`) after
+The generated admin kubeconfig is **not** part of this tree: it is written to
+the secrets zone (`secrets/<org>/<cluster>/kubernetes/kubeconfig.yaml`) after
 deployment, never into the Git-tracked GitOps tree.
 
 **Design Rationale:**

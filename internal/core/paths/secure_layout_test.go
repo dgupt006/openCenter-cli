@@ -37,14 +37,14 @@ func TestPathResolverSecureLayoutCreatesScopedZones(t *testing.T) {
 
 	assertPath("OrganizationDir", clusterPaths.OrganizationDir, filepath.Join(gitopsRoot, "acme"))
 	assertPath("GitOpsDir", clusterPaths.GitOpsDir, filepath.Join(gitopsRoot, "acme"))
-	assertPath("ClusterStateDir", clusterPaths.ClusterStateDir, filepath.Join(stateRoot, "acme", "demo-cluster"))
+	assertPath("ClusterDir", clusterPaths.ClusterDir, filepath.Join(gitopsRoot, "acme", "infrastructure", "clusters", "demo-cluster"))
+	assertPath("ClusterStateDir", clusterPaths.ClusterStateDir, clusterPaths.ClusterDir)
 	assertPath("SecretsDir", clusterPaths.SecretsDir, filepath.Join(secretsRoot, "acme", "demo-cluster"))
 	assertPath("ConfigPath", clusterPaths.ConfigPath, filepath.Join(clustersRoot, "blueprints", "acme", "demo-cluster", "demo-cluster-config.yaml"))
-	assertPath("KubeconfigPath", clusterPaths.KubeconfigPath, filepath.Join(stateRoot, "acme", "demo-cluster", "kubeconfig.yaml"))
-	assertPath("InventoryPath", clusterPaths.InventoryPath, filepath.Join(stateRoot, "acme", "demo-cluster", "inventory"))
-	assertPath("VenvPath", clusterPaths.VenvPath, filepath.Join(stateRoot, "acme", "demo-cluster", "venv"))
-	assertPath("BinPath", clusterPaths.BinPath, filepath.Join(stateRoot, "acme", "demo-cluster", ".bin"))
-	assertPath("ClusterDir", clusterPaths.ClusterDir, filepath.Join(gitopsRoot, "acme", "infrastructure", "clusters", "demo-cluster"))
+	assertPath("KubeconfigPath", clusterPaths.KubeconfigPath, filepath.Join(secretsRoot, "acme", "demo-cluster", "kubernetes", "kubeconfig.yaml"))
+	assertPath("InventoryPath", clusterPaths.InventoryPath, filepath.Join(clusterPaths.ClusterDir, "inventory"))
+	assertPath("VenvPath", clusterPaths.VenvPath, filepath.Join(clusterPaths.ClusterDir, "venv"))
+	assertPath("BinPath", clusterPaths.BinPath, filepath.Join(clusterPaths.ClusterDir, ".bin"))
 	assertPath("ApplicationsDir", clusterPaths.ApplicationsDir, filepath.Join(gitopsRoot, "acme", "applications", "overlays", "demo-cluster"))
 	assertPath("SOPSConfigPath", clusterPaths.SOPSConfigPath, filepath.Join(gitopsRoot, "acme", ".sops.yaml"))
 	assertPath("SOPSKeyPath", clusterPaths.SOPSKeyPath, filepath.Join(secretsRoot, "acme", "demo-cluster", "age", "keys", "demo-cluster-key.txt"))
@@ -66,9 +66,11 @@ func TestClusterPathsValidateRejectsGitOpsContainment(t *testing.T) {
 
 	valid := ClusterPaths{
 		GitOpsDir:       gitopsDir,
-		ClusterStateDir: filepath.Join(root, "state", "acme", "demo"),
+		ClusterDir:      filepath.Join(gitopsDir, "infrastructure", "clusters", "demo"),
+		ClusterStateDir: filepath.Join(gitopsDir, "infrastructure", "clusters", "demo"),
 		SecretsDir:      filepath.Join(root, "secrets", "acme", "demo"),
-		ConfigPath:      filepath.Join(root, "state", "acme", "demo", "demo-config.yaml"),
+		ConfigPath:      filepath.Join(root, "blueprints", "acme", "demo", "demo-config.yaml"),
+		KubeconfigPath:  filepath.Join(root, "secrets", "acme", "demo", "kubernetes", "kubeconfig.yaml"),
 		SOPSKeyPath:     filepath.Join(root, "secrets", "acme", "demo", "age", "keys", "demo-key.txt"),
 		SSHKeyPath:      filepath.Join(root, "secrets", "acme", "demo", "ssh", "demo"),
 	}
@@ -78,9 +80,9 @@ func TestClusterPathsValidateRejectsGitOpsContainment(t *testing.T) {
 		mutate func(*ClusterPaths)
 	}{
 		{
-			name: "state dir equals gitops dir",
+			name: "kubeconfig under gitops dir",
 			mutate: func(p *ClusterPaths) {
-				p.ClusterStateDir = gitopsDir
+				p.KubeconfigPath = filepath.Join(gitopsDir, "kubeconfig.yaml")
 			},
 		},
 		{
@@ -110,8 +112,11 @@ func TestClusterPathsValidateRejectsGitOpsContainment(t *testing.T) {
 		{
 			name: "common prefix sibling stays valid",
 			mutate: func(p *ClusterPaths) {
-				p.ClusterStateDir = gitopsDir + "-state"
-				p.ConfigPath = filepath.Join(gitopsDir+"-state", "demo-config.yaml")
+				p.SecretsDir = gitopsDir + "-secrets"
+				p.ConfigPath = filepath.Join(gitopsDir+"-blueprints", "demo-config.yaml")
+				p.KubeconfigPath = filepath.Join(gitopsDir+"-secrets", "kubeconfig.yaml")
+				p.SOPSKeyPath = filepath.Join(gitopsDir+"-secrets", "demo-key.txt")
+				p.SSHKeyPath = filepath.Join(gitopsDir+"-secrets", "demo")
 			},
 		},
 	}
@@ -197,9 +202,13 @@ func TestResolveWithFallbackUsesOnlyNewStateLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveWithFallback() error = %v", err)
 	}
-	expectedStateDir := filepath.Join(stateRoot, "org1", "demo")
-	if clusterPaths.ClusterStateDir != expectedStateDir {
-		t.Fatalf("ClusterStateDir = %q, want %q", clusterPaths.ClusterStateDir, expectedStateDir)
+	expectedClusterDir := filepath.Join(gitopsRoot, "org1", "infrastructure", "clusters", "demo")
+	if clusterPaths.ClusterDir != expectedClusterDir {
+		t.Fatalf("ClusterDir = %q, want %q", clusterPaths.ClusterDir, expectedClusterDir)
+	}
+	expectedKubeconfig := filepath.Join(secretsRoot, "org1", "demo", "kubernetes", "kubeconfig.yaml")
+	if clusterPaths.KubeconfigPath != expectedKubeconfig {
+		t.Fatalf("KubeconfigPath = %q, want %q", clusterPaths.KubeconfigPath, expectedKubeconfig)
 	}
 
 	ambiguousDir := filepath.Join(blueprintsRoot, "org2", "demo")

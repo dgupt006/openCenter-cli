@@ -165,7 +165,7 @@ say "Deploy ($ORG/$CLUSTER via $RUNTIME; several minutes)"
 deploy_args=(cluster "deploy" "$ORG/$CLUSTER" "--container-runtime" "$RUNTIME")
 [ "$DEBUG" = "1" ] && deploy_args+=("--debug")
 run "$BIN" "${deploy_args[@]}"
-KUBECONFIG_PATH="$HOME/.config/opencenter/clusters/state/$ORG/$CLUSTER/kubeconfig.yaml"
+KUBECONFIG_PATH="$HOME/.config/opencenter/clusters/secrets/$ORG/$CLUSTER/kubernetes/kubeconfig.yaml"
 [ -f "$KUBECONFIG_PATH" ] || fail "kubeconfig not written at $KUBECONFIG_PATH"
 
 # ---------------------------------------------------------------------------

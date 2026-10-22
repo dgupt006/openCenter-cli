@@ -144,7 +144,7 @@ For a cluster named `my-cluster` in org `my-org`, the resolved secure-zone layou
 <secretsDir>/my-org/my-cluster/age/keys/my-cluster-key.txt
 <secretsDir>/my-org/my-cluster/ssh/my-cluster
 <gitopsDir>/my-org/.sops.yaml
-<clusterStateDir>/my-org/my-cluster/kubeconfig.yaml
+<secretsDir>/my-org/my-cluster/kubernetes/kubeconfig.yaml
 ```
 
 The clusters root comes from `config.ResolveClustersDir`:

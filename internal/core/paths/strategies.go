@@ -167,7 +167,6 @@ func (s *OrgBasedStrategy) Resolve(ctx context.Context, clusterName, organizatio
 
 	gitOpsDir := filepath.Join(s.roots.GitOpsDir, organization)
 	blueprintsDir := filepath.Join(s.roots.BlueprintsDir, organization, clusterName)
-	clusterStateDir := filepath.Join(s.roots.ClusterStateDir, organization, clusterName)
 	secretsDir := filepath.Join(s.roots.SecretsDir, organization, clusterName)
 	clusterDir := filepath.Join(gitOpsDir, "infrastructure", "clusters", clusterName)
 	applicationsDir := filepath.Join(gitOpsDir, "applications", "overlays", clusterName)
@@ -175,16 +174,16 @@ func (s *OrgBasedStrategy) Resolve(ctx context.Context, clusterName, organizatio
 	clusterPaths := &ClusterPaths{
 		OrganizationDir: gitOpsDir,
 		GitOpsDir:       gitOpsDir,
-		ClusterStateDir: clusterStateDir,
+		ClusterStateDir: clusterDir,
 		ClusterDir:      clusterDir,
 		ApplicationsDir: applicationsDir,
 		SecretsDir:      secretsDir,
 		SOPSKeyPath:     filepath.Join(secretsDir, "age", "keys", clusterName+"-key.txt"),
 		SOPSConfigPath:  filepath.Join(gitOpsDir, ".sops.yaml"),
-		KubeconfigPath:  filepath.Join(clusterStateDir, "kubeconfig.yaml"),
-		InventoryPath:   filepath.Join(clusterStateDir, "inventory"),
-		VenvPath:        filepath.Join(clusterStateDir, "venv"),
-		BinPath:         filepath.Join(clusterStateDir, ".bin"),
+		KubeconfigPath:  filepath.Join(secretsDir, "kubernetes", "kubeconfig.yaml"),
+		InventoryPath:   filepath.Join(clusterDir, "inventory"),
+		VenvPath:        filepath.Join(clusterDir, "venv"),
+		BinPath:         filepath.Join(clusterDir, ".bin"),
 		ConfigPath:      filepath.Join(blueprintsDir, clusterName+"-config.yaml"),
 		SSHKeyPath:      filepath.Join(secretsDir, "ssh", clusterName),
 	}

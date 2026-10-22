@@ -607,14 +607,13 @@ func (s *InitService) createDirectories(ctx context.Context, clusterPaths *paths
 	}
 
 	for _, secureDir := range []string{
-		clusterPaths.ClusterStateDir,
-		clusterPaths.InventoryPath,
-		clusterPaths.VenvPath,
-		clusterPaths.BinPath,
 		clusterPaths.SecretsDir,
+		filepath.Join(clusterPaths.SecretsDir, "kubernetes"),
+		filepath.Dir(clusterPaths.KubeconfigPath),
 		filepath.Join(clusterPaths.SecretsDir, "age"),
 		filepath.Dir(clusterPaths.SOPSKeyPath),
 		filepath.Join(clusterPaths.SecretsDir, "ssh"),
+		filepath.Dir(clusterPaths.SSHKeyPath),
 	} {
 		if err := ensureMode(secureDir, 0o700); err != nil {
 			return err
@@ -1024,10 +1023,13 @@ var gitIgnoreRequiredPatterns = []string{
 }
 
 // gitIgnoreDeployArtifactPatterns keep deploy-time outputs out of the GitOps
-// worktree's git status. The inventory subtree is the legacy-mode render
-// target; CLI lifecycle mode writes it into the state zone directly.
+// worktree's git status.
 var gitIgnoreDeployArtifactPatterns = []string{
 	"infrastructure/clusters/*/inventory/",
+	"infrastructure/clusters/*/venv/",
+	"infrastructure/clusters/*/kubespray/",
+	"infrastructure/clusters/*/.bin/",
+	"infrastructure/clusters/*/kubespray-outputs.json",
 	"infrastructure/clusters/*/.terraform/",
 	"infrastructure/clusters/*/.terraform.lock.hcl",
 }
@@ -1108,10 +1110,12 @@ id_ed25519*
 /*-config.yaml
 /.*-config.yaml
 
-# Deploy-time OpenTofu/Kubespray artifacts are state-zone files, not GitOps
-# content. CLI lifecycle renders the inventory into the cluster state zone;
-# the inventory pattern covers legacy-mode trees that still render it here.
+# Deploy-time OpenTofu/Kubespray artifacts
 infrastructure/clusters/*/inventory/
+infrastructure/clusters/*/venv/
+infrastructure/clusters/*/kubespray/
+infrastructure/clusters/*/.bin/
+infrastructure/clusters/*/kubespray-outputs.json
 infrastructure/clusters/*/.terraform/
 infrastructure/clusters/*/.terraform.lock.hcl
 `

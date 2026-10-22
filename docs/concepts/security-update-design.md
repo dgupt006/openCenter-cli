@@ -17,17 +17,16 @@ tags: [security, secrets, gitops, paths, design]
 `opencenter cluster init` never places the cluster config YAML, an Age private key, or an SSH private key inside the Git-tracked directory. If it did, a routine `git add .` in that tree would commit secrets. Instead, cluster storage is split into four zones with different lifecycles and trust levels, each resolved by `internal/core/paths`:
 
 * **Blueprints zone** — the cluster config YAML. Local, authoritative input; not committed by openCenter itself.
-* **GitOps zone** — meant to be committed and pushed. Rendered manifests plus repository hygiene files. `git init` runs against this zone only.
-* **Cluster state zone** — machine-local runtime data derived from the config: kubeconfig, Ansible inventory, a Python virtualenv, and cluster-specific binaries.
-* **Secrets zone** — restricted-permission Age and SSH key material.
+* **GitOps zone** — meant to be committed and pushed. Rendered manifests, repository hygiene files, and self-contained runtime build artifacts (`inventory/`, `venv/`, `kubespray/`, `.bin/`, `kubespray-outputs.json`) ignored by `.gitignore`. `git init` runs against this zone only.
+* **Secrets zone** — restricted-permission (mode 0700/0600) Age private keys, SSH keys, and `kubernetes/kubeconfig.yaml`.
 
-`internal/core/paths.ClusterPaths.Validate()` rejects any resolved blueprints, state, or secrets path that is equal to or nested inside the GitOps zone, including through symlinked parents. This runs on every `PathResolver.Resolve` call, not only at `init` time, and it runs unconditionally — there is no compatibility mode that permits the old single-directory layout. Commands that encounter a legacy org-root Git repository containing state or secrets return a `*paths.LegacyLayoutError` and direct the operator to `opencenter cluster migrate-layout`.
+`internal/core/paths.ClusterPaths.Validate()` rejects any resolved blueprints, secrets, or kubeconfig path that is equal to or nested inside the GitOps zone, including through symlinked parents. This runs on every `PathResolver.Resolve` call, not only at `init` time, and it runs unconditionally — there is no compatibility mode that permits unencrypted secrets inside the Git repository. Commands that encounter a legacy org-root Git repository containing co-located secrets return a `*paths.LegacyLayoutError` and direct the operator to `opencenter cluster migrate-layout`.
 
 **Evidence:** `internal/core/paths/types.go`, `internal/core/paths/secure.go`, `internal/core/paths/resolver.go`, `internal/core/paths/strategies.go`, `internal/config/v2/manager.go`
 
 ## Layout
 
-All four zones live under `~/.config/opencenter/clusters/` (or `$OPENCENTER_CLUSTERS_DIR`) by default. Each zone root can be overridden independently; the CLI always appends organization and cluster scope underneath the configured root, so two organizations with the same cluster name never share secrets or state.
+Blueprints and secrets live outside the GitOps repository under `~/.config/opencenter/clusters/` (or `$OPENCENTER_CLUSTERS_DIR`) by default. Each zone root can be overridden independently:
 
 ```text
 ~/.config/opencenter/                       ← OPENCENTER_CONFIG_DIR
@@ -40,24 +39,24 @@ All four zones live under `~/.config/opencenter/clusters/` (or `$OPENCENTER_CLUS
     ├── gitops/                             ← OPENCENTER_GITOPS_DIR
     │   └── <org>/                          ← effective GitOps repo, git init runs here
     │       ├── .git/
-    │       ├── .gitignore
+    │       ├── .gitignore                  ← ignores inventory, venv, kubespray, .bin, kubespray-outputs.json
     │       ├── .opencenter/hooks/pre-commit
     │       ├── .opencenter/scripts/scan-secrets
     │       ├── .github/workflows/opencenter-secret-scan.yml
     │       ├── applications/overlays/<cluster>/
     │       └── infrastructure/clusters/<cluster>/
-    │
-    ├── state/                              ← OPENCENTER_CLUSTER_STATE_DIR
-    │   └── <org>/<cluster>/                ← mode 0700
-    │       ├── kubeconfig.yaml
-    │       ├── inventory/
-    │       ├── venv/
-    │       └── .bin/
+    │           ├── inventory/              ← Kubespray inventory (gitignored)
+    │           ├── venv/                   ← Python virtualenv (gitignored)
+    │           ├── kubespray/              ← Kubespray repo (gitignored)
+    │           ├── .bin/                   ← Local binaries (gitignored)
+    │           └── kubespray-outputs.json  ← Tofu outputs (gitignored)
     │
     └── secrets/                            ← OPENCENTER_SECRETS_DIR, 0700
         └── <org>/<cluster>/
             ├── age/keys/<cluster>-key.txt   ← mode 0600
-            └── ssh/<cluster>-<env>-<region> ← mode 0600 (.pub: 0644)
+            ├── ssh/<cluster>-<env>-<region> ← mode 0600 (.pub: 0644)
+            └── kubernetes/
+                └── kubeconfig.yaml          ← admin kubeconfig, mode 0600
 ```
 
 **Evidence:** `internal/core/paths/secure.go` (`DefaultPathRoots`), `internal/cluster/init_service.go`

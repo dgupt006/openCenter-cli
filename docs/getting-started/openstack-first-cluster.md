@@ -346,7 +346,7 @@ Once the API is reachable, export the generated kubeconfig and confirm the
 cluster is healthy:
 
 ```bash
-export KUBECONFIG="$HOME/.config/opencenter/clusters/state/<org>/my-cluster/kubeconfig.yaml"
+export KUBECONFIG="$HOME/.config/opencenter/clusters/secrets/<org>/my-cluster/kubernetes/kubeconfig.yaml"
 
 kubectl get nodes \
   -o custom-columns=NAME:.metadata.name,PROVIDER_ID:.spec.providerID,TAINTS:.spec.taints

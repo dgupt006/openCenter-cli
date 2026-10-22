@@ -50,19 +50,19 @@ type ClusterPaths struct {
 	SOPSConfigPath string
 
 	// KubeconfigPath is the path to the cluster kubeconfig file
-	// Example: ~/.config/opencenter/clusters/state/<organization>/<cluster>/kubeconfig.yaml
+	// Example: ~/.config/opencenter/clusters/secrets/<organization>/<cluster>/kubernetes/kubeconfig.yaml
 	KubeconfigPath string
 
 	// InventoryPath is the path to the Ansible inventory directory
-	// Example: ~/.config/opencenter/clusters/state/<organization>/<cluster>/inventory
+	// Example: ~/.config/opencenter/clusters/gitops/<organization>/infrastructure/clusters/<cluster>/inventory
 	InventoryPath string
 
 	// VenvPath is the path to the Python virtual environment
-	// Example: ~/.config/opencenter/clusters/state/<organization>/<cluster>/venv
+	// Example: ~/.config/opencenter/clusters/gitops/<organization>/infrastructure/clusters/<cluster>/venv
 	VenvPath string
 
 	// BinPath is the path to cluster-specific binaries
-	// Example: ~/.config/opencenter/clusters/state/<organization>/<cluster>/.bin
+	// Example: ~/.config/opencenter/clusters/gitops/<organization>/infrastructure/clusters/<cluster>/.bin
 	BinPath string
 
 	// ConfigPath is the path to the cluster configuration file (blueprint)

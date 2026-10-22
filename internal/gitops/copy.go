@@ -32,21 +32,21 @@ import (
 	utilfs "github.com/opencenter-cloud/opencenter-cli/internal/util/fs"
 )
 
-// inventoryStateDir resolves the state-zone inventory directory for a cluster
-// config, or "" when it cannot be derived (missing organization or cluster
-// name, which means legacy rendering applies). Templates call it via the
-// `inventoryStateDir` function so CLI lifecycle mode can pass the state-zone
-// path to the Kubespray module and keep the GitOps worktree clean.
-//
-// The layout mirrors core/paths.OrgBasedStrategy:
-// <clusterStateRoot>/<org>/<cluster>/inventory.
+// inventoryStateDir resolves the cluster infrastructure inventory directory for a cluster
+// config, or "" when it cannot be derived (missing cluster name or organization).
+// Templates call it via the `inventoryStateDir` function so the rendered Makefile
+// and deploy targets point to the cluster's inventory directory.
 func inventoryStateDir(cfg v2.Config) string {
-	organization := strings.TrimSpace(cfg.OpenCenter.Meta.Organization)
 	clusterName := strings.TrimSpace(cfg.ClusterName())
-	if organization == "" || clusterName == "" {
+	organization := strings.TrimSpace(cfg.OpenCenter.Meta.Organization)
+	if clusterName == "" || organization == "" {
 		return ""
 	}
-	return filepath.Join(clusterStateRoot(), organization, clusterName, "inventory")
+	localDir := strings.TrimSpace(cfg.OpenCenter.GitOps.Repository.LocalDir)
+	if localDir != "" {
+		return filepath.Join(localDir, "infrastructure", "clusters", clusterName, "inventory")
+	}
+	return filepath.Join(config.GetGitOpsDir(), organization, "infrastructure", "clusters", clusterName, "inventory")
 }
 
 // clusterStateRoot resolves the per-cluster state zone root, delegating to

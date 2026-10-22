@@ -47,12 +47,12 @@ func setupKubeconfigPathTest(t *testing.T, clusterName, organization string) (v2
 	return cfg, clusterPaths.KubeconfigPath
 }
 
-func TestGetKubeconfigPathUsesStateZone(t *testing.T) {
+func TestGetKubeconfigPathUsesSecretsZone(t *testing.T) {
 	cfg, wantKubeconfig := setupKubeconfigPathTest(t, "kubeconfig-path-cluster", "acme")
 
 	got := getKubeconfigPath(context.Background(), &cfg)
 	if got != wantKubeconfig {
-		t.Fatalf("getKubeconfigPath() = %s, want state-zone path %s", got, wantKubeconfig)
+		t.Fatalf("getKubeconfigPath() = %s, want secrets-zone path %s", got, wantKubeconfig)
 	}
 }
 
