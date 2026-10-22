@@ -317,10 +317,11 @@ func Plan(ctx context.Context, input PlanInput) (PlanOutput, error) {
 	} else {
 		result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: nextOrder, Action: "create", Resource: credentialResource(input.Options.Backend), Scope: credentialScope(input.Options.Backend)})
 		if oldCred != "" {
-			result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: nextOrder + 2, Action: "revoke", Resource: credentialResource(input.Options.Backend), ID: publicCredentialID(input.Options.Service, oldCred), Scope: credentialScope(input.Options.Backend)})
+			result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: nextOrder + 1, Action: "revoke", Resource: credentialResource(input.Options.Backend), ID: publicCredentialID(input.Options.Service, oldCred), Scope: credentialScope(input.Options.Backend)})
 		}
 	}
-	result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: nextOrder + 1, Action: "persist", Resource: "typed-configuration", Scope: "local"})
+	persistOrder := len(result.RemoteActions) + 1
+	result.RemoteActions = append(result.RemoteActions, RemoteAction{Order: persistOrder, Action: "persist", Resource: "typed-configuration", Scope: "local"})
 	if len(changes) == 0 && complete && !input.Options.RotateCredentials {
 		result.Status = StatusNoOp
 	}
@@ -353,6 +354,9 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
+	}
+	if err := reconcileStrandedJournal(input, cfg); err != nil {
+		return Result{}, redactError(err, cfg)
 	}
 	if len(result.Containers) > 0 {
 		if input.Adapter == nil {
@@ -449,7 +453,7 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 		} else {
 			revokeErr = input.Adapter.DeleteEC2Credentials(ctx, oldID, planned.Preflight.CredentialOwnerID)
 		}
-		if revokeErr != nil {
+		if revokeErr != nil && !credentialAlreadyGone(revokeErr) {
 			result.Status = StatusPartial
 			if result.Recovery != nil {
 				result.Recovery.PersistenceState = "persisted-revoke-failed"
@@ -459,6 +463,8 @@ func Apply(ctx context.Context, input ApplyInput) (Result, error) {
 			}
 			result.Warnings = append(result.Warnings, redactError(fmt.Errorf("old credential revocation failed: %w", revokeErr), cfg, createdAccess, createdSecret).Error())
 			return result, redactError(revokeErr, cfg, createdAccess, createdSecret)
+		} else if revokeErr != nil {
+			result.Warnings = append(result.Warnings, redactError(fmt.Errorf("old credential already absent in Keystone: %w", revokeErr), cfg, createdAccess, createdSecret).Error())
 		}
 	}
 	if result.Recovery != nil {
@@ -492,6 +498,7 @@ type FileSystem interface {
 	WriteRecovery(string, recoveryJournal) error
 	UpdateRecovery(string, recoveryJournal) error
 	RemoveRecovery(string) error
+	ReadRecovery(string) (recoveryJournal, error)
 }
 
 type OSFileSystem struct{}
@@ -610,6 +617,17 @@ func (OSFileSystem) UpdateRecovery(path string, state recoveryJournal) error {
 	}
 	return syncDirectory(filepath.Dir(path))
 }
+func (OSFileSystem) ReadRecovery(recoveryPath string) (recoveryJournal, error) {
+	var journal recoveryJournal
+	data, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		return journal, err
+	}
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return journal, fmt.Errorf("decode recovery record %s: %w", filepath.Base(recoveryPath), err)
+	}
+	return journal, nil
+}
 func (OSFileSystem) RemoveRecovery(path string) error {
 	if err := os.Remove(path); err != nil {
 		return err
@@ -641,6 +659,48 @@ func writeRecoveryExclusive(path string, state recoveryJournal) error {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+
+// reconcileStrandedJournal adopts a recovery record left behind by an apply
+// that persisted the new credential but failed to finish revoking the old one.
+// The journal is local bookkeeping: when the credential it describes is
+// already the one recorded in the current configuration, the remote work is
+// provably complete, so the record is cleared instead of blocking every later
+// apply with a stale-record conflict.
+func reconcileStrandedJournal(input ApplyInput, cfg *v2.Config) error {
+	persisted, err := input.FileSystem.ReadRecovery(input.RecoveryPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read recovery record: %w", err)
+	}
+	if persisted.Service != "" && persisted.Service != strings.TrimSpace(input.Options.Service) {
+		return nil
+	}
+	if persisted.PersistenceState != "persisted-revoke-failed" && persisted.PersistenceState != "persisted-revoke-pending" {
+		return nil
+	}
+	if complete, _ := hasCompleteCredential(cfg, input.Options); !complete {
+		return nil
+	}
+	if err := input.FileSystem.RemoveRecovery(input.RecoveryPath); err != nil {
+		return fmt.Errorf("clear completed recovery record: %w", err)
+	}
+	return nil
+}
+
+// credentialAlreadyGone reports a Keystone "credential not found" answer from
+// credential deletion, which is a successful end state for a rotation: the old
+// credential no longer exists, so there is nothing left to revoke. The adapter
+// flattens gophercloud errors to their message text, so the signal is matched
+// on the rendered message rather than the error type.
+func credentialAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "could not find credential") || strings.Contains(message, "not found")
 }
 func staleRecoveryConflict(err error, input ApplyInput) error {
 	if !errors.Is(err, os.ErrExist) {
@@ -934,7 +994,9 @@ func patchService(service any, secrets *v2.SecretsConfig, opts Options, containe
 		setCredentialSecret("secrets.velero.access_key_id", secrets.Velero.AccessKeyID, "[generated]")
 		setCredentialSecret("secrets.velero.secret_access_key", secrets.Velero.SecretAccessKey, "[generated]")
 	case *services.HarborConfig:
-		oldID = secrets.Harbor.S3AccessKeyID
+		if usableCredentialValue(secrets.Harbor.S3AccessKeyID) {
+			oldID = secrets.Harbor.S3AccessKeyID
+		}
 		set("opencenter.services.harbor.storage_type", typed.StorageType, backend)
 		typed.StorageType = backend
 		set("opencenter.services.harbor.s3_bucket", typed.S3Bucket, container)
@@ -1029,6 +1091,12 @@ func existingCredentialIDFromConfig(cfg any, backend string) string {
 
 func existingCredentialIDForConfig(cfg *v2.Config, opts Options) string {
 	if opts.Service == "harbor" && opts.Backend == "s3" {
+		// Harbor has no dedicated credential ID field: the access key doubles as
+		// the revocation handle. A placeholder is not a Keystone credential, so
+		// it must never reach the revoke call.
+		if !usableCredentialValue(cfg.Secrets.Harbor.S3AccessKeyID) {
+			return ""
+		}
 		return cfg.Secrets.Harbor.S3AccessKeyID
 	}
 	svc, _ := serviceConfig(cfg, opts.Service)

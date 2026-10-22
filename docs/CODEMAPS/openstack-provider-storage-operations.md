@@ -60,9 +60,9 @@ runClusterServiceStorage
   -> storage/openstack.Apply
        -> re-read and compare original bytes
        -> re-plan current config
-       -> create credential when needed + per-service recovery journal (<service>.storage-recovery.json)
+       -> adopt a stranded journal whose credential is already persisted, then create credential when needed + per-service recovery journal (<service>.storage-recovery.json)
        -> validate candidate -> backup + atomic persist
-       -> revoke replaced credential; retain recovery on partial failure; stale-record conflicts report the owning service (or the record's persistence state for own-service records)
+       -> revoke replaced credential (a Keystone "not found" answer completes the rotation); retain recovery on partial failure; stale-record conflicts report the owning service (or the record's persistence state for own-service records)
 ```
 
 The supported remote mapping is `loki: swift|s3`, `tempo: s3`, `mimir: swift|s3`, `harbor: s3`, `etcd-backup: s3`, and `velero: s3`; non-remote `loki/etcd-backup/velero: none` and `harbor: filesystem` are validated in the same package but do not call the OpenStack adapter.

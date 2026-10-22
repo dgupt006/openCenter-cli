@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -69,6 +70,7 @@ type fakeFS struct {
 	data                              []byte
 	backup, atomic, recovery, removed bool
 	recoveryJournals                  []recoveryJournal
+	strandedJournal                   *recoveryJournal
 	updateRecoveryErr                 error
 	atomicErr                         error
 }
@@ -110,6 +112,13 @@ func (f *fakeFS) RemoveRecovery(path string) error {
 		return err
 	}
 	return nil
+}
+func (f *fakeFS) ReadRecovery(path string) (recoveryJournal, error) {
+	var journal recoveryJournal
+	if f.strandedJournal == nil {
+		return journal, &os.PathError{Op: "open", Path: path, Err: syscall.ENOENT}
+	}
+	return *f.strandedJournal, nil
 }
 
 func testConfig(t *testing.T) *v2.Config {
@@ -937,5 +946,180 @@ func TestPlanHarborS3TreatsPlaceholdersAsMissing(t *testing.T) {
 	}
 	if len(planned.Result.RemoteActions) < 2 || planned.Result.RemoteActions[1].Action != "create" {
 		t.Fatalf("remote actions=%v, want Harbor S3 credential creation", planned.Result.RemoteActions)
+	}
+	for _, action := range planned.Result.RemoteActions {
+		if action.Action == "revoke" {
+			t.Fatalf("placeholder access key planned for revocation: %+v", planned.Result.RemoteActions)
+		}
+	}
+}
+
+func TestApplyHarborS3NeverRevokesPlaceholderCredential(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = v2.PlaceholderSecret
+	cfg.Secrets.Harbor.S3SecretAccessKey = v2.PlaceholderSecret
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	adapter := testAdapter()
+	adapter.revokeErr = errors.New(`Resource not found: [DELETE /v3/users/owner-1/credentials/OS-EC2/CHANGEME], error message: {"error":{"code":404,"message":"Could not find credential: CHANGEME.","title":"Not Found"}}`)
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: adapter, FileSystem: fs,
+	})
+	if err != nil {
+		t.Fatalf("apply err=%v result=%+v", err, result)
+	}
+	if adapter.ec2Creates != 1 {
+		t.Fatalf("ec2 creates=%d, want 1", adapter.ec2Creates)
+	}
+	if adapter.ec2Deletes != 0 {
+		t.Fatalf("ec2 deletes=%d, want 0: placeholder must never reach Keystone", adapter.ec2Deletes)
+	}
+	if result.Status != StatusApplied {
+		t.Fatalf("status=%s, want %s", result.Status, StatusApplied)
+	}
+	if !fs.atomic || !fs.removed {
+		t.Fatalf("fs=%+v, want configuration persisted and recovery record cleared", fs)
+	}
+}
+
+func TestApplyRotationToleratesAlreadyRevokedOldCredential(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = "old-access"
+	cfg.Secrets.Harbor.S3SecretAccessKey = "old-secret"
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	adapter := testAdapter()
+	adapter.revokeErr = errors.New(`Resource not found: [DELETE /v3/users/owner-1/credentials/OS-EC2/old-access], error message: {"error":{"code":404,"message":"Could not find credential: old-access.","title":"Not Found"}}`)
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod", RotateCredentials: true}, Adapter: adapter, FileSystem: fs,
+	})
+	if err != nil {
+		t.Fatalf("apply err=%v result=%+v", err, result)
+	}
+	if adapter.ec2Deletes != 1 {
+		t.Fatalf("ec2 deletes=%d, want 1", adapter.ec2Deletes)
+	}
+	if result.Status != StatusApplied {
+		t.Fatalf("status=%s, want %s", result.Status, StatusApplied)
+	}
+	if !strings.Contains(strings.Join(result.Warnings, "\n"), "already absent in Keystone") {
+		t.Fatalf("warnings=%v, want already-absent notice", result.Warnings)
+	}
+	if !fs.removed {
+		t.Fatal("recovery record retained after completed rotation")
+	}
+}
+
+func TestApplyRotationStillReportsRevocationFailure(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = "old-access"
+	cfg.Secrets.Harbor.S3SecretAccessKey = "old-secret"
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw}
+	adapter := testAdapter()
+	adapter.revokeErr = errors.New("keystone unavailable: 503 Service Unavailable")
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod", RotateCredentials: true}, Adapter: adapter, FileSystem: fs,
+	})
+	if err == nil {
+		t.Fatal("apply succeeded despite revocation failure")
+	}
+	if result.Status != StatusPartial {
+		t.Fatalf("status=%s, want %s", result.Status, StatusPartial)
+	}
+	if fs.removed {
+		t.Fatal("recovery record cleared after failed revocation")
+	}
+}
+
+func TestApplyClearsStrandedRevokeFailedJournal(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = "access-1"
+	cfg.Secrets.Harbor.S3SecretAccessKey = "ec2-secret"
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw, strandedJournal: &recoveryJournal{RecoveryState: RecoveryState{Path: "/tmp/prod.recovery", Service: "harbor", Backend: "s3", PersistenceState: "persisted-revoke-failed"}, CredentialID: "access-1"}}
+	adapter := testAdapter()
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: adapter, FileSystem: fs,
+	})
+	if err != nil {
+		t.Fatalf("apply err=%v result=%+v", err, result)
+	}
+	if !fs.removed {
+		t.Fatal("stranded recovery record retained after completed apply")
+	}
+	if adapter.ec2Creates != 0 || adapter.ec2Deletes != 0 {
+		t.Fatalf("credential churn on completed apply: creates=%d deletes=%d", adapter.ec2Creates, adapter.ec2Deletes)
+	}
+}
+
+func TestApplyKeepsStrandedJournalWhenCredentialIncomplete(t *testing.T) {
+	cfg := harborStorageConfig(t)
+	cfg.Secrets.Harbor.S3AccessKeyID = v2.PlaceholderSecret
+	cfg.Secrets.Harbor.S3SecretAccessKey = "ec2-secret"
+	raw, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeFS{data: raw, strandedJournal: &recoveryJournal{RecoveryState: RecoveryState{Path: "/tmp/prod.recovery", Service: "harbor", Backend: "s3", PersistenceState: "persisted-revoke-failed"}, CredentialID: "access-1"}}
+	adapter := testAdapter()
+	result, err := Apply(context.Background(), ApplyInput{
+		ConfigPath: "/tmp/prod.yaml", RecoveryPath: "/tmp/prod.recovery", OriginalBytes: raw,
+		Options: Options{Service: "harbor", Backend: "s3", Cluster: "prod"}, Adapter: adapter, FileSystem: fs,
+	})
+	if err != nil {
+		t.Fatalf("apply err=%v", err)
+	}
+	if result.Status != StatusBlocked {
+		t.Fatalf("status=%s, want %s", result.Status, StatusBlocked)
+	}
+	if fs.removed {
+		t.Fatal("stranded recovery record cleared while credential pair is incomplete")
+	}
+	if adapter.ec2Creates != 0 || adapter.ec2Deletes != 0 {
+		t.Fatalf("credential churn on blocked apply: creates=%d deletes=%d", adapter.ec2Creates, adapter.ec2Deletes)
+	}
+}
+
+func TestPlanOrdersPersistAfterRevoke(t *testing.T) {
+	cfg := mimirStorageConfig(t)
+	cfg.OpenCenter.Services["mimir"].(*services.MimirConfig).S3CredentialID = "old-cred"
+	cfg.Secrets.Mimir = v2.MimirSecrets{S3AccessKeyID: "acc", S3SecretAccessKey: "sec"}
+	planned, err := Plan(context.Background(), PlanInput{
+		Config:  cfg,
+		Options: Options{Service: "mimir", Backend: "s3", Cluster: "prod", RotateCredentials: true},
+		Adapter: testAdapter(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := make([]string, 0, len(planned.Result.RemoteActions))
+	for _, action := range planned.Result.RemoteActions {
+		actions = append(actions, action.Action)
+	}
+	want := []string{"ensure", "ensure", "ensure", "create", "revoke", "persist"}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("actions=%v, want %v", actions, want)
+	}
+	for index, action := range planned.Result.RemoteActions {
+		if action.Order != index+1 {
+			t.Fatalf("action %d has order %d: %+v", index, action.Order, planned.Result.RemoteActions)
+		}
 	}
 }
