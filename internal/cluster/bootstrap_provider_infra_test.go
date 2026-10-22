@@ -176,8 +176,12 @@ users:
 	if fakeRunner.calls[1].name != "tofu" || len(fakeRunner.calls[1].args) != 2 || fakeRunner.calls[1].args[0] != "state" || fakeRunner.calls[1].args[1] != "list" {
 		t.Fatalf("expected second command to be tofu state list, got %#v", fakeRunner.calls[1])
 	}
-	if fakeRunner.calls[2].name != "tofu" || len(fakeRunner.calls[2].args) < 3 || fakeRunner.calls[2].args[0] != "apply" || fakeRunner.calls[2].args[1] != "-auto-approve" || fakeRunner.calls[2].args[2] != "-var=opencenter_lifecycle_mode=cli" {
-		t.Fatalf("expected third command to be tofu apply -auto-approve, got %#v", fakeRunner.calls[2])
+	expectedInventoryArg := "-var=inventory_output_dir=" + filepath.Join(clusterDir, ".opencenter-state", "inventory")
+	if fakeRunner.calls[2].name != "tofu" || len(fakeRunner.calls[2].args) < 4 || fakeRunner.calls[2].args[0] != "apply" || fakeRunner.calls[2].args[1] != "-auto-approve" || fakeRunner.calls[2].args[2] != "-var=opencenter_lifecycle_mode=cli" || fakeRunner.calls[2].args[3] != expectedInventoryArg {
+		t.Fatalf("expected third command to be tofu apply -auto-approve with lifecycle mode and inventory_output_dir, got %#v", fakeRunner.calls[2])
+	}
+	if fakeRunner.calls[2].env["TF_VAR_inventory_output_dir"] != filepath.Join(clusterDir, ".opencenter-state", "inventory") {
+		t.Fatalf("expected TF_VAR_inventory_output_dir in env, got %#v", fakeRunner.calls[2].env)
 	}
 
 	if fakeRunner.calls[0].env["OS_AUTH_URL"] != "https://keystone.example.com/v3" {
@@ -244,6 +248,83 @@ func TestOpenStackBootstrapCreatesFluxBeforeSOPSSecret(t *testing.T) {
 	}
 	if index("openstack-flux-bootstrap") >= index(sopsAgeSecretStepID) {
 		t.Fatalf("Flux bootstrap must run before SOPS secret reconciliation, got %v", ids)
+	}
+}
+
+func TestOpenStackBootstrapProviderForwardsInventoryStateZoneToOpenTofu(t *testing.T) {
+	fakeRunner := &fakeLifecycleRunner{
+		onRun: func(dir string, env map[string]string, name string, args ...string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	provider := &openstackBootstrapProvider{runner: fakeRunner}
+	cfg := mustNewClusterTestConfig("inv-forward", "openstack")
+	cfg.OpenTofu.Path = "tofu"
+	cfg.Deployment.Method = "kubespray"
+	clusterPaths := &paths.ClusterPaths{
+		ClusterStateDir: filepath.Join(t.TempDir(), "state"),
+		InventoryPath:   filepath.Join(t.TempDir(), "state", "inventory"),
+	}
+
+	steps, err := provider.BuildSteps(&cfg, clusterPaths, &BootstrapOptions{KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig.yaml")})
+	if err != nil {
+		t.Fatalf("BuildSteps() error = %v", err)
+	}
+
+	var applyStep *bootstrapStep
+	for i := range steps {
+		if steps[i].ID == "opentofu-apply" {
+			applyStep = &steps[i]
+			break
+		}
+	}
+	if applyStep == nil {
+		t.Fatal("opentofu-apply step not found")
+	}
+
+	expectedVar := "-var=inventory_output_dir=" + clusterPaths.InventoryPath
+	foundPlanCmd := false
+	for _, cmd := range applyStep.Plan.Commands {
+		if cmd.Name == "tofu" && len(cmd.Args) > 0 && cmd.Args[0] == "apply" {
+			for _, arg := range cmd.Args {
+				if arg == expectedVar {
+					foundPlanCmd = true
+					break
+				}
+			}
+		}
+	}
+	if !foundPlanCmd {
+		t.Fatalf("expected plan command to include %s, got %#v", expectedVar, applyStep.Plan.Commands)
+	}
+
+	if err := applyStep.Run(context.Background()); err != nil {
+		t.Fatalf("applyStep.Run() error = %v", err)
+	}
+
+	var applyCall *recordedLifecycleCommand
+	for i := range fakeRunner.calls {
+		if fakeRunner.calls[i].name == "tofu" && len(fakeRunner.calls[i].args) > 0 && fakeRunner.calls[i].args[0] == "apply" {
+			applyCall = &fakeRunner.calls[i]
+			break
+		}
+	}
+	if applyCall == nil {
+		t.Fatal("tofu apply was not executed")
+	}
+
+	foundArg := false
+	for _, arg := range applyCall.args {
+		if arg == expectedVar {
+			foundArg = true
+			break
+		}
+	}
+	if !foundArg {
+		t.Fatalf("expected tofu apply args to include %s, got %#v", expectedVar, applyCall.args)
+	}
+	if applyCall.env["TF_VAR_inventory_output_dir"] != clusterPaths.InventoryPath {
+		t.Fatalf("expected TF_VAR_inventory_output_dir in env, got %#v", applyCall.env)
 	}
 }
 
@@ -449,7 +530,7 @@ func TestOpenTofuCalicoSafetyGuards(t *testing.T) {
 				},
 			}
 			provider := &openstackBootstrapProvider{runner: runner}
-			err = provider.runOpenTofuApply(context.Background(), &cfg, filepath.Join(t.TempDir(), "infrastructure"), nil, "tofu")
+			err = provider.runOpenTofuApply(context.Background(), &cfg, filepath.Join(t.TempDir(), "infrastructure"), nil, nil, "tofu")
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runOpenTofuApply() error = %v", err)

@@ -44,6 +44,27 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 	planEnv := providerPlanEnv(provider, opts.KubeconfigPath)
 	var kubeLifecycle *kubesprayLifecycle
 
+	inventoryPath := ""
+	if clusterPaths != nil {
+		inventoryPath = clusterPaths.InventoryPath
+	}
+	if strings.TrimSpace(inventoryPath) == "" {
+		stateDir := ""
+		if clusterPaths != nil {
+			stateDir = clusterPaths.ClusterStateDir
+		}
+		if strings.TrimSpace(stateDir) == "" {
+			stateDir = filepath.Join(clusterDir, ".opencenter-state")
+		}
+		inventoryPath = filepath.Join(stateDir, "inventory")
+	}
+
+	isKubespray := strings.EqualFold(strings.TrimSpace(cfg.Deployment.Method), "kubespray")
+	applyArgs := []string{"apply", "-auto-approve", "-var=opencenter_lifecycle_mode=cli"}
+	if isKubespray && strings.TrimSpace(inventoryPath) != "" {
+		applyArgs = append(applyArgs, "-var=inventory_output_dir="+inventoryPath)
+	}
+
 	steps := []bootstrapStep{
 		p.buildPreflightStep(cfg, provider, clusterDir),
 		{
@@ -79,7 +100,7 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 				ID:          "opentofu-apply",
 				Action:      "Apply OpenTofu infrastructure",
 				WorkingDir:  clusterDir,
-				Commands:    []BootstrapPlanCommand{commandPlan(openTofuPath, "apply", "-auto-approve", "-var=opencenter_lifecycle_mode=cli")},
+				Commands:    []BootstrapPlanCommand{commandPlan(openTofuPath, applyArgs...)},
 				Environment: planEnv,
 				Reads:       []string{clusterDir},
 				Writes:      []string{"infrastructure resources", filepath.Join(clusterDir, "terraform.tfstate")},
@@ -90,10 +111,13 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 				if err != nil {
 					return err
 				}
+				if isKubespray && strings.TrimSpace(inventoryPath) != "" {
+					env["TF_VAR_inventory_output_dir"] = inventoryPath
+				}
 				if kubeLifecycle != nil {
 					kubeLifecycle.openTofuEnv = cloneStringMap(env)
 				}
-				return p.runOpenTofuApply(ctx, cfg, clusterDir, env, openTofuPath)
+				return p.runOpenTofuApply(ctx, cfg, clusterDir, applyArgs, env, openTofuPath)
 			},
 		},
 	}
@@ -262,9 +286,12 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 	return steps, nil
 }
 
-func (p *openstackBootstrapProvider) runOpenTofuApply(ctx context.Context, cfg *v2.Config, clusterDir string, env map[string]string, openTofuPath string) error {
+func (p *openstackBootstrapProvider) runOpenTofuApply(ctx context.Context, cfg *v2.Config, clusterDir string, applyArgs []string, env map[string]string, openTofuPath string) error {
+	if len(applyArgs) == 0 {
+		applyArgs = []string{"apply", "-auto-approve", "-var=opencenter_lifecycle_mode=cli"}
+	}
 	if !isHelmManagedCalico(cfg) {
-		_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, "apply", "-auto-approve", "-var=opencenter_lifecycle_mode=cli")
+		_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, applyArgs...)
 		return err
 	}
 
@@ -285,7 +312,7 @@ func (p *openstackBootstrapProvider) runOpenTofuApply(ctx context.Context, cfg *
 		return fmt.Errorf("snapshot Calico GitOps files before OpenTofu apply: %w", err)
 	}
 
-	_, applyErr := p.runner.Run(ctx, clusterDir, env, openTofuPath, "apply", "-auto-approve", "-var=opencenter_lifecycle_mode=cli")
+	_, applyErr := p.runner.Run(ctx, clusterDir, env, openTofuPath, applyArgs...)
 	verifyErr := verifyCalicoGitOpsFiles(cfg, snapshot)
 	if verifyErr != nil {
 		if applyErr != nil {
