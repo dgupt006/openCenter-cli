@@ -34,6 +34,13 @@ const (
 	calicoOperatorCRDsURLFormat = "https://raw.githubusercontent.com/projectcalico/calico/%s/manifests/operator-crds.yaml"
 )
 
+var calicoRequiredCRDs = []string{
+	"crd/installations.operator.tigera.io",
+	"crd/apiservers.operator.tigera.io",
+	"crd/goldmanes.operator.tigera.io",
+	"crd/whiskers.operator.tigera.io",
+}
+
 type openStackNetworkPluginSelection struct {
 	Name          string
 	InstallMethod string
@@ -131,6 +138,7 @@ func withBootstrapHelmDirectories(env map[string]string, tmpDir string) (map[str
 		"HELM_CACHE_HOME":  filepath.Join(helmRoot, "cache"),
 		"HELM_CONFIG_HOME": filepath.Join(helmRoot, "config"),
 		"HELM_DATA_HOME":   filepath.Join(helmRoot, "data"),
+		"KUBECACHEDIR":     filepath.Join(tmpDir, "kubecache"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -181,6 +189,16 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 		return fmt.Errorf("apply Calico operator CRDs from %s: %w", crdsURL, err)
 	}
 
+	// Wait for the required operator CRDs to become Established before running
+	// helm. helm's RESTMapper queries kube-apiserver discovery, which registers
+	// new CRDs asynchronously after apply returns; without this wait, helm can
+	// race and fail with "resource mapping not found ... ensure CRDs are installed first".
+	waitArgs := append([]string{"wait", "--for=condition=established"}, calicoRequiredCRDs...)
+	waitArgs = append(waitArgs, "--timeout=60s")
+	if _, err := p.runner.Run(ctx, tmpDir, env, "kubectl", kubectlArgs(kubeconfigPath, waitArgs...)...); err != nil {
+		return fmt.Errorf("wait for Calico operator CRDs to become established: %w", err)
+	}
+
 	// Add the projectcalico Helm repository and refresh its cache.
 	if _, err := p.runner.Run(ctx, tmpDir, env, "helm", "repo", "add", calicoHelmRepoName, calicoHelmRepo); err != nil {
 		return fmt.Errorf("add Calico Helm repo: %w", err)
@@ -216,6 +234,7 @@ func (p *openstackBootstrapProvider) installOpenStackCalicoWithHelm(ctx context.
 		// force conflict resolution so the declared values (including bootstrap
 		// tolerations) can be reconciled idempotently.
 		"--force-conflicts",
+		"--kubeconfig", kubeconfigPath,
 		"-f", valuesPath,
 	); err != nil {
 		return fmt.Errorf("helm install Calico %s: %w", selection.Version, err)
@@ -255,7 +274,7 @@ func (p *openstackBootstrapProvider) installOpenStackNetworkPluginWithHelm(ctx c
 
 	switch selection.Name {
 	case "cilium", "kube-ovn":
-		if _, err := p.runner.Run(ctx, tmpDir, env, "helm", "upgrade", "--install", selection.ReleaseName, selection.Chart, "--namespace", selection.Namespace, "--version", selection.Version, "--values", valuesPath); err != nil {
+		if _, err := p.runner.Run(ctx, tmpDir, env, "helm", "upgrade", "--install", selection.ReleaseName, selection.Chart, "--namespace", selection.Namespace, "--version", selection.Version, "--kubeconfig", kubeconfigPath, "--values", valuesPath); err != nil {
 			return err
 		}
 	default:
@@ -429,11 +448,14 @@ func normalizeOpenStackNetworkPluginInstallMethod(method string) string {
 
 func openStackNetworkPluginPlanCommands(selection openStackNetworkPluginSelection, kubeconfigPath string) []BootstrapPlanCommand {
 	if selection.Name == "calico" {
+		waitArgs := append([]string{"wait", "--for=condition=established"}, calicoRequiredCRDs...)
+		waitArgs = append(waitArgs, "--timeout=60s")
 		commands := []BootstrapPlanCommand{
 			commandPlan("kubectl", kubectlArgs(kubeconfigPath, "apply", "--server-side", "-f", fmt.Sprintf(calicoOperatorCRDsURLFormat, selection.Version))...),
+			commandPlan("kubectl", kubectlArgs(kubeconfigPath, waitArgs...)...),
 			commandPlan("helm", "repo", "add", calicoHelmRepoName, calicoHelmRepo),
 			commandPlan("helm", "repo", "update", calicoHelmRepoName),
-			commandPlan("helm", "upgrade", "--install", selection.ReleaseName, calicoHelmChart, "--version", selection.Version, "--namespace", selection.Namespace, "--create-namespace", "--force-conflicts", "-f", "<organization>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml"),
+			commandPlan("helm", "upgrade", "--install", selection.ReleaseName, calicoHelmChart, "--version", selection.Version, "--namespace", selection.Namespace, "--create-namespace", "--skip-crds", "--force-conflicts", "--kubeconfig", kubeconfigPath, "-f", "<organization>/applications/overlays/<cluster>/services/calico/helm-values/override_values.yaml"),
 		}
 		return append(commands, openStackNetworkPluginReadinessPlanCommands(selection, kubeconfigPath)...)
 	}
@@ -448,13 +470,13 @@ func openStackNetworkPluginPlanCommands(selection openStackNetworkPluginSelectio
 		switch selection.Name {
 		case "cilium":
 			return []BootstrapPlanCommand{
-				commandPlan("helm", "upgrade", "--install", "cilium", "oci://quay.io/cilium/charts/cilium", "--namespace", "kube-system", "--version", selection.Version, "--values", "<generated values.yaml>"),
+				commandPlan("helm", "upgrade", "--install", "cilium", "oci://quay.io/cilium/charts/cilium", "--namespace", "kube-system", "--version", selection.Version, "--kubeconfig", kubeconfigPath, "--values", "<generated values.yaml>"),
 				commandPlan("kubectl", kubectlArgs(kubeconfigPath, "-n", "kube-system", "rollout", "status", "ds/cilium", "--timeout=10m")...),
 				commandPlan("kubectl", kubectlArgs(kubeconfigPath, "-n", "kube-system", "rollout", "status", "deploy/cilium-operator", "--timeout=10m")...),
 			}
 		case "kube-ovn":
 			return []BootstrapPlanCommand{
-				commandPlan("helm", "upgrade", "--install", "kube-ovn", "oci://ghcr.io/kubeovn/charts/kube-ovn-v2", "--namespace", "kube-system", "--version", selection.Version, "--values", "<generated values.yaml>"),
+				commandPlan("helm", "upgrade", "--install", "kube-ovn", "oci://ghcr.io/kubeovn/charts/kube-ovn-v2", "--namespace", "kube-system", "--version", selection.Version, "--kubeconfig", kubeconfigPath, "--values", "<generated values.yaml>"),
 				commandPlan("kubectl", kubectlArgs(kubeconfigPath, "-n", "kube-system", "wait", "--for=condition=Ready", "pods", "-l", "app.kubernetes.io/part-of=kube-ovn", "--timeout=10m")...),
 			}
 		default:

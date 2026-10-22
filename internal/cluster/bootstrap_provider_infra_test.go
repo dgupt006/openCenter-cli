@@ -579,23 +579,27 @@ func TestOpenStackNetworkPluginInstallCalicoUsesHelmChart(t *testing.T) {
 	}
 
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "apply --server-side -f https://raw.githubusercontent.com/projectcalico/calico/v"+configuredCalicoVersion+"/manifests/operator-crds.yaml")
+	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=established crd/installations.operator.tigera.io crd/apiservers.operator.tigera.io crd/goldmanes.operator.tigera.io crd/whiskers.operator.tigera.io --timeout=60s")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo add projectcalico https://docs.tigera.io/calico/charts")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "repo update projectcalico")
-	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace --skip-crds --force-conflicts -f "+valuesPath)
+	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "upgrade --install calico projectcalico/tigera-operator --version v"+configuredCalicoVersion+" --namespace tigera-operator --create-namespace --skip-crds --force-conflicts --kubeconfig "+kubeconfigPath+" -f "+valuesPath)
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" -n tigera-operator rollout status deployment/tigera-operator --timeout=5m")
 
-	crdApplyIndex, helmInstallIndex := -1, -1
+	crdApplyIndex, crdWaitIndex, helmInstallIndex := -1, -1, -1
 	for i, call := range fakeRunner.calls {
 		command := strings.Join(call.args, " ")
 		if call.name == "kubectl" && strings.Contains(command, "apply --server-side -f https://raw.githubusercontent.com/projectcalico/calico/v"+configuredCalicoVersion+"/manifests/operator-crds.yaml") {
 			crdApplyIndex = i
 		}
+		if call.name == "kubectl" && strings.Contains(command, "wait --for=condition=established") {
+			crdWaitIndex = i
+		}
 		if call.name == "helm" && strings.Contains(command, "upgrade --install calico projectcalico/tigera-operator") {
 			helmInstallIndex = i
 		}
 	}
-	if crdApplyIndex == -1 || helmInstallIndex == -1 || crdApplyIndex >= helmInstallIndex {
-		t.Fatalf("expected Calico CRD apply before Helm install, got CRD apply index %d and Helm install index %d in:\n%s", crdApplyIndex, helmInstallIndex, renderRecordedCommands(fakeRunner.calls))
+	if crdApplyIndex == -1 || crdWaitIndex == -1 || helmInstallIndex == -1 || crdApplyIndex >= crdWaitIndex || crdWaitIndex >= helmInstallIndex {
+		t.Fatalf("expected Calico CRD apply before wait before Helm install, got apply index %d, wait index %d, and Helm install index %d in:\n%s", crdApplyIndex, crdWaitIndex, helmInstallIndex, renderRecordedCommands(fakeRunner.calls))
 	}
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=create tigerastatus/calico --timeout=5m")
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=Available tigerastatus/calico --timeout=10m")
@@ -1029,7 +1033,8 @@ func TestKindInstallCalicoSkipsChartCRDsAndForcesConflicts(t *testing.T) {
 		t.Fatalf("installKindCalico() error = %v", err)
 	}
 
-	// The CRDs are applied by kubectl beforehand, so helm must not apply them
+	// The CRDs are applied by kubectl and waited on beforehand, so helm must not apply them
 	// again under a different field manager.
+	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=established crd/installations.operator.tigera.io crd/apiservers.operator.tigera.io crd/goldmanes.operator.tigera.io crd/whiskers.operator.tigera.io --timeout=60s")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "--create-namespace --skip-crds --force-conflicts --kubeconfig "+kubeconfigPath+" -f "+valuesPath)
 }

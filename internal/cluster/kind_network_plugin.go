@@ -73,6 +73,11 @@ func (p *kindBootstrapProvider) installKindCalico(ctx context.Context, cfg *v2.C
 	}
 	defer os.RemoveAll(tmpDir)
 
+	env, err = withBootstrapHelmDirectories(env, tmpDir)
+	if err != nil {
+		return err
+	}
+
 	// Idempotency guard: if Calico is already Available, skip the helm upgrade to
 	// avoid fighting the tigera-operator for field ownership on re-deploy.
 	if out, err := p.runner.Run(ctx, tmpDir, env, "kubectl",
@@ -90,6 +95,16 @@ func (p *kindBootstrapProvider) installKindCalico(ctx context.Context, cfg *v2.C
 	crdsURL := fmt.Sprintf(calicoOperatorCRDsURLFormat, selection.Version)
 	if _, err := p.runner.Run(ctx, tmpDir, env, "kubectl", kubectlArgs(kubeconfigPath, "apply", "--server-side", "-f", crdsURL)...); err != nil {
 		return fmt.Errorf("apply Calico operator CRDs from %s: %w", crdsURL, err)
+	}
+
+	// Wait for the required operator CRDs to become Established before running
+	// helm. helm's RESTMapper queries kube-apiserver discovery, which registers
+	// new CRDs asynchronously after apply returns; without this wait, helm can
+	// race and fail with "resource mapping not found ... ensure CRDs are installed first".
+	waitArgs := append([]string{"wait", "--for=condition=established"}, calicoRequiredCRDs...)
+	waitArgs = append(waitArgs, "--timeout=60s")
+	if _, err := p.runner.Run(ctx, tmpDir, env, "kubectl", kubectlArgs(kubeconfigPath, waitArgs...)...); err != nil {
+		return fmt.Errorf("wait for Calico operator CRDs to become established: %w", err)
 	}
 
 	if _, err := p.runner.Run(ctx, tmpDir, env, "helm", "repo", "add", calicoHelmRepoName, calicoHelmRepo); err != nil {
