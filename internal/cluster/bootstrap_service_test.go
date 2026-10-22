@@ -555,6 +555,39 @@ func TestBootstrapService_executeBootstrapStepsNeverSkipRunsDespiteState(t *test
 	}
 }
 
+func TestBootstrapService_executeBootstrapStepsCanSkipRunsWhenFalse(t *testing.T) {
+	pathResolver := paths.NewPathResolver(t.TempDir())
+	bootstrapService := createTestBootstrapService(pathResolver)
+
+	var executed []string
+	steps := []bootstrapStep{
+		{
+			ID:          "opentofu-apply",
+			Description: "Apply OpenTofu infrastructure",
+			CanSkip: func() bool {
+				return false
+			},
+			Run: func(ctx context.Context) error {
+				executed = append(executed, "opentofu-apply")
+				return nil
+			},
+		},
+	}
+
+	state := bootstrapService.newBootstrapState()
+	bootstrapService.setStepStatus(state, "opentofu-apply", bootstrapStatusSuccess, "")
+
+	result := &BootstrapResult{}
+	err := bootstrapService.executeBootstrapSteps(context.Background(), steps, false, true, "", state, result, &BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("executeBootstrapSteps() error = %v", err)
+	}
+
+	if len(executed) != 1 || executed[0] != "opentofu-apply" {
+		t.Fatalf("expected opentofu-apply to run when CanSkip returns false, got %v", executed)
+	}
+}
+
 func TestBootstrapService_OpenStackDryRunDoesNotUseLegacyConfigValidator(t *testing.T) {
 	tmpDir := t.TempDir()
 	clusterName := "openstack-bootstrap"

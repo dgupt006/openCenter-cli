@@ -195,7 +195,8 @@ type bootstrapStep struct {
 	Description string
 	Plan        BootstrapPlanStep
 	Run         func(ctx context.Context) error
-	NeverSkip   bool // When true, the step always runs even if state marks it as completed.
+	NeverSkip   bool        // When true, the step always runs even if state marks it as completed.
+	CanSkip     func() bool // When non-nil, if it returns false, the step runs even if state marks it as completed.
 }
 
 // bootstrapState tracks the state of bootstrap steps
@@ -533,8 +534,10 @@ func (s *BootstrapService) executeBootstrapSteps(ctx context.Context, selectedSt
 	for i, step := range selectedSteps {
 		legacyApplyHandoff := step.ID == "opentofu-apply" && state != nil && state.LegacyApplyHandoffPending
 
-		// Skip if already completed (unless ignoring state or step is marked NeverSkip)
-		if !legacyApplyHandoff && !step.NeverSkip && !ignoreState && stateEnabled && s.isStepSuccess(state, step.ID) {
+		canSkip := step.CanSkip == nil || step.CanSkip()
+
+		// Skip if already completed (unless ignoring state, step is marked NeverSkip, or CanSkip returns false)
+		if !legacyApplyHandoff && !step.NeverSkip && canSkip && !ignoreState && stateEnabled && s.isStepSuccess(state, step.ID) {
 			s.progress("  [%d/%d] ⏭ %s (%s) (already completed)", i+1, totalSteps, step.Description, step.ID)
 			logging.Debugf("bootstrap: step %s skipped (already completed in saved state)", step.ID)
 			logBootstrapMessage(ctx, "step skipped from saved state: %s", step.ID)

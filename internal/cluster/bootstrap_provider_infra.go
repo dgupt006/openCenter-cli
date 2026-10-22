@@ -96,6 +96,14 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 		{
 			ID:          "opentofu-apply",
 			Description: "Apply OpenTofu infrastructure",
+			CanSkip: func() bool {
+				if isKubespray && strings.TrimSpace(inventoryPath) != "" {
+					if _, err := os.Stat(filepath.Join(inventoryPath, "inventory.yaml")); err != nil {
+						return false
+					}
+				}
+				return true
+			},
 			Plan: BootstrapPlanStep{
 				ID:          "opentofu-apply",
 				Action:      "Apply OpenTofu infrastructure",
