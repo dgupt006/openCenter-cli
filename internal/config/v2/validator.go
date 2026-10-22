@@ -540,8 +540,33 @@ func (v *defaultValidator) Validate(cfg *Config) error {
 		return err
 	}
 
+	// Deployment-time ownership conflict, after service validation so pool
+	// errors surface first.
+	if err := validateLoadBalancerOwnership(cfg); err != nil {
+		return err
+	}
+
 	return nil
 }
+
+// validateLoadBalancerOwnership rejects the OpenStack CCM + MetalLB pair: both
+// reconcile classless LoadBalancer Services, and MetalLB clears the address
+// published by CCM when no pool can satisfy the Service, leaving Gateway and
+// DNS controllers without an address. Keep a single owner for cloud load
+// balancers. Enforced on deployment-time paths only (Validate, hence
+// ValidateForDeployment and ValidateGeneration) so that stored configs remain
+// loadable and renderers keep working under `generate --skip-validation`.
+func validateLoadBalancerOwnership(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "openstack") &&
+		isServiceEnabled(cfg, "metallb") && isServiceEnabled(cfg, "openstack-ccm") {
+		return fmt.Errorf("opencenter.services.metallb cannot be enabled with openstack-ccm: both controllers manage classless LoadBalancer Services; disable metallb when OpenStack CCM owns cloud load balancers")
+	}
+	return nil
+}
+
 // ValidateForSet performs the narrow validation required before `cluster set`
 // persists a configuration change. It intentionally skips Mimir Swift provider
 // checks so that updating one service does not fail because of an unrelated
@@ -644,6 +669,7 @@ func (v *defaultValidator) validateBusinessRulesWithOptions(cfg *Config, forSet 
 
 	return nil
 }
+
 // filterStoragePolicyIssuesForSet drops the Mimir Swift-on-non-OpenStack
 // catchall so that `cluster set` does not fail because of an unrelated Mimir
 // readiness issue (OCTR-812). Other business-rule storage issues are preserved.
@@ -867,14 +893,10 @@ func (v *defaultValidator) ValidateServices(cfg *Config) error {
 		}
 	}
 
-	// OpenStack CCM and MetalLB both reconcile classless LoadBalancer Services.
-	// Running both causes MetalLB to clear the address published by CCM when no
-	// MetalLB pool can satisfy the Service, leaving Gateway and DNS controllers
-	// without an address. Keep a single owner for cloud load balancers.
-	if strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider), "openstack") &&
-		metallbEnabled && isServiceEnabled(cfg, "openstack-ccm") {
-		return fmt.Errorf("opencenter.services.metallb cannot be enabled with openstack-ccm: both controllers manage classless LoadBalancer Services; disable metallb when OpenStack CCM owns cloud load balancers")
-	}
+	// The OpenStack CCM vs MetalLB ownership conflict is a deployment-time
+	// concern; it is enforced in Validate (see validateLoadBalancerOwnership),
+	// not here, because renderers call ValidateServices for their own service
+	// and must keep working under `generate --skip-validation`.
 
 	// OCTR-762: validate per-service MetalLB address pool selection. Any service
 	// that names an address_pool must reference a pool declared in
