@@ -12,6 +12,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	corePaths "github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
+	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
 )
 
 type bootstrapRuntimePaths struct {
@@ -67,6 +68,33 @@ func bootstrapLogFileName(startedAt time.Time) string {
 	return "bootstrap-" + startedAt.UTC().Format("20060102T150405Z") + ".log"
 }
 
+// ResolveDestroyLogPath resolves the log path for cluster destroy operations.
+func ResolveDestroyLogPath(cfg *v2.Config, logPath string, startedAt time.Time) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("configuration is nil")
+	}
+
+	clusterName := sanitizeRuntimeSegment(cfg.ClusterName())
+	if clusterName == "" {
+		return "", fmt.Errorf("cluster name must be set")
+	}
+	organization := sanitizeRuntimeSegment(cfg.Organization())
+	if organization == "" {
+		organization = "opencenter"
+	}
+
+	stateDir := config.GetStateDir()
+	resolvedLogPath := strings.TrimSpace(logPath)
+	if resolvedLogPath == "" {
+		resolvedLogPath = filepath.Join(stateDir, "logs", "destroy", organization, clusterName, destroyLogFileName(startedAt))
+	}
+	return resolveBootstrapPath(resolvedLogPath)
+}
+
+func destroyLogFileName(startedAt time.Time) string {
+	return "destroy-" + startedAt.UTC().Format("20060102T150405Z") + ".log"
+}
+
 func resolveBootstrapPath(path string) (string, error) {
 	expanded := corePaths.ExpandPath(strings.TrimSpace(path))
 	if expanded == "" {
@@ -88,27 +116,33 @@ func sanitizeRuntimeSegment(value string) string {
 	return value
 }
 
-func openBootstrapLogFile(path string) (*os.File, error) {
+// OpenActionLogFile creates the directory if needed and opens a log file for writing.
+func OpenActionLogFile(path string) (*os.File, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create bootstrap log directory: %w", err)
+		return nil, fmt.Errorf("create log directory: %w", err)
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("open bootstrap log file: %w", err)
+		return nil, fmt.Errorf("open log file: %w", err)
 	}
 
 	return file, nil
+}
+
+func openBootstrapLogFile(path string) (*os.File, error) {
+	return OpenActionLogFile(path)
 }
 
 func withBootstrapLogWriter(ctx context.Context, writer io.Writer) context.Context {
 	if writer == nil {
 		return ctx
 	}
+	ctx = logging.WithActionLogWriter(ctx, writer)
 	return context.WithValue(ctx, bootstrapLogWriterKey{}, writer)
 }
 
@@ -116,16 +150,12 @@ func bootstrapLogWriter(ctx context.Context) io.Writer {
 	if ctx == nil {
 		return nil
 	}
-	writer, _ := ctx.Value(bootstrapLogWriterKey{}).(io.Writer)
-	return writer
+	if writer, ok := ctx.Value(bootstrapLogWriterKey{}).(io.Writer); ok && writer != nil {
+		return writer
+	}
+	return logging.ActionLogWriter(ctx)
 }
 
 func logBootstrapMessage(ctx context.Context, format string, args ...interface{}) {
-	writer := bootstrapLogWriter(ctx)
-	if writer == nil {
-		return
-	}
-
-	message := fmt.Sprintf(format, args...)
-	_, _ = fmt.Fprintf(writer, "%s %s\n", time.Now().UTC().Format(time.RFC3339), message)
+	logging.LogActionMessage(ctx, format, args...)
 }

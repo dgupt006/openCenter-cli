@@ -60,6 +60,7 @@ opencenter cluster destroy [name] [flags]
       --delete-volumes        Delete CSI-provisioned Cinder volumes left orphaned after infrastructure destruction (OpenStack only)
       --force                 Skip confirmation prompt
   -h, --help                  help for destroy
+      --log string            log file path (defaults to <state_dir>/logs/destroy/<org>/<name>/destroy-YYYYMMDDTHHMMSSZ.log)
       --remove-files          Remove local configuration and GitOps files after infrastructure destruction
       --skip-infrastructure   Skip infrastructure destruction (only remove local files when combined with --remove-files)
 ```

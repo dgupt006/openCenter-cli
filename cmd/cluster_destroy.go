@@ -27,6 +27,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
+	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
 	"github.com/opencenter-cloud/opencenter-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -74,6 +75,11 @@ to automatically break any existing lock without prompting.`,
   opencenter cluster destroy --force`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Apply log-level flag
+			if logLevel, _ := cmd.Flags().GetString("log-level"); logLevel != "" {
+				_ = logging.SetLogLevel(logLevel)
+			}
+
 			// Resolve cluster name from args or active cluster
 			name, err := resolveClusterNameForCommand(cmd, args, true)
 			if err != nil {
@@ -81,6 +87,9 @@ to automatically break any existing lock without prompting.`,
 			}
 
 			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
 
 			// Acquire lock for destroy operation (with prompt if lock exists)
 			lockResult, err := AcquireLockWithPrompt(ctx, cmd, name, "destroy", 1*time.Hour, map[string]string{
@@ -136,24 +145,65 @@ to automatically break any existing lock without prompting.`,
 				}
 			}
 
+			// Set up destroy logging
+			customLogPath, _ := cmd.Flags().GetString("log")
+			destroyLogPath, err := cluster.ResolveDestroyLogPath(&cfg, customLogPath, time.Now())
+			if err != nil {
+				return fmt.Errorf("resolving destroy log path: %w", err)
+			}
+
+			logFile, err := cluster.OpenActionLogFile(destroyLogPath)
+			if err != nil {
+				return fmt.Errorf("opening destroy log file: %w", err)
+			}
+			if logFile != nil {
+				defer logFile.Close()
+				ctx = logging.WithActionLogWriter(ctx, logFile)
+			}
+
+			logging.LogActionMessage(ctx, "destroy started for %s/%s", organization, clusterName)
+			logging.LogActionMessage(ctx, "options: force=%v, remove_files=%v, skip_infrastructure=%v, delete_volumes=%v", force, removeFiles, skipInfrastructure, deleteVolumes)
+			logging.Debugf("destroy: log file at %s", destroyLogPath)
+
 			// Destroy infrastructure (unless skipped)
 			if !skipInfrastructure {
 				if err := destroyClusterInfrastructure(ctx, cmd, cfg, deleteVolumes); err != nil {
+					logging.LogActionMessage(ctx, "destroy failed during infrastructure destruction: %v", err)
+					if destroyLogPath != "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Destroy log: %s\n", destroyLogPath)
+					}
 					return err
 				}
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "Skipping infrastructure destruction (--skip-infrastructure)\n")
+				logging.LogActionMessage(ctx, "skipped infrastructure destruction (--skip-infrastructure)")
 			}
 
 			// If --remove-files is not set, we're done
 			if !removeFiles {
+				logging.LogActionMessage(ctx, "infrastructure destroyed; local files preserved")
 				fmt.Fprintf(cmd.OutOrStdout(), "\nInfrastructure destroyed. Local files preserved.\n")
 				fmt.Fprintf(cmd.OutOrStdout(), "Use --remove-files to also delete local configuration and GitOps files.\n")
+				if destroyLogPath != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "Destroy log: %s\n", destroyLogPath)
+				}
 				return nil
 			}
 
 			// Remove local files
-			return removeClusterFiles(ctx, cmd, cfg, name, clusterName, organization)
+			if err := removeClusterFiles(ctx, cmd, cfg, name, clusterName, organization); err != nil {
+				logging.LogActionMessage(ctx, "destroy failed during file removal: %v", err)
+				if destroyLogPath != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Destroy log: %s\n", destroyLogPath)
+				}
+				return err
+			}
+
+			logging.LogActionMessage(ctx, "destroy complete for %s/%s", organization, clusterName)
+			if destroyLogPath != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Destroy log: %s\n", destroyLogPath)
+			}
+			return nil
 		},
 	}
 
@@ -161,6 +211,7 @@ to automatically break any existing lock without prompting.`,
 	cmd.Flags().BoolVar(&removeFiles, "remove-files", false, "Remove local configuration and GitOps files after infrastructure destruction")
 	cmd.Flags().BoolVar(&skipInfrastructure, "skip-infrastructure", false, "Skip infrastructure destruction (only remove local files when combined with --remove-files)")
 	cmd.Flags().BoolVar(&deleteVolumes, "delete-volumes", false, "Delete CSI-provisioned Cinder volumes left orphaned after infrastructure destruction (OpenStack only)")
+	cmd.Flags().String("log", "", "log file path (defaults to <state_dir>/logs/destroy/<org>/<name>/destroy-YYYYMMDDTHHMMSSZ.log)")
 
 	return cmd
 }
@@ -172,32 +223,44 @@ func destroyClusterInfrastructure(ctx context.Context, cmd *cobra.Command, cfg v
 	// Handle Kind clusters
 	if provider == "kind" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Destroying Kind cluster...\n")
+		logging.LogActionMessage(ctx, "destroying Kind cluster %s", cfg.ClusterName())
 		if err := destroyKindCluster(ctx, cfg); err != nil {
+			logging.LogActionMessage(ctx, "failed to destroy Kind cluster %s: %v", cfg.ClusterName(), err)
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Kind cluster destroyed.\n")
+		logging.LogActionMessage(ctx, "Kind cluster %s destroyed successfully", cfg.ClusterName())
 		return nil
 	}
 
 	// Handle OpenTofu-based providers
 	destroyService := cluster.NewDestroyService(cmd.OutOrStdout())
 	if destroyService.SupportsInfraDestroy(&cfg) {
-		fmt.Fprintf(cmd.OutOrStdout(), "Destroying infrastructure via OpenTofu...\n")
+		if provider == "magnum" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Destroying Magnum cluster...\n")
+			logging.LogActionMessage(ctx, "destroying Magnum cluster %s", cfg.ClusterName())
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Destroying infrastructure via OpenTofu...\n")
+			logging.LogActionMessage(ctx, "destroying infrastructure via OpenTofu for %s", cfg.ClusterName())
+		}
 		result, err := destroyService.DestroyInfrastructure(ctx, &cfg, &cluster.DestroyOptions{
 			AutoApprove:   true,
 			DeleteVolumes: deleteVolumes,
 		})
 		if err != nil {
+			logging.LogActionMessage(ctx, "infrastructure destruction failed: %v", err)
 			return fmt.Errorf("infrastructure destruction failed: %w", err)
 		}
 		if result.InfraDestroyed {
 			fmt.Fprintf(cmd.OutOrStdout(), "Infrastructure destroyed successfully.\n")
+			logging.LogActionMessage(ctx, "infrastructure destroyed successfully")
 		}
 		return nil
 	}
 
 	// Provider doesn't have infrastructure to destroy
 	fmt.Fprintf(cmd.OutOrStdout(), "Provider %q does not have infrastructure to destroy.\n", provider)
+	logging.LogActionMessage(ctx, "provider %q does not have infrastructure to destroy", provider)
 	return nil
 }
 
@@ -265,6 +328,9 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 			if err := saveConfig(ctx, cfg); err != nil {
 				// Log warning but continue with destroy
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to update cluster status: %v\n", err)
+				logging.LogActionMessage(ctx, "warning: failed to update cluster status: %v", err)
+			} else {
+				logging.LogActionMessage(ctx, "updated cluster status to destroyed")
 			}
 		}
 	}
@@ -276,6 +342,7 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 			return fmt.Errorf("failed to remove gitops directory: %w", err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Removed GitOps directory: %s\n", gitopsDir)
+		logging.LogActionMessage(ctx, "removed GitOps directory: %s", gitopsDir)
 	}
 
 	if !isFlatConfig {
@@ -287,6 +354,7 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 			}
 			if _, statErr := os.Stat(clusterPaths.ClusterDir); os.IsNotExist(statErr) {
 				fmt.Fprintf(cmd.OutOrStdout(), "Removed cluster directory: %s\n", clusterPaths.ClusterDir)
+				logging.LogActionMessage(ctx, "removed cluster directory: %s", clusterPaths.ClusterDir)
 			}
 
 			// Remove applications directory: clusters/<org>/applications/overlays/<cluster>/
@@ -295,6 +363,7 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 			}
 			if _, statErr := os.Stat(clusterPaths.ApplicationsDir); os.IsNotExist(statErr) {
 				fmt.Fprintf(cmd.OutOrStdout(), "Removed applications directory: %s\n", clusterPaths.ApplicationsDir)
+				logging.LogActionMessage(ctx, "removed applications directory: %s", clusterPaths.ApplicationsDir)
 			}
 		}
 	}
@@ -305,6 +374,7 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 		return fmt.Errorf("failed to delete config file: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Removed config file: %s\n", configPath)
+	logging.LogActionMessage(ctx, "removed config file: %s", configPath)
 
 	// Remove from active cluster if it was active
 	activeCluster, err := getActiveCluster()
@@ -312,12 +382,15 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 		if err := setActiveCluster(""); err != nil {
 			// Log warning but don't fail
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to clear active cluster: %v\n", err)
+			logging.LogActionMessage(ctx, "warning: failed to clear active cluster: %v", err)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Cleared active cluster marker\n")
+			logging.LogActionMessage(ctx, "cleared active cluster marker")
 		}
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster %q destroyed successfully.\n", name)
+	logging.LogActionMessage(ctx, "cluster %q destroyed successfully", name)
 	return nil
 }
 

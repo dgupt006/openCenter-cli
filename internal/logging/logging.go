@@ -2,12 +2,14 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	corePaths "github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/sirupsen/logrus"
@@ -209,7 +211,7 @@ func ValidateLoggingConfig(config *LoggingConfig) error {
 		if err != nil {
 			return fmt.Errorf("cannot write to log file %s: %w", expandedPath, err)
 		}
-		file.Close()
+		_ = file.Close()
 	}
 	if config.File.MaxSize <= 0 {
 		return fmt.Errorf("file.maxSize must be greater than 0, got %d", config.File.MaxSize)
@@ -270,4 +272,33 @@ func sliceContains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+type actionLogWriterKey struct{}
+
+// WithActionLogWriter stores an io.Writer in the context for logging lifecycle command actions.
+func WithActionLogWriter(ctx context.Context, writer io.Writer) context.Context {
+	if writer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, actionLogWriterKey{}, writer)
+}
+
+// ActionLogWriter retrieves the action log writer from the context, if set.
+func ActionLogWriter(ctx context.Context) io.Writer {
+	if ctx == nil {
+		return nil
+	}
+	writer, _ := ctx.Value(actionLogWriterKey{}).(io.Writer)
+	return writer
+}
+
+// LogActionMessage writes a timestamped message to the action log writer in ctx, if present.
+func LogActionMessage(ctx context.Context, format string, args ...interface{}) {
+	writer := ActionLogWriter(ctx)
+	if writer == nil {
+		return
+	}
+	message := fmt.Sprintf(format, args...)
+	_, _ = fmt.Fprintf(writer, "%s %s\n", time.Now().UTC().Format(time.RFC3339), message)
 }

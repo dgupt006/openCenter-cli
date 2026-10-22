@@ -1,13 +1,16 @@
 package kind
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/logging"
 	"github.com/opencenter-cloud/opencenter-cli/internal/security"
 )
 
@@ -66,8 +69,24 @@ func (r execRunner) Run(ctx context.Context, env map[string]string, name string,
 	}
 	cmd.Env = envList
 
-	output, err := cmd.CombinedOutput()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if writer := logging.ActionLogWriter(ctx); writer != nil {
+		cmd.Stdout = io.MultiWriter(&stdout, writer)
+		cmd.Stderr = io.MultiWriter(&stderr, writer)
+		logging.LogActionMessage(ctx, "executing command: %s %s", name, strings.Join(args, " "))
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
+
+	err = cmd.Run()
+	output := append(stdout.Bytes(), stderr.Bytes()...)
 	if err != nil {
+		if writer := logging.ActionLogWriter(ctx); writer != nil {
+			logging.LogActionMessage(ctx, "command failed: %s %s: %v", name, strings.Join(args, " "), err)
+		}
 		return output, fmt.Errorf("command failed: %s %v: %w\nOutput: %s", name, args, err, string(output))
 	}
 

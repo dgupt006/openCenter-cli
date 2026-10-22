@@ -65,6 +65,17 @@ func TestClusterDeployIntegration(t *testing.T) {
 		t.Fatalf("expected at least one bootstrap log in %s", logDir)
 	}
 
+	bootstrapLogContent, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read bootstrap log: %v", err)
+	}
+	if !strings.Contains(string(bootstrapLogContent), "executing command: kind create cluster") {
+		t.Fatalf("expected kind create cluster in bootstrap log\nlog:\n%s", string(bootstrapLogContent))
+	}
+	if !strings.Contains(string(bootstrapLogContent), "executing command: kind export kubeconfig") {
+		t.Fatalf("expected kind export kubeconfig in bootstrap log\nlog:\n%s", string(bootstrapLogContent))
+	}
+
 	statePath := filepath.Join(stateRoot, "bootstrap", "opencenter", "kind-bootstrap-int", "state.json")
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("expected bootstrap state cleanup at %s, got err=%v", statePath, err)

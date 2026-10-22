@@ -48,6 +48,7 @@ func (r execLifecycleCommandRunner) Run(ctx context.Context, dir string, env map
 	if writer := bootstrapLogWriter(ctx); writer != nil {
 		cmd.Stdout = io.MultiWriter(&stdout, writer)
 		cmd.Stderr = io.MultiWriter(&stderr, writer)
+		logBootstrapMessage(ctx, "executing command: %s %s", name, strings.Join(args, " "))
 	} else {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -56,6 +57,9 @@ func (r execLifecycleCommandRunner) Run(ctx context.Context, dir string, env map
 	err = cmd.Run()
 	output := append(stdout.Bytes(), stderr.Bytes()...)
 	if err != nil {
+		if writer := bootstrapLogWriter(ctx); writer != nil {
+			logBootstrapMessage(ctx, "command failed: %s %s: %v", name, strings.Join(args, " "), err)
+		}
 		return output, fmt.Errorf("command failed: %s %s: %w\nOutput: %s", name, strings.Join(args, " "), err, string(output))
 	}
 

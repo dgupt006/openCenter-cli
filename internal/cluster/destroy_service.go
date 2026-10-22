@@ -94,6 +94,7 @@ func (s *DestroyService) DestroyInfrastructure(ctx context.Context, cfg *v2.Conf
 
 	for _, step := range steps {
 		s.logf("Running: %s\n", step.Description)
+		logBootstrapMessage(ctx, "destroy: running step %s (%s)", step.ID, step.Description)
 
 		if err := step.Run(ctx); err != nil {
 			// Distinguish cleanup warnings (non-fatal post-destroy issues) from hard failures.
@@ -101,14 +102,17 @@ func (s *DestroyService) DestroyInfrastructure(ctx context.Context, cfg *v2.Conf
 			if strings.HasPrefix(step.ID, "cleanup-") {
 				result.CleanupWarnings = err
 				s.logf("Warning: %s encountered issues: %v\n", step.Description, err)
+				logBootstrapMessage(ctx, "destroy: warning in step %s: %v", step.ID, err)
 			} else {
 				result.Error = fmt.Errorf("step %q failed: %w", step.ID, err)
+				logBootstrapMessage(ctx, "destroy: step %s failed: %v", step.ID, err)
 				return result, result.Error
 			}
 		}
 
 		result.StepsCompleted = append(result.StepsCompleted, step.ID)
 		s.logf("Completed: %s\n", step.Description)
+		logBootstrapMessage(ctx, "destroy: completed step %s (%s)", step.ID, step.Description)
 	}
 
 	result.InfraDestroyed = true

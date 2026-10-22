@@ -64,7 +64,9 @@ See [Cluster Init Details](../contributing/cluster-init-details.md) for exactly 
 <state-dir>/
 ├── locks/<resource>.lock                                   # distributed/local file locks (LockManager)
 ├── bootstrap/<org>/<cluster>/state.json                    # cluster deploy resume state
-└── logs/bootstrap/<org>/<cluster>/bootstrap-<timestamp>.log  # full deploy command output
+└── logs/
+    ├── bootstrap/<org>/<cluster>/bootstrap-<timestamp>.log  # full deploy command output
+    └── destroy/<org>/<cluster>/destroy-<timestamp>.log      # full destroy command output
 ```
 
 **Known inconsistency:** the `kind-cleanup` mise task removes a stale lock at `${HOME}/.config/opencenter/locks/${CLUSTER}.lock` (i.e. under the *config* dir), but `LockManager` (`internal/resilience/lock_manager.go`) actually creates lock files under `<state-dir>/locks/<resource>.lock` (the *state* dir, default `~/.local/state/opencenter/locks/`). If your config dir and state dir differ (e.g. you've overridden `OPENCENTER_STATE_DIR`), the mise task's cleanup step will not find the real lock file -- clear it manually from `<state-dir>/locks/` in that case.

@@ -254,3 +254,171 @@ func TestClusterDestroySkipInfrastructure(t *testing.T) {
 		t.Fatalf("expected output to mention skipping infrastructure\noutput:\n%s", stdout.String())
 	}
 }
+
+func TestClusterDestroyCreatesLog(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	stateDir := t.TempDir()
+	binDir := t.TempDir()
+	t.Setenv("FAKE_KIND_STATE_DIR", stateDir)
+	installFakeKindBinary(t, binDir)
+	prependTestPath(t, binDir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "destroy-log-test", "opencenter")
+	cfg.OpenCenter.Meta.Stage = v2.StageBootstrap
+	cfg.OpenCenter.Meta.Status = v2.StatusSuccess
+	if err := saveConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(stateDir, "clusters"), []byte("destroy-log-test\n"), 0o644); err != nil {
+		t.Fatalf("write cluster state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterPaths.GitOpsDir, "README.md"), []byte("gitops"), 0o644); err != nil {
+		t.Fatalf("write gitops marker: %v", err)
+	}
+
+	cmd := newClusterDestroyCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"destroy-log-test", "--force", "--remove-files"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster destroy failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Verify "Destroy log: " is in stdout
+	stdoutStr := stdout.String()
+	if !strings.Contains(stdoutStr, "Destroy log: ") {
+		t.Fatalf("expected 'Destroy log: ' in stdout, got:\n%s", stdoutStr)
+	}
+
+	// Find the log file in the state directory
+	stateRoot := filepath.Join(dir, ".local", "state", "opencenter")
+	logDir := filepath.Join(stateRoot, "logs", "destroy", "opencenter", "destroy-log-test")
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		t.Fatalf("expected destroy log directory at %s: %v", logDir, err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected at least one destroy log in %s", logDir)
+	}
+
+	logContent, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read destroy log: %v", err)
+	}
+	logStr := string(logContent)
+
+	expectedPhrases := []string{
+		"destroy started for opencenter/destroy-log-test",
+		"destroying Kind cluster destroy-log-test",
+		"executing command: kind delete cluster",
+		"removed GitOps directory:",
+		"removed config file:",
+		"destroy complete for opencenter/destroy-log-test",
+	}
+	for _, phrase := range expectedPhrases {
+		if !strings.Contains(logStr, phrase) {
+			t.Errorf("expected phrase %q in destroy log, but got:\n%s", phrase, logStr)
+		}
+	}
+}
+
+func TestClusterDestroyCustomLogFlag(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	stateDir := t.TempDir()
+	binDir := t.TempDir()
+	t.Setenv("FAKE_KIND_STATE_DIR", stateDir)
+	installFakeKindBinary(t, binDir)
+	prependTestPath(t, binDir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "destroy-custom-log", "opencenter")
+	cfg.OpenCenter.Meta.Stage = v2.StageBootstrap
+	cfg.OpenCenter.Meta.Status = v2.StatusSuccess
+	if err := saveConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(stateDir, "clusters"), []byte("destroy-custom-log\n"), 0o644); err != nil {
+		t.Fatalf("write cluster state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterPaths.GitOpsDir, "README.md"), []byte("gitops"), 0o644); err != nil {
+		t.Fatalf("write gitops marker: %v", err)
+	}
+
+	customLog := filepath.Join(dir, "custom-destroy.log")
+
+	cmd := newClusterDestroyCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"destroy-custom-log", "--force", "--remove-files", "--log", customLog})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster destroy failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "Destroy log: "+customLog) {
+		t.Fatalf("expected custom destroy log path in stdout, got:\n%s", stdout.String())
+	}
+
+	logContent, err := os.ReadFile(customLog)
+	if err != nil {
+		t.Fatalf("expected custom log file to exist: %v", err)
+	}
+	if !strings.Contains(string(logContent), "destroy complete for opencenter/destroy-custom-log") {
+		t.Fatalf("expected completion in custom log, got:\n%s", string(logContent))
+	}
+}
+
+func TestClusterDestroyFailurePrintsLogPath(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	stateDir := t.TempDir()
+	binDir := t.TempDir()
+	t.Setenv("FAKE_KIND_STATE_DIR", stateDir)
+	installFakeKindBinary(t, binDir)
+	prependTestPath(t, binDir)
+
+	_, clusterPaths := saveKindConfigForCommandTest(t, dir, "destroy-fail-log", "opencenter")
+	if err := os.WriteFile(filepath.Join(stateDir, "clusters"), []byte("destroy-fail-log\n"), 0o644); err != nil {
+		t.Fatalf("write cluster state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "delete_fail"), []byte("1\n"), 0o644); err != nil {
+		t.Fatalf("write delete fail flag: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterPaths.GitOpsDir, "README.md"), []byte("gitops"), 0o644); err != nil {
+		t.Fatalf("write gitops marker: %v", err)
+	}
+
+	customLog := filepath.Join(dir, "fail.log")
+
+	cmd := newClusterDestroyCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"destroy-fail-log", "--force", "--remove-files", "--log", customLog})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected destroy to fail")
+	}
+
+	if !strings.Contains(stderr.String(), "Destroy log: "+customLog) {
+		t.Fatalf("expected destroy log path in stderr, got:\n%s", stderr.String())
+	}
+
+	logContent, readErr := os.ReadFile(customLog)
+	if readErr != nil {
+		t.Fatalf("read fail log: %v", readErr)
+	}
+	if !strings.Contains(string(logContent), "destroy failed") {
+		t.Fatalf("expected failure message in log, got:\n%s", string(logContent))
+	}
+}

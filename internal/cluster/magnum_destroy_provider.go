@@ -123,13 +123,17 @@ func (p *magnumDestroyProvider) deleteCluster(ctx context.Context, clusterName, 
 		clusterID = existing.ID
 	}
 
+	logBootstrapMessage(deleteCtx, "magnum: deleting cluster %s (id: %s)", clusterName, clusterID)
 	deleteErr := p.provider.DeleteCluster(deleteCtx, clusterID)
 	if deleteErr != nil && !isMagnumNotFound(deleteErr) {
+		logBootstrapMessage(deleteCtx, "magnum: delete cluster failed: %v", deleteErr)
 		return fmt.Errorf("delete Magnum cluster: %w", deleteErr)
 	}
 	if err := p.provider.WaitDeleted(deleteCtx, clusterID); err != nil {
+		logBootstrapMessage(deleteCtx, "magnum: wait deleted failed: %v", err)
 		return fmt.Errorf("wait for Magnum cluster deletion: %w", err)
 	}
+	logBootstrapMessage(deleteCtx, "magnum: cluster %s deleted successfully", clusterName)
 	return p.clearDestroyedMagnumState(identityPath, cfg)
 }
 
