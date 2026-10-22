@@ -155,7 +155,39 @@ func setField(obj any, path string, value string) error {
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
-	return setFieldPath(v, strings.Split(path, "."), value, path)
+	return setFieldPath(v, splitFieldPath(path), value, path)
+}
+
+// splitFieldPath tokenizes a dot-notation path. Bracket indices attached to a
+// segment ("pools[0].image") become their own numeric segments, so the same
+// path text used in validation errors and documentation is accepted here.
+// A segment may carry several indices ("matrix[1][2]"), each tokenized.
+func splitFieldPath(path string) []string {
+	parts := strings.Split(path, ".")
+	segments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name, rest := part, ""
+		if bracket := strings.IndexByte(part, '['); bracket >= 0 {
+			name, rest = part[:bracket], part[bracket:]
+		}
+		if name != "" {
+			segments = append(segments, name)
+		}
+		for rest != "" && strings.HasPrefix(rest, "[") {
+			end := strings.IndexByte(rest, ']')
+			if end < 0 {
+				break
+			}
+			segments = append(segments, rest[1:end])
+			rest = rest[end+1:]
+		}
+		if rest != "" {
+			// Unbalanced or trailing junk: keep the raw token so traversal
+			// reports "field not found" with the original text.
+			segments = append(segments, name+rest)
+		}
+	}
+	return segments
 }
 
 func setFieldPath(v reflect.Value, parts []string, value, path string) error {

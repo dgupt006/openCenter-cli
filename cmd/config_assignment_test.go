@@ -144,3 +144,42 @@ func TestProcessParamsTraversesEmbeddedServiceFields(t *testing.T) {
 		t.Fatalf("unexpected embedded fields: namespace=%q source=%#v", cfg.Namespace, cfg.Source)
 	}
 }
+
+func TestConfigAssignmentAcceptsBracketIndices(t *testing.T) {
+	type pool struct {
+		Name  string `yaml:"name" json:"name"`
+		Image string `yaml:"image" json:"image"`
+	}
+	type config struct {
+		Pools []pool `yaml:"additional_server_pools_worker" json:"additional_server_pools_worker"`
+	}
+	cfg := &config{Pools: []pool{{Name: "gpu", Image: "old"}, {Name: "batch"}}}
+
+	if err := applyConfigAssignments(cfg, []configAssignment{
+		{Path: "additional_server_pools_worker[0].image", Value: "ubuntu-2404"},
+		{Path: "additional_server_pools_worker[1].image", Value: "ubuntu-2204"},
+	}); err != nil {
+		t.Fatalf("assign bracket index path: %v", err)
+	}
+	if cfg.Pools[0].Image != "ubuntu-2404" || cfg.Pools[1].Image != "ubuntu-2204" {
+		t.Fatalf("bracket assignment wrote wrong pools: %#v", cfg.Pools)
+	}
+	if cfg.Pools[0].Name != "gpu" {
+		t.Fatalf("bracket assignment clobbered sibling field: %#v", cfg.Pools[0])
+	}
+}
+
+func TestConfigAssignmentRejectsMalformedBracketPath(t *testing.T) {
+	type config struct {
+		Names []string `yaml:"names" json:"names"`
+	}
+	cfg := &config{Names: []string{"keep"}}
+	for _, path := range []string{"names[0", "names[9]", "names[abc]", "names[0]junk"} {
+		if err := applyConfigAssignments(cfg, []configAssignment{{Path: path, Value: "x"}}); err == nil {
+			t.Errorf("expected error for %q", path)
+		}
+	}
+	if len(cfg.Names) != 1 || cfg.Names[0] != "keep" {
+		t.Fatalf("failed assignments mutated config: %#v", cfg.Names)
+	}
+}

@@ -73,6 +73,32 @@ func TestClusterSetUpdatesNTPServersFromCommaDelimitedValue(t *testing.T) {
 	}
 }
 
+func TestClusterSetUpdatesWorkerPoolImageViaBracketPath(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	cfg, clusterPaths := saveKindConfigForCommandTest(t, dir, "set-pool-image", "opencenter")
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+		{Name: "gpu", Count: 1, Flavor: "gpu.large"},
+	}
+	resolver := paths.NewPathResolver(filepath.Join(dir, "clusters"))
+	testhelpers.SaveConfigWithPathResolver(t, cfg, resolver)
+
+	cmd := newClusterSetCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"set-pool-image", "opencenter.infrastructure.compute.additional_server_pools_worker[0].image=ubuntu-2404"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster set bracket path failed: %v", err)
+	}
+
+	updated := loadV2ConfigForTest(t, clusterPaths.ConfigPath)
+	pools := updated.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker
+	if len(pools) != 1 || pools[0].Image != "ubuntu-2404" {
+		t.Fatalf("worker pool image not written: %#v", pools)
+	}
+}
+
 func TestClusterSetUpdatesCpServerGroupAffinity(t *testing.T) {
 	dir := t.TempDir()
 	prepareCommandTestEnv(t, dir)
