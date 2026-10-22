@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/secretartifacts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,7 @@ func TestSyncServiceManifest(t *testing.T) {
 			secrets,
 			manifestPath,
 			ageKey,
+			&v2.Config{Secrets: v2.SecretsConfig{SopsAgeKeyFile: filepath.Join(tmpDir, "missing-key.txt")}},
 			true,  // dry-run
 			false, // force
 		)
@@ -96,6 +98,7 @@ data:
 			secrets,
 			manifestPath,
 			ageKey,
+			&v2.Config{Secrets: v2.SecretsConfig{SopsAgeKeyFile: filepath.Join(tmpDir, "missing-key.txt")}},
 			false, // dry-run
 			false, // force
 		)
@@ -137,6 +140,7 @@ data:
 			secrets,
 			manifestPath,
 			ageKey,
+			&v2.Config{Secrets: v2.SecretsConfig{SopsAgeKeyFile: filepath.Join(tmpDir, "missing-key.txt")}},
 			true, // dry-run
 			true, // force
 		)
@@ -208,37 +212,40 @@ func TestWriteEncryptedManifest(t *testing.T) {
 	})
 }
 
-func TestGetAgeKeyPathFromPublicKey(t *testing.T) {
+func TestGetAgeKeyPath(t *testing.T) {
 	manager, tmpDir, cleanup := setupTestManager(t)
 	defer cleanup()
 
-	t.Run("finds key file containing public key", func(t *testing.T) {
-		// Create a test Age key file
-		ageKeyDir := filepath.Join(tmpDir, ".config", "sops", "age")
-		err := os.MkdirAll(ageKeyDir, 0755)
-		require.NoError(t, err)
-
-		publicKey := "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
-		keyPath := filepath.Join(ageKeyDir, "keys.txt")
+	t.Run("resolves the configured key file", func(t *testing.T) {
+		keyPath := filepath.Join(tmpDir, "doritos-key.txt")
 		keyContent := `# created: 2024-01-01T00:00:00Z
-# public key: ` + publicKey + `
+# public key: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 AGE-SECRET-KEY-1GFPYYSJL7VYMDXVJZ4QQZZ7JQJQJQJQJQJQJQJQJQJQJQJQJQJQJQJQ
 `
-		err = os.WriteFile(keyPath, []byte(keyContent), 0600)
-		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(keyPath, []byte(keyContent), 0600))
 
-		resolvedPath, err := manager.getAgeKeyPathFromPublicKey(publicKey)
+		cfg := &v2.Config{Secrets: v2.SecretsConfig{SopsAgeKeyFile: keyPath}}
+		resolvedPath, err := manager.getAgeKeyPath(cfg)
 		require.NoError(t, err)
 		assert.Equal(t, keyPath, resolvedPath)
 	})
 
-	t.Run("returns error when key not found", func(t *testing.T) {
-		publicKey := "age1nonexistentkey"
+	t.Run("returns ErrKeyNotFound when the configured key file is missing", func(t *testing.T) {
+		cfg := &v2.Config{Secrets: v2.SecretsConfig{SopsAgeKeyFile: filepath.Join(tmpDir, "missing-key.txt")}}
 
-		_, err := manager.getAgeKeyPathFromPublicKey(publicKey)
+		_, err := manager.getAgeKeyPath(cfg)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Age key file not found")
+		var notFound *ErrKeyNotFound
+		assert.True(t, errors.As(err, &notFound))
+	})
+
+	t.Run("returns ErrKeyNotFound when no key file is configured", func(t *testing.T) {
+		_, err := manager.getAgeKeyPath(&v2.Config{})
+
+		assert.Error(t, err)
+		var notFound *ErrKeyNotFound
+		assert.True(t, errors.As(err, &notFound))
 	})
 }
 

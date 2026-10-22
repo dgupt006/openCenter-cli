@@ -187,7 +187,7 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 				break
 			}
 		}
-		outcome, err := m.syncServiceManifestOutcome(ctx, serviceName, artifact.Payload, fullPath, ageKey, opts.DryRun, opts.Force, previousPaths[artifact.Path])
+		outcome, err := m.syncServiceManifestOutcome(ctx, serviceName, artifact.Payload, fullPath, ageKey, cfg, opts.DryRun, opts.Force, previousPaths[artifact.Path])
 		if err != nil {
 			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
 			continue
@@ -1434,6 +1434,9 @@ func (m *DefaultSecretsManager) decryptManifest(ctx context.Context, manifestPat
 	}()
 
 	// Decrypt the manifest using the encryptor
+	if m.sopsManager == nil || m.sopsManager.GetEncryptor() == nil {
+		return nil, fmt.Errorf("SOPS encryptor not available")
+	}
 	encryptor := m.sopsManager.GetEncryptor()
 	if err := encryptor.DecryptFile(ctx, manifestPath, tmpPath); err != nil {
 		return nil, fmt.Errorf("failed to decrypt manifest: %w", err)
@@ -1574,7 +1577,7 @@ const (
 	syncUpdated
 )
 
-func (m *DefaultSecretsManager) syncServiceManifestOutcome(ctx context.Context, service string, secrets map[string]interface{}, manifestPath, ageKey string, dryRun, force bool, record secretartifacts.OwnershipArtifact) (syncOutcome, error) {
+func (m *DefaultSecretsManager) syncServiceManifestOutcome(ctx context.Context, service string, secrets map[string]interface{}, manifestPath, ageKey string, cfg *v2.Config, dryRun, force bool, record secretartifacts.OwnershipArtifact) (syncOutcome, error) {
 	info, err := os.Lstat(manifestPath)
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
@@ -1591,7 +1594,7 @@ func (m *DefaultSecretsManager) syncServiceManifestOutcome(ctx context.Context, 
 			return syncUnchanged, err
 		}
 	}
-	changed, err := m.syncServiceManifest(ctx, service, secrets, manifestPath, ageKey, dryRun, force)
+	changed, err := m.syncServiceManifest(ctx, service, secrets, manifestPath, ageKey, cfg, dryRun, force)
 	if err != nil {
 		return syncUnchanged, err
 	}
@@ -1617,6 +1620,7 @@ func (m *DefaultSecretsManager) syncServiceManifest(
 	secrets map[string]interface{},
 	manifestPath string,
 	ageKey string,
+	cfg *v2.Config,
 	dryRun bool,
 	force bool,
 ) (bool, error) {
@@ -1637,17 +1641,25 @@ func (m *DefaultSecretsManager) syncServiceManifest(
 
 	// Manifest exists - check if it needs updating
 	if !force {
-		// Get Age key path for decryption
-		ageKeyPath, err := m.getAgeKeyPathFromPublicKey(ageKey)
+		// Decrypt with the cluster's configured Age key file. The public key
+		// passed for encryption is never a lookup key for the private identity.
+		ageKeyPath, err := m.getAgeKeyPath(cfg)
 		if err != nil {
 			// If we can't get the key path, we can't decrypt to compare
 			// In this case, we'll update if force is set or skip if not
-			m.logger.Warn("Cannot decrypt existing manifest for comparison", "error", err)
+			m.logger.Warn("Cannot decrypt existing manifest for comparison", "error", err, "path", manifestPath)
 			if dryRun {
 				m.logger.Info("Would update manifest (dry-run, cannot verify changes)", "service", service, "path", manifestPath)
 				return true, nil
 			}
 			// Skip update since we can't verify changes
+			return false, nil
+		}
+
+		// Skip the comparison when the SOPS stack cannot decrypt; updating
+		// anyway would rewrite the manifest on every sync.
+		if m.sopsManager == nil || m.sopsManager.GetEncryptor() == nil {
+			m.logger.Debug("Skipping manifest comparison: SOPS encryptor unavailable", "service", service)
 			return false, nil
 		}
 
@@ -1913,55 +1925,6 @@ func (m *DefaultSecretsManager) hasSecretsChanged(
 	}
 
 	return false
-}
-
-// getAgeKeyPathFromPublicKey attempts to find the Age key file path from a public key.
-// This is a helper for decryption when we only have the public key.
-func (m *DefaultSecretsManager) getAgeKeyPathFromPublicKey(publicKey string) (string, error) {
-	// Try to find the key file in standard locations
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	// Common Age key locations
-	possiblePaths := []string{
-		filepath.Join(homeDir, ".config", "sops", "age", "keys.txt"),
-		filepath.Join(homeDir, ".config", "opencenter", "secrets", "age", "keys.txt"),
-	}
-
-	// Also check for cluster-specific keys
-	clustersDir := filepath.Join(homeDir, ".config", "opencenter", "clusters")
-	if _, err := os.Stat(clustersDir); err == nil {
-		// Walk clusters directory to find key files
-		filepath.Walk(clustersDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() && strings.HasSuffix(path, "_keys.txt") {
-				possiblePaths = append(possiblePaths, path)
-			}
-			return nil
-		})
-	}
-
-	// Try each path and check if it contains the public key
-	for _, keyPath := range possiblePaths {
-		if _, err := os.Stat(keyPath); err == nil {
-			// Read the key file
-			data, err := os.ReadFile(keyPath)
-			if err != nil {
-				continue
-			}
-
-			// Check if this file contains the public key
-			if strings.Contains(string(data), publicKey) {
-				return keyPath, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("age key file not found for public key: %s (Age key file not found)", publicKey)
 }
 
 // getActor retrieves the actor (user) from context or returns a default value.
