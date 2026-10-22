@@ -14,12 +14,11 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	"github.com/opencenter-cloud/opencenter-cli/internal/credentials"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +35,7 @@ This command generates shell commands to set up the cluster environment includin
 - Cloud provider credentials (AWS, OpenStack)
 - KUBECONFIG path
 - ANSIBLE_INVENTORY path
+- SOPS_AGE_KEY_FILE path
 - Cluster-specific binary paths
 - Virtual environment activation
 
@@ -68,32 +68,6 @@ This is useful for:
 				return err
 			}
 
-			// Load cluster configuration
-			cfg, err := loadConfig(cmd.Context(), clusterName)
-			if err != nil {
-				return fmt.Errorf("failed to load cluster configuration: %w", err)
-			}
-
-			pathResolver := config.NewPathResolverFromConfig()
-
-			// Parse cluster identifier to get organization and cluster name
-			organization, actualClusterName, err := config.ParseClusterIdentifier(clusterName)
-			if err != nil {
-				return fmt.Errorf("invalid cluster identifier: %w", err)
-			}
-
-			// Use organization from config if available
-			if cfg.OpenCenter.Meta.Organization != "" {
-				organization = cfg.OpenCenter.Meta.Organization
-			}
-
-			// Resolve cluster paths
-			ctx := context.Background()
-			clusterPaths, err := pathResolver.Resolve(ctx, actualClusterName, organization)
-			if err != nil {
-				return fmt.Errorf("failed to resolve cluster paths: %w", err)
-			}
-
 			// Detect shell (or use override)
 			shell := shellOverride
 			if shell == "" {
@@ -108,9 +82,10 @@ This is useful for:
 				}
 			}
 
-			nativeCfg, _, _, _, err := loadNativeV2ConfigWithIdentifier(cmd.Context(), clusterName)
+			// Load cluster configuration and resolve paths
+			nativeCfg, _, _, clusterPaths, err := loadNativeV2ConfigWithIdentifier(cmd.Context(), clusterName)
 			if err != nil {
-				return fmt.Errorf("failed to load native cluster configuration: %w", err)
+				return fmt.Errorf("failed to load cluster configuration: %w", err)
 			}
 
 			// Create credentials extractor
@@ -150,14 +125,17 @@ This is useful for:
 				if _, err := os.Stat(clusterPaths.InventoryPath); err == nil {
 					fmt.Fprintf(&output, "set -gx ANSIBLE_INVENTORY %s\n", clusterPaths.InventoryPath)
 				}
-				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
-					fmt.Fprintf(&output, "set -gx PATH %s $PATH\n", clusterPaths.BinPath)
+				if _, err := os.Stat(clusterPaths.SOPSKeyPath); err == nil {
+					fmt.Fprintf(&output, "set -gx SOPS_AGE_KEY_FILE %s\n", clusterPaths.SOPSKeyPath)
 				}
 				if _, err := os.Stat(clusterPaths.VenvPath); err == nil {
-					activateScript := fmt.Sprintf("%s/bin/activate.fish", clusterPaths.VenvPath)
+					activateScript := filepath.Join(clusterPaths.VenvPath, "bin", "activate.fish")
 					if _, err := os.Stat(activateScript); err == nil {
 						fmt.Fprintf(&output, "source %s\n", activateScript)
 					}
+				}
+				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
+					fmt.Fprintf(&output, "set -gx PATH %s $PATH\n", clusterPaths.BinPath)
 				}
 
 			case "powershell":
@@ -168,14 +146,17 @@ This is useful for:
 				if _, err := os.Stat(clusterPaths.InventoryPath); err == nil {
 					fmt.Fprintf(&output, "$env:ANSIBLE_INVENTORY = '%s'\n", clusterPaths.InventoryPath)
 				}
-				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
-					fmt.Fprintf(&output, "$env:PATH = '%s;' + $env:PATH\n", clusterPaths.BinPath)
+				if _, err := os.Stat(clusterPaths.SOPSKeyPath); err == nil {
+					fmt.Fprintf(&output, "$env:SOPS_AGE_KEY_FILE = '%s'\n", clusterPaths.SOPSKeyPath)
 				}
 				if _, err := os.Stat(clusterPaths.VenvPath); err == nil {
-					activateScript := fmt.Sprintf("%s\\Scripts\\Activate.ps1", clusterPaths.VenvPath)
+					activateScript := filepath.Join(clusterPaths.VenvPath, "Scripts", "Activate.ps1")
 					if _, err := os.Stat(activateScript); err == nil {
 						fmt.Fprintf(&output, ". %s\n", activateScript)
 					}
+				}
+				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
+					fmt.Fprintf(&output, "$env:PATH = '%s;' + $env:PATH\n", clusterPaths.BinPath)
 				}
 
 			default:
@@ -187,14 +168,17 @@ This is useful for:
 				if _, err := os.Stat(clusterPaths.InventoryPath); err == nil {
 					fmt.Fprintf(&output, "export ANSIBLE_INVENTORY=%s\n", clusterPaths.InventoryPath)
 				}
-				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
-					fmt.Fprintf(&output, "export PATH=%s:$PATH\n", clusterPaths.BinPath)
+				if _, err := os.Stat(clusterPaths.SOPSKeyPath); err == nil {
+					fmt.Fprintf(&output, "export SOPS_AGE_KEY_FILE=%s\n", clusterPaths.SOPSKeyPath)
 				}
 				if _, err := os.Stat(clusterPaths.VenvPath); err == nil {
-					activateScript := fmt.Sprintf("%s/bin/activate", clusterPaths.VenvPath)
+					activateScript := filepath.Join(clusterPaths.VenvPath, "bin", "activate")
 					if _, err := os.Stat(activateScript); err == nil {
 						fmt.Fprintf(&output, "source %s\n", activateScript)
 					}
+				}
+				if _, err := os.Stat(clusterPaths.BinPath); err == nil {
+					fmt.Fprintf(&output, "export PATH=%s:$PATH\n", clusterPaths.BinPath)
 				}
 			}
 

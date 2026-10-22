@@ -20,6 +20,7 @@ This command generates shell commands to set up the cluster environment includin
 - Cloud provider credentials (AWS, OpenStack)
 - KUBECONFIG path
 - ANSIBLE_INVENTORY path
+- SOPS_AGE_KEY_FILE path
 - Cluster-specific binary paths
 - Virtual environment activation
 
