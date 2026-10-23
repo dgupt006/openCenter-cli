@@ -167,3 +167,35 @@ func TestClusterServiceHarborFilesystemNeedsNoS3Credentials(t *testing.T) {
 		t.Fatalf("validateService() error = %v, want filesystem Harbor without S3 credentials to be valid", err)
 	}
 }
+
+func TestKeycloakClientSecretCatalogRoundTrip(t *testing.T) {
+	cfg := &v2.Config{}
+	entry, err := findConfigSecretEntry("keycloak-client-secret")
+	if err != nil {
+		t.Fatalf("findConfigSecretEntry(keycloak-client-secret) error = %v", err)
+	}
+
+	payload := []byte("my-random-oidc-secret-value\n")
+	if err := entry.Set(cfg, payload); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if !entry.Present(cfg) {
+		t.Fatal("keycloak-client-secret entry is not present after Set()")
+	}
+	if cfg.Secrets.Keycloak.ClientSecret != "my-random-oidc-secret-value" {
+		t.Fatalf("ClientSecret = %q, want 'my-random-oidc-secret-value'", cfg.Secrets.Keycloak.ClientSecret)
+	}
+
+	got := entry.Get(cfg)
+	if got != "my-random-oidc-secret-value" {
+		t.Fatalf("Get() = %v, want 'my-random-oidc-secret-value'", got)
+	}
+
+	entry.Delete(cfg)
+	if entry.Present(cfg) {
+		t.Fatal("keycloak-client-secret entry is present after Delete()")
+	}
+	if cfg.Secrets.Keycloak.ClientSecret != "" {
+		t.Fatalf("ClientSecret = %q after Delete(), want empty", cfg.Secrets.Keycloak.ClientSecret)
+	}
+}

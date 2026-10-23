@@ -16,10 +16,15 @@ spec:
     - ports:
         - port: {{ .OpenCenter.Cluster.Kubernetes.APIPort | default 443 }}
           protocol: TCP
+    - {}
     - ports:
         - port: 53
           protocol: TCP
         - port: 53
+          protocol: UDP
+        - port: 5353
+          protocol: TCP
+        - port: 5353
           protocol: UDP
   policyTypes: [Ingress, Egress]
 ---
@@ -40,10 +45,15 @@ spec:
     - ports:
         - port: {{ .OpenCenter.Cluster.Kubernetes.APIPort | default 443 }}
           protocol: TCP
+    - {}
     - ports:
         - port: 53
           protocol: TCP
         - port: 53
+          protocol: UDP
+        - port: 5353
+          protocol: TCP
+        - port: 5353
           protocol: UDP
     - ports:
         - protocol: TCP
@@ -67,10 +77,15 @@ spec:
     - ports:
         - port: {{ .OpenCenter.Cluster.Kubernetes.APIPort | default 443 }}
           protocol: TCP
+    - {}
     - ports:
         - port: 53
           protocol: TCP
         - port: 53
+          protocol: UDP
+        - port: 5353
+          protocol: TCP
+        - port: 5353
           protocol: UDP
     - ports:
         - protocol: TCP

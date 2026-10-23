@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/stretchr/testify/require"
 )
 
 // renderMainTf renders the infrastructure cluster tree and returns main.tf.
@@ -158,4 +159,51 @@ func argumentLines(t *testing.T, block, name string) string {
 func bracketDepth(line string) int {
 	return strings.Count(line, "(") + strings.Count(line, "[") -
 		strings.Count(line, ")") - strings.Count(line, "]")
+}
+
+func TestWorkerPoolImageFallbacks(t *testing.T) {
+	t.Run("explicit pool image is used", func(t *testing.T) {
+		cfg := newDefault("pool-img-explicit")
+		cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID = "base-image-id"
+		cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+			{Name: "custom", Count: 1, Flavor: "m1.large", Image: "custom-pool-image"},
+		}
+		content := renderMainTf(t, cfg)
+		require.Contains(t, content, `image_id                            = "custom-pool-image"`)
+	})
+
+	t.Run("falls back to local image when pool image unset", func(t *testing.T) {
+		cfg := newDefault("pool-img-fallback")
+		cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID = "base-image-id"
+		cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+			{Name: "fallback-pool", Count: 1, Flavor: "m1.large"},
+		}
+		content := renderMainTf(t, cfg)
+		require.Contains(t, content, `image_id                            = "${local.image_id}"`)
+	})
+
+	t.Run("omits image_id when neither pool nor base image is configured", func(t *testing.T) {
+		cfg := newDefault("pool-img-none")
+		cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID = ""
+		cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+			{Name: "no-image-pool", Count: 1, Flavor: "m1.large"},
+		}
+		content := renderMainTf(t, cfg)
+		// additional_server_pools_worker should not have image_id
+		require.NotContains(t, content, `image_id                            = ""`)
+		require.NotContains(t, content, `image_id                            = "${local.image_id}"`)
+	})
+
+	t.Run("windows pool falls back to local.image_id_windows", func(t *testing.T) {
+		cfg := newDefault("pool-img-win")
+		cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID = "linux-image-id"
+		cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ImageIDWindows = "win-image-id"
+		cfg.OpenCenter.Infrastructure.Compute.WorkerCountWindows = 1
+		cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorkerWindows = []v2.WindowsWorkerPoolConfig{
+			{Name: "win-pool", Count: 1, Flavor: "m1.large"},
+		}
+		content := renderMainTf(t, cfg)
+		require.Contains(t, content, `image_id                            = "${local.image_id_windows}"`)
+		require.NotContains(t, content, `image_id                            = "${local.image_id}"`)
+	})
 }

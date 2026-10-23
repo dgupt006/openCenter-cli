@@ -940,7 +940,7 @@ const headlampTemplate = `config:
         secret:
             create: true
         clientID: opencenter
-        clientSecret: {{ .Secrets.Headlamp.OIDCClientSecret }}
+        clientSecret: {{ if and .Secrets.Keycloak.ClientSecret (ne .Secrets.Keycloak.ClientSecret "CHANGEME") }}{{ .Secrets.Keycloak.ClientSecret }}{{ else }}{{ .Secrets.Headlamp.OIDCClientSecret }}{{ end }}
         issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
         scopes: openid profile email groups
         callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback
@@ -1061,6 +1061,7 @@ alertmanager:
       volumeClaimTemplate:
         spec:
           storageClassName: {{ $kps.AlertmanagerStorageClass | default $defaultSC }}
+          accessModes: ["ReadWriteOnce"]
           resources:
             requests:
               storage: {{ $kps.AlertmanagerVolumeSize | default 10 }}Gi
@@ -1078,23 +1079,109 @@ alertmanager:
         target_matchers: [severity = info]
         equal: [namespace]
       - target_matchers: [alertname = InfoInhibitor]
+      - source_matchers:
+          - alertname =~ "NodeNotReady|KubeNodeNotReady"
+        target_matchers:
+          - alertname =~ "KubePodCrashLooping|KubePodNotReady|KubeContainerWaiting|KubePodOOMKilled"
+        equal: [cluster]
+      - source_matchers:
+          - alertname =~ "NodeNotReady|KubeNodeNotReady"
+        target_matchers:
+          - alertname =~ "KubeDeploymentReplicasMismatch|KubeStatefulSetReplicasMismatch|KubeDaemonSetRolloutStuck"
+        equal: [cluster]
+      - source_matchers:
+          - alertname = "KubeletDown"
+        target_matchers:
+          - alertname =~ "KubeletClientCertificateExpiration|KubeletServerCertificateExpiration|KubeletPlegDurationHigh|KubeletTooManyPods"
+        equal: [cluster]
+      - source_matchers:
+          - alertname =~ "NodeDiskRunningFull|NodeFilesystemAlmostOutOfSpace"
+        target_matchers:
+          - alertname =~ "NodeFilesystemSpaceFillingUp|KubePersistentVolumeUsageHigh|KubePersistentVolumeFullInFourDays"
+        equal: [cluster]
+      - source_matchers:
+          - alertname =~ "MimirIngesterRestarts|MimirIngesterUnhealthy"
+        target_matchers:
+          - alertname =~ "MimirRequestErrors|MimirSlowQueries|MimirWritePathLatencyHigh"
+        equal: [namespace, cluster]
+      - source_matchers:
+          - alertname = "PodDisruptionBudgetAtLimit"
+        target_matchers:
+          - alertname =~ "KubeDaemonSetMisScheduled|KubeDaemonSetNotScheduled"
+        equal: [namespace, cluster]
+      - source_matchers:
+          - alertname = "KubeNodeUnreachable"
+        target_matchers:
+          - alertname =~ "NodeNotReady|KubeNodeNotReady"
+        equal: [node, cluster]
+      - source_matchers:
+          - alertname = "NodeNetworkInterfaceFlapping"
+        target_matchers:
+          - alertname =~ "NodeNetworkReceiveErrs|NodeNetworkTransmitErrs"
+        equal: [instance, cluster]
+      - source_matchers:
+          - alertname = "KubePersistentVolumeErrors"
+        target_matchers:
+          - alertname =~ "KubePodNotReady|KubeContainerWaiting"
+        equal: [namespace, cluster]
+      - source_matchers:
+          - severity =~ "warning|critical"
+        target_matchers:
+          - severity = "info"
+          - alertname =~ "CPUThrottlingHigh"
+        equal: [namespace, cluster]
     route:
-      receiver: "null"
-      group_by: [namespace, alertname]
+      group_by: [namespace, alertname, cluster, service]
       group_wait: 30s
       group_interval: 60s
       repeat_interval: 12h
       routes:
         - receiver: "null"
           matchers: [alertname = "Watchdog"]
+        - receiver: alert_proxy_receiver
+          continue: false
+          group_by: [node, cluster]
+          matchers:
+            - alertname =~ "NodeNotReady|KubeNodeNotReady|KubeNodeUnreachable"
 {{- if $webhookURL }}
         - receiver: warning_alerts_receiver
           continue: false
-          matchers: [severity =~ "warning"]
+          group_by: [namespace, service, cluster]
+          matchers:
+            - alertname =~ "Mimir.*"
+            - severity =~ "critical"
+        - receiver: warning_alerts_receiver
+          continue: false
+          group_by: [job, cluster]
+          matchers:
+            - alertname = "TargetDown"
+            - namespace =~ "calico-apiserver|calico-system|cert-manager|envoy-gateway-system|external-snapshotter|flux-system|headlamp|kafka-system|keycloak|kube-system|kyverno|observability|olm|openstack-ccm|openstack-csi|operators|postgres-operator|rackspace|rackspace-system|rbac-system|tigera-operator|velero|vmware-system-csi"
 {{- end }}
         - receiver: alert_proxy_receiver
           continue: false
+          matchers:
+            - alertname =~ "NodeDiskRunningFull|NodeFilesystemSpaceFillingUp|NodeFilesystemAlmostOutOfSpace|NodeClockSkewDetected|NodeClockNotSynchronising|KubePersistentVolumeErrors|KubeClientErrors|KubeAPIErrorsHigh|KubeAPILatencyHigh|KubeSchedulerDown|KubeControllerManagerDown|KubeProxyDown|KubeletDown|KubeVersionMismatch|KubeClientCertificateExpiration|KubeletClientCertificateExpiration|KubeletServerCertificateExpiration|KubeAggregatedAPIErrors|KubeAggregatedAPIDown|KubeNodePressure"
+{{- if $webhookURL }}
+        - receiver: warning_alerts_receiver
+          continue: false
+          matchers:
+            - alertname =~ "KubeCPUOvercommit|KubeMemoryOvercommit|KubeNodeReadinessFlapping|KubeletTooManyPods|KubeAPITerminatedRequests|NodeMemoryMajorPagesFaults|NodeMemoryHighUtilization|NodeCPUHighUtilization|NodeNetworkReceiveErrs|NodeNetworkTransmitErrs|NodeNetworkInterfaceFlapping|etcdHighNumberOfLeaderChanges|etcdGRPCRequestsSlow|etcdHighNumberOfFailedGRPCRequests"
+{{- end }}
+        - receiver: alert_proxy_receiver
+          continue: false
+          matchers:
+            - alertname =~ "KubePodCrashLooping|KubePodNotReady|KubeDeploymentReplicasMismatch|KubeStatefulSetReplicasMismatch|KubeDaemonSetRolloutStuck|KubeJobFailed|KubeQuotaAlmostFull|KubeQuotaFullyUsed|KubePodOOMKilled|KubeContainerWaiting|KubeHpaReplicasMismatch|KubeHpaMaxedOut|KubePersistentVolumeUsageHigh|KubePersistentVolumeFullInFourDays|KubePersistentVolumeInodesRunningFull|KubePersistentVolumeFillingUp"
+            - namespace =~ "calico-apiserver|calico-system|cert-manager|envoy-gateway-system|external-snapshotter|flux-system|headlamp|kafka-system|keycloak|kube-system|kyverno|observability|olm|openstack-ccm|openstack-csi|operators|postgres-operator|rackspace|rackspace-system|rbac-system|tigera-operator|velero|vmware-system-csi"
+        - receiver: alert_proxy_receiver
+          continue: false
           matchers: [severity =~ "critical"]
+{{- if $webhookURL }}
+        - receiver: warning_alerts_receiver
+          continue: false
+          matchers:
+            - severity =~ "warning"
+            - namespace =~ "calico-apiserver|calico-system|cert-manager|envoy-gateway-system|external-snapshotter|flux-system|headlamp|kafka-system|keycloak|kube-system|kyverno|observability|olm|openstack-ccm|openstack-csi|operators|postgres-operator|rackspace|rackspace-system|rbac-system|tigera-operator|velero|vmware-system-csi"
+{{- end }}
     receivers:
       - name: "null"
 {{- if $webhookURL }}
@@ -1117,9 +1204,14 @@ prometheus:
       cluster: {{ .OpenCenter.Meta.Name }}
       region: {{ .OpenCenter.Meta.Region }}
       customer: {{ .OpenCenter.Meta.Organization }}
-    # Pin the PVC storage class so the Prometheus TSDB volume never relies on the
-    # ambiguous cluster default during the bootstrap window (transient Longhorn
-    # default / Cinder SC not yet created), which would bind it permanently.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    enableRemoteWriteReceiver: true
+    remoteWrite:
+      - url: http://observability-mimir-gateway.observability.svc.cluster.local:80/api/v1/push
+        headers:
+          X-Scope-OrgID: "default"
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -1127,20 +1219,67 @@ prometheus:
           resources:
             requests:
               storage: {{ $kps.PrometheusVolumeSize | default 150 }}Gi
+crds:
+  upgradeJob:
+    enabled: true
+    forceConflicts: true
 grafana:
   enabled: true
   service:
     enabled: true
-  # Grafana has its own fullname helper, so pin its override explicitly too.
   fullnameOverride: {{ $contract.GrafanaServiceName }}
-  # Grafana's PVC (when persistence is enabled) must likewise pin its class.
-  persistence:
-    storageClassName: {{ $kps.GrafanaStorageClass | default $defaultSC }}
-    size: {{ $kps.GrafanaVolumeSize | default 10 }}Gi
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    alerts:
+      enabled: true
+      searchNamespace: ALL
+  grafana.ini:
+    log:
+      level: info
+      filters: debug
+    server:
+      root_url: https://{{ $kps.GrafanaHostname | default $kps.Hostname | default (printf "grafana.%s" fqdn) }}
+    security:
+      csrf_trusted_origins: https://{{ $kps.GrafanaHostname | default $kps.Hostname | default (printf "grafana.%s" fqdn) }}
+      csrf_additional_headers: X-Forwarded-Host
+    auth.generic_oauth:
+      enabled: true
+      name: SSO
+      allow_sign_up: true
+      use_refresh_token: true
+      use_pkce: false
+      client_id: $__file{/etc/secrets/grafana_oauth/client_id}
+      client_secret: $__file{/etc/secrets/grafana_oauth/client_secret}
+      scopes: openid email profile roles
+      email_attribute_path: email
+      login_attribute_path: preferred_username
+      name_attribute_path: name
+      id_token_attribute_name: sub
+      auth_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/auth
+      token_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/token
+      api_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/userinfo
+      role_attribute_path: (contains(groups[*], 'cluster-admins') || contains(groups[*], '/cluster-admins') || contains(groups[*], 'grafana-admins') || contains(groups[*], '/grafana-admins')) && 'Admin' || (contains(groups[*], 'grafana-editors') || contains(groups[*], '/grafana-editors')) && 'Editor' || 'Viewer'
+      role_attribute_strict: false
+      allow_assign_grafana_admin: true
+  extraSecretMounts:
+    - name: grafana-oauth-secret-mount
+      secretName: grafana-oauth-secret
+      defaultMode: 0440
+      mountPath: /etc/secrets/grafana_oauth
+      readOnly: true
   admin:
     existingSecret: "grafana-admin-password"
     userKey: admin-user
     passwordKey: admin-password
+  persistence:
+    enabled: true
+    storageClassName: {{ $kps.GrafanaStorageClass | default $defaultSC }}
+    size: {{ $kps.GrafanaVolumeSize | default 10 }}Gi
   datasources:
     datasources.yaml:
       apiVersion: 1
@@ -1177,4 +1316,272 @@ grafana:
           secureJsonData:
             httpHeaderValue1: "default"
           editable: true
+kube-state-metrics:
+  rbac:
+    extraRules:
+      - apiGroups:
+          - source.toolkit.fluxcd.io
+          - kustomize.toolkit.fluxcd.io
+          - helm.toolkit.fluxcd.io
+          - notification.toolkit.fluxcd.io
+          - image.toolkit.fluxcd.io
+        resources:
+          - gitrepositories
+          - buckets
+          - helmrepositories
+          - helmcharts
+          - ocirepositories
+          - kustomizations
+          - helmreleases
+          - alerts
+          - providers
+          - receivers
+          - imagerepositories
+          - imagepolicies
+          - imageupdateautomations
+        verbs: [ "list", "watch" ]
+  customResourceState:
+    enabled: true
+    config:
+      spec:
+        resources:
+          - groupVersionKind:
+              group: kustomize.toolkit.fluxcd.io
+              version: v1
+              kind: Kustomization
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Kustomization resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, lastAppliedRevision ]
+          - groupVersionKind:
+              group: helm.toolkit.fluxcd.io
+              version: v2
+              kind: HelmRelease
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmRelease resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, lastAppliedRevision ]
+                  chart_name: [ spec, chart, spec, chart ]
+                  chart_version: [ spec, chart, spec, version ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: GitRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux GitRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: Bucket
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Bucket resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  endpoint: [ spec, endpoint ]
+                  bucket_name: [ spec, bucketName ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: HelmRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: HelmChart
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmChart resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  chart_name: [ spec, chart ]
+                  chart_version: [ spec, version ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: OCIRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux OCIRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1beta3
+              kind: Alert
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Alert resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  suspended: [ spec, suspend ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1beta3
+              kind: Provider
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Provider resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  suspended: [ spec, suspend ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1
+              kind: Receiver
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Receiver resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  webhook_path: [ status, webhookPath ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1
+              kind: ImageRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImageRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  image: [ spec, image ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1
+              kind: ImagePolicy
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImagePolicy resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  source_name: [ spec, imageRepositoryRef, name ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1
+              kind: ImageUpdateAutomation
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImageUpdateAutomation resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  source_name: [ spec, sourceRef, name ]
 `

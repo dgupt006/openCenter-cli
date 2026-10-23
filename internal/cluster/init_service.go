@@ -170,6 +170,9 @@ func (s *InitService) Initialize(ctx context.Context, opts InitOptions) (*InitRe
 	if err := s.generateHarborSecrets(cfg, configMap); err != nil {
 		return nil, fmt.Errorf("generating Harbor secrets: %w", err)
 	}
+	if err := s.generateKeycloakSecrets(cfg, configMap); err != nil {
+		return nil, fmt.Errorf("generating Keycloak secrets: %w", err)
+	}
 
 	// Update configuration with resolved paths
 	s.updateConfigPaths(cfg, configMap, clusterPaths, opts)
@@ -295,9 +298,44 @@ func (s *InitService) generateHarborSecrets(cfg *v2.Config, configMap map[string
 	return nil
 }
 
-func isMissingHarborSecret(value string) bool {
+func (s *InitService) generateKeycloakSecrets(cfg *v2.Config, configMap map[string]any) error {
+	keycloak, ok := cfg.OpenCenter.Services["keycloak"].(*services.KeycloakConfig)
+	keycloakEnabled := ok && keycloak.IsEnabled()
+	oidcKeycloak := cfg.OpenCenter.Identity.OIDC.Enabled &&
+		strings.EqualFold(strings.TrimSpace(cfg.OpenCenter.Identity.OIDC.Provider), v2.OIDCProviderKeycloak)
+
+	if !keycloakEnabled && !oidcKeycloak {
+		return nil
+	}
+
+	keyManager := sops.NewKeyManager("")
+
+	// Generate Keycloak OIDC client secret if missing
+	if isMissingSecret(cfg.Secrets.Keycloak.ClientSecret) {
+		clientSecret, err := keyManager.GenerateRandomPassword(32)
+		if err != nil {
+			return fmt.Errorf("generating Keycloak client secret: %w", err)
+		}
+		cfg.Secrets.Keycloak.ClientSecret = clientSecret
+		setNestedConfigValue(configMap, clientSecret, "secrets", "keycloak", "client_secret")
+	}
+
+	// Propagate client secret to Headlamp if Headlamp secret is missing
+	if isMissingSecret(cfg.Secrets.Headlamp.OIDCClientSecret) {
+		cfg.Secrets.Headlamp.OIDCClientSecret = cfg.Secrets.Keycloak.ClientSecret
+		setNestedConfigValue(configMap, cfg.Secrets.Keycloak.ClientSecret, "secrets", "headlamp", "oidc_client_secret")
+	}
+
+	return nil
+}
+
+func isMissingSecret(value string) bool {
 	trimmed := strings.TrimSpace(value)
 	return trimmed == "" || strings.EqualFold(trimmed, v2.PlaceholderSecret)
+}
+
+func isMissingHarborSecret(value string) bool {
+	return isMissingSecret(value)
 }
 
 // checkExistingCluster checks if cluster already exists and handles force flag

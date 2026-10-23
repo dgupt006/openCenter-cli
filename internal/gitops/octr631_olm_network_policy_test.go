@@ -80,9 +80,9 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 		selector      string
 		ingressPort   any
 	}{
-		"olm-operator":     {egressEntries: 2, selector: "olm-operator", ingressPort: "metrics"},
-		"catalog-operator": {egressEntries: 3, hasGRPC: true, selector: "catalog-operator", ingressPort: "metrics"},
-		"packageserver":    {egressEntries: 3, hasGRPC: true, selector: "packageserver", ingressPort: 5443},
+		"olm-operator":     {egressEntries: 3, selector: "olm-operator", ingressPort: "metrics"},
+		"catalog-operator": {egressEntries: 4, hasGRPC: true, selector: "catalog-operator", ingressPort: "metrics"},
+		"packageserver":    {egressEntries: 4, hasGRPC: true, selector: "packageserver", ingressPort: 5443},
 	}
 
 	for _, tc := range []struct {
@@ -125,8 +125,8 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 				require.Equal(t, tc.port, firstPort["port"])
 				require.Equal(t, "TCP", firstPort["protocol"])
 
-				dnsPorts := egressPorts(egress[1:2])
-				for _, port := range []string{"53/TCP", "53/UDP"} {
+				dnsPorts := egressPorts(egress[2:3])
+				for _, port := range []string{"53/TCP", "53/UDP", "5353/TCP", "5353/UDP"} {
 					require.Contains(t, dnsPorts, port, "%s must retain DNS port %s", name, port)
 				}
 				allEgressPorts := egressPorts(egress)

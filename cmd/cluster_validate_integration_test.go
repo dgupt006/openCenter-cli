@@ -197,6 +197,9 @@ func TestClusterValidateInvalidValidationModeFailsEarly(t *testing.T) {
 
 // TestClusterValidateDIContainer tests that the DI container is properly initialized
 func TestClusterValidateDIContainer(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
 	// Get container
 	container := getContainer()
 	if container == nil {

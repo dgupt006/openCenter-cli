@@ -105,7 +105,11 @@ locals {
     worker_node_bfv_delete_on_termination = {{ $pool.BootVolume.DeleteOnTermination | default true }}
     additional_block_devices_worker     = []
     pf9_onboard                         = {{ $pool.PF9Onboard | default false }}
-    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
+    {{- if $pool.Image }}
+    image_id                            = "{{ $pool.Image }}"
+    {{- else if and $.OpenCenter.Infrastructure.Cloud.OpenStack $.OpenCenter.Infrastructure.Cloud.OpenStack.ImageID }}
+    image_id                            = "${local.image_id}"
+    {{- end }}
   }{{ end }}]{{ else }}[]{{ end }}
 
   # ===================================
@@ -173,7 +177,11 @@ locals {
     worker_count                        = {{ $pool.Count }}
     flavor_worker                       = "{{ $pool.Flavor }}"
     node_worker                         = "{{ $pool.Name }}"
-    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
+    {{- if $pool.Image }}
+    image_id                            = "{{ $pool.Image }}"
+    {{- else if and $.OpenCenter.Infrastructure.Cloud.OpenStack $.OpenCenter.Infrastructure.Cloud.OpenStack.ImageIDWindows }}
+    image_id                            = "${local.image_id_windows}"
+    {{- end }}
     {{- if $pool.BootVolume.Size }}
     worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size }}
     {{- end }}
@@ -188,7 +196,11 @@ locals {
     worker_count                        = {{ $pool.Count }}
     flavor_worker                       = "{{ $pool.Flavor }}"
     node_worker                         = "{{ $pool.Name }}"
-    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
+    {{- if $pool.Image }}
+    image_id                            = "{{ $pool.Image }}"
+    {{- else if and $.OpenCenter.Infrastructure.Cloud.OpenStack $.OpenCenter.Infrastructure.Cloud.OpenStack.ImageIDWindows }}
+    image_id                            = "${local.image_id_windows}"
+    {{- end }}
     {{- if $pool.BootVolume.Size }}
     worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size }}
     {{- end }}

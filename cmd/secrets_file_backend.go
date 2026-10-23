@@ -151,6 +151,26 @@ func configSecretCatalog() []configSecretEntry {
 			},
 		},
 		{
+			Name:        "keycloak-client-secret",
+			Type:        "oidc-secret",
+			Location:    "config: secrets.keycloak.client_secret",
+			Description: "Keycloak OIDC client secret",
+			PayloadKind: configSecretScalar,
+			Present: func(cfg *v2.Config) bool {
+				return cfg.Secrets.Keycloak.ClientSecret != ""
+			},
+			Get: func(cfg *v2.Config) interface{} {
+				return cfg.Secrets.Keycloak.ClientSecret
+			},
+			Set: func(cfg *v2.Config, payload []byte) error {
+				cfg.Secrets.Keycloak.ClientSecret = normalizeScalarSecret(payload)
+				return nil
+			},
+			Delete: func(cfg *v2.Config) {
+				cfg.Secrets.Keycloak.ClientSecret = ""
+			},
+		},
+		{
 			Name:        "grafana-admin-password",
 			Type:        "password",
 			Location:    "config: secrets.grafana.admin_password",

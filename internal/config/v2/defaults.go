@@ -252,7 +252,7 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 					Security: NetworkSecurityConfig{
 						AllowedCIDRs: []string{"0.0.0.0/0"},
 						DenyAll:      false,
-						OSHardening:   true,
+						OSHardening:  true,
 					},
 				},
 				Compute: ComputeConfig{

@@ -876,6 +876,9 @@ func TestGatewayRendersHostnamesWithClusterFQDN(t *testing.T) {
 	headlampSvc := cfg.OpenCenter.Services["headlamp"].(*configservices.HeadlampConfig)
 	headlampSvc.Hostname = "dashboard." + cfg.OpenCenter.Cluster.ClusterFQDN
 
+	harborSvc := cfg.OpenCenter.Services["harbor"].(*configservices.HarborConfig)
+	harborSvc.Enabled = true
+
 	files, err := gatewayOverlayFilesRenderer(cfg)
 	if err != nil {
 		t.Fatalf("gatewayOverlayFilesRenderer() error = %v", err)

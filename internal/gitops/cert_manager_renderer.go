@@ -82,7 +82,6 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 	})
 
 	certManagerConfig := extractCertManagerConfig(cfg)
-	hasMaterializedSecret := secretArtifactTargetMaterialized(cfg, "cert-manager", artifacts)
 	for i := range credentials {
 		credentials[i].ClusterName = cfg.ClusterName()
 		credentials[i].ClusterFQDN = cfg.OpenCenter.Cluster.ClusterFQDN
@@ -91,15 +90,9 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		if credentials[i].Region == "" {
 			credentials[i].Region = certManagerConfig.region
 		}
-		if hasMaterializedSecret {
-			credentials[i].SecretName = "opencenter-cert-manager-secret"
-			credentials[i].AccessKeyKey = "aws-access-key"
-			credentials[i].SecretAccessKeyKey = "aws-secret-access-key"
-		} else {
-			credentials[i].SecretName = fmt.Sprintf("opencenter-aws-credentials-secret-%s", credentials[i].Name)
-			credentials[i].AccessKeyKey = "access-key-id"
-			credentials[i].SecretAccessKeyKey = "secret-access-key"
-		}
+		credentials[i].SecretName = fmt.Sprintf("opencenter-aws-credentials-secret-%s", credentials[i].Name)
+		credentials[i].AccessKeyKey = "aws-access-key"
+		credentials[i].SecretAccessKeyKey = "aws-secret-access-key"
 	}
 
 	var actions []clusterAppAction
@@ -151,10 +144,17 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok {
 		hasDesignate = dnsProvider == "designate"
 	}
+	hasCertManagerArtifact := false
+	for _, a := range artifacts {
+		if a.TargetService == "cert-manager" {
+			hasCertManagerArtifact = true
+			break
+		}
+	}
 	content, err := renderInlineTemplateContent(kustomizationTemplate, "kustomization.yaml", kustomizationData{
 		Credentials:           credentials,
 		HasDesignate:          hasDesignate,
-		HasMaterializedSecret: secretArtifactTargetMaterialized(cfg, "cert-manager", artifacts),
+		HasMaterializedSecret: hasCertManagerArtifact,
 	})
 	if err != nil {
 		return nil, err

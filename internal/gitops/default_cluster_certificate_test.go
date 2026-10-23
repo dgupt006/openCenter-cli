@@ -92,7 +92,8 @@ func TestDefaultClusterCertificateViaGateway(t *testing.T) {
 					},
 				},
 				"cert-manager": &services.CertManagerConfig{
-					BaseConfig: services.BaseConfig{Enabled: true},
+					BaseConfig:  services.BaseConfig{Enabled: true},
+					DNSProvider: "route53",
 				},
 			},
 		},
@@ -125,7 +126,8 @@ func TestRoute53IssuerResolvesAsDefaultIssuer(t *testing.T) {
 					BaseConfig: services.BaseConfig{Enabled: true},
 				},
 				"cert-manager": &services.CertManagerConfig{
-					BaseConfig: services.BaseConfig{Enabled: true},
+					BaseConfig:  services.BaseConfig{Enabled: true},
+					DNSProvider: "route53",
 				},
 			},
 		},
@@ -151,4 +153,62 @@ func TestRoute53IssuerResolvesAsDefaultIssuer(t *testing.T) {
 	require.NoError(t, err)
 	gwContent := files["gateway.yaml"]
 	require.Contains(t, gwContent, "cert-manager.io/cluster-issuer: letsencrypt-ed-2")
+}
+
+func TestGatewayDefaultIssuerDefaultsToRackspaceCAWithoutACME(t *testing.T) {
+	cfg := v2.Config{
+		OpenCenter: v2.OpenCenterConfig{
+			Cluster: v2.ClusterConfig{
+				ClusterName: "ed-2",
+				ClusterFQDN: "raxai.ed-2.sjc3.k8s.opencenter.cloud",
+			},
+			Services: v2.ServiceMap{
+				"gateway": &services.GatewayConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+				"cert-manager": &services.CertManagerConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+			},
+		},
+		Secrets: v2.SecretsConfig{
+			CertManager: v2.CertManagerSecrets{
+				AWS: map[string]v2.CertManagerAWSCredential{
+					"ed-2": {
+						Enabled:            true,
+						AWSAccessKey:       "AKIAAWSKEY",
+						AWSSecretAccessKey: "secretkey",
+						Region:             "us-east-1",
+						DNSZones:           []string{"raxai.ed-2.sjc3.k8s.opencenter.cloud"},
+					},
+				},
+			},
+		},
+	}
+
+	issuer := gatewayDefaultIssuer(cfg)
+	require.Equal(t, "rackspace-ca", issuer)
+}
+
+func TestRenderDefaultClusterCertificateEmptyDNSNamesReturnsError(t *testing.T) {
+	cfg := v2.Config{
+		OpenCenter: v2.OpenCenterConfig{
+			Cluster: v2.ClusterConfig{
+				ClusterName: "ed-2",
+				ClusterFQDN: "",
+			},
+			Services: v2.ServiceMap{
+				"gateway": &services.GatewayConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+				"cert-manager": &services.CertManagerConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+			},
+		},
+	}
+
+	_, err := renderDefaultClusterCertificate(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires at least one DNS name")
 }

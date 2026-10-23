@@ -1145,3 +1145,28 @@ func newInitServiceForPublicDecodeTest(t *testing.T) *InitService {
 	}
 	return NewInitService(paths.NewPathResolver(t.TempDir()), setupValidationEngine(t), configManager)
 }
+
+func TestInitServiceGeneratesKeycloakSecrets(t *testing.T) {
+	initService := newInitServiceForPublicDecodeTest(t)
+	result, err := initService.Initialize(context.Background(), InitOptions{
+		ClusterName:  "kc-gen-test",
+		Organization: "testorg",
+		Provider:     "kind",
+		NoGitInit:    true,
+	})
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	cfg := result.Config
+	if cfg.Secrets.Keycloak.ClientSecret == "" || cfg.Secrets.Keycloak.ClientSecret == v2.PlaceholderSecret {
+		t.Fatalf("expected generated Keycloak client secret, got %q", cfg.Secrets.Keycloak.ClientSecret)
+	}
+	if len(cfg.Secrets.Keycloak.ClientSecret) < 32 {
+		t.Fatalf("expected Keycloak client secret length >= 32, got %d", len(cfg.Secrets.Keycloak.ClientSecret))
+	}
+	if cfg.Secrets.Headlamp.OIDCClientSecret != cfg.Secrets.Keycloak.ClientSecret {
+		t.Fatalf("expected Headlamp client secret to match Keycloak client secret, got %q vs %q",
+			cfg.Secrets.Headlamp.OIDCClientSecret, cfg.Secrets.Keycloak.ClientSecret)
+	}
+}

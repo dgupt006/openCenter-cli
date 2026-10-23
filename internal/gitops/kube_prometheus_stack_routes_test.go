@@ -50,7 +50,12 @@ func TestKubePrometheusStackContractAlignsDefaultValuesPatchAndRoutes(t *testing
 
 	files, err := kubePrometheusStackOverlayFilesRenderer(cfg)
 	require.NoError(t, err)
-	require.Len(t, files, 3)
+	require.Len(t, files, 8)
+	require.Contains(t, files, "alertmanager-security-policy.yaml")
+	require.Contains(t, files, "prometheus-security-policy.yaml")
+	require.Contains(t, files, "gateway-oidc-secret.yaml")
+	require.Contains(t, files, "grafana-oauth-secret.yaml")
+	require.Contains(t, files, "grafana-admin-password.yaml")
 	require.Contains(t, files["prometheus-http-route.yaml"], "namespace: "+contract.Namespace)
 	require.Contains(t, files["prometheus-http-route.yaml"], "name: "+contract.PrometheusServiceName)
 	require.Contains(t, files["alertmanager-http-route.yaml"], "name: "+contract.AlertmanagerServiceName)
@@ -78,7 +83,12 @@ func TestKubePrometheusStackContractAlignsCustomValuesPatchAndRoutes(t *testing.
 
 	files, err := kubePrometheusStackOverlayFilesRenderer(cfg)
 	require.NoError(t, err)
-	require.Len(t, files, 3)
+	require.Len(t, files, 8)
+	require.Contains(t, files, "alertmanager-security-policy.yaml")
+	require.Contains(t, files, "prometheus-security-policy.yaml")
+	require.Contains(t, files, "gateway-oidc-secret.yaml")
+	require.Contains(t, files, "grafana-oauth-secret.yaml")
+	require.Contains(t, files, "grafana-admin-password.yaml")
 	patch, err := kubePrometheusStackBaseKustomizationPatchesRenderer(cfg)
 	require.NoError(t, err)
 	require.Contains(t, patch, "releaseName: metrics")
@@ -199,11 +209,21 @@ func TestKubePrometheusStackRoutesAreIncludedAndWaitForGatewayAPI(t *testing.T) 
 	require.NoError(t, RenderClusterApps(cfg))
 
 	base := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services", "kube-prometheus-stack")
-	for _, filename := range []string{"prometheus-http-route.yaml", "alertmanager-http-route.yaml", "grafana-http-route.yaml"} {
+	expectedFiles := []string{
+		"prometheus-http-route.yaml",
+		"alertmanager-http-route.yaml",
+		"grafana-http-route.yaml",
+		"alertmanager-security-policy.yaml",
+		"prometheus-security-policy.yaml",
+		"gateway-oidc-secret.yaml",
+		"grafana-oauth-secret.yaml",
+		"grafana-admin-password.yaml",
+	}
+	for _, filename := range expectedFiles {
 		require.FileExists(t, filepath.Join(base, filename))
 	}
 	kustomization := mustReadFile(t, filepath.Join(base, "kustomization.yaml"))
-	for _, filename := range []string{"prometheus-http-route.yaml", "alertmanager-http-route.yaml", "grafana-http-route.yaml"} {
+	for _, filename := range expectedFiles {
 		require.Contains(t, kustomization, "- "+filename)
 	}
 	require.NotContains(t, kustomization, "patches:")

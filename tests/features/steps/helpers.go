@@ -605,6 +605,7 @@ func applyBDDStorageContractDefaults(cfg *v2.Config) {
 		cfg.OpenCenter.Infrastructure.Bastion.Image = "bdd-openstack-image-id"
 	}
 	cfg.Secrets.Keycloak.AdminPassword = "bdd-keycloak-admin-password"
+	cfg.Secrets.Keycloak.ClientSecret = "bdd-keycloak-client-secret"
 	cfg.Secrets.Headlamp.OIDCClientSecret = "bdd-headlamp-oidc-secret"
 	if openstackCSI, ok := cfg.OpenCenter.Services["openstack-csi"].(*services.DefaultServiceConfig); ok {
 		openstackCSI.Enabled = false

@@ -14,7 +14,7 @@ spec:
   rules:
     - backendRefs:
         - name: keycloak-service
-          port: 8080
+          port: {{ if .OpenCenter.Services.keycloak.InternalTLSEnabled }}8443{{ else }}8080{{ end }}
       matches:
         - path:
             type: PathPrefix

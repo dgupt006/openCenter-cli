@@ -356,6 +356,9 @@ spec:
         description: OIDC client for Kubernetes API authentication
         enabled: true
         publicClient: false
+        {{- if .Secrets.Keycloak.ClientSecret }}
+        secret: {{ .Secrets.Keycloak.ClientSecret | quote }}
+        {{- end }}
         standardFlowEnabled: true
         directAccessGrantsEnabled: false
         serviceAccountsEnabled: true

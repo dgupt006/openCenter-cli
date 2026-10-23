@@ -203,7 +203,7 @@ func gatewayIsBYO(cfg v2.Config) bool {
 }
 
 // gatewayDefaultIssuer returns the cert-manager cluster issuer, defaulting to
-// the Route53 ACME issuer when AWS cert-manager credentials are configured,
+// the Route53 ACME issuer when explicitly configured or default cluster certificate is enabled,
 // or "rackspace-ca" to match the original template's default pipeline.
 func gatewayDefaultIssuer(cfg v2.Config) string {
 	gw := gatewayServiceConfig(cfg)
@@ -215,21 +215,31 @@ func gatewayDefaultIssuer(cfg v2.Config) string {
 			return cm.DefaultClusterCertificate.IssuerRef
 		}
 	}
-	if awsCreds := cfg.EnabledCertManagerAWSCredentials(); len(awsCreds) > 0 {
-		var names []string
-		for name := range awsCreds {
-			names = append(names, name)
+	canUseACME := isDefaultClusterCertificateEnabled(cfg)
+	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
+		if cm, ok := svc.(*services.CertManagerConfig); ok {
+			if cm.DNSProvider == "route53" || cm.DNSProvider == "cloudflare" || cm.DefaultClusterCertificateEnabled() {
+				canUseACME = true
+			}
 		}
-		sort.Strings(names)
-		return "letsencrypt-" + names[0]
 	}
-	if cfCreds := cfg.EnabledCertManagerCloudflareCredentials(); len(cfCreds) > 0 {
-		var names []string
-		for name := range cfCreds {
-			names = append(names, name)
+	if canUseACME {
+		if awsCreds := cfg.EnabledCertManagerAWSCredentials(); len(awsCreds) > 0 {
+			var names []string
+			for name := range awsCreds {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			return "letsencrypt-" + names[0]
 		}
-		sort.Strings(names)
-		return "letsencrypt-" + names[0]
+		if cfCreds := cfg.EnabledCertManagerCloudflareCredentials(); len(cfCreds) > 0 {
+			var names []string
+			for name := range cfCreds {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			return "letsencrypt-" + names[0]
+		}
 	}
 	return "rackspace-ca"
 }
@@ -250,6 +260,9 @@ func renderDefaultClusterCertificate(cfg v2.Config) (string, error) {
 				}
 			}
 		}
+	}
+	if len(dnsNames) == 0 {
+		return "", fmt.Errorf("default cluster certificate requires at least one DNS name")
 	}
 	var b strings.Builder
 	b.WriteString("---\n")
@@ -308,6 +321,13 @@ func kubePrometheusStackOverlayFilesRenderer(cfg v2.Config) (map[string]string, 
 		"prometheus-http-route.yaml":   prometheusHTTPRouteTemplate,
 		"alertmanager-http-route.yaml": alertmanagerHTTPRouteTemplate,
 		"grafana-http-route.yaml":      grafanaHTTPRouteTemplate,
+		"grafana-admin-password.yaml":  grafanaAdminPasswordSecretTemplate,
+	}
+	if cfg.OpenCenter.Identity.OIDC.Enabled {
+		templates["alertmanager-security-policy.yaml"] = alertmanagerSecurityPolicyTemplate
+		templates["prometheus-security-policy.yaml"] = prometheusSecurityPolicyTemplate
+		templates["gateway-oidc-secret.yaml"] = gatewayOIDCSecretTemplate
+		templates["grafana-oauth-secret.yaml"] = grafanaOAuthSecretTemplate
 	}
 	files := make(map[string]string, len(templates))
 	for name, tmpl := range templates {
@@ -807,4 +827,88 @@ spec:
           kind: Service
           name: {{ (kubePrometheusStack).GrafanaServiceName }}
           port: 80
+`
+
+const alertmanagerSecurityPolicyTemplate = `---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: alertmanager-oidc
+  namespace: {{ (kubePrometheusStack).Namespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: alertmanager-gateway-route
+  oidc:
+    provider:
+      issuer: "https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter"
+    clientID: "opencenter"
+    clientSecret:
+      name: "gateway-oidc-secret"
+    redirectURL: "https://{{ if (index .OpenCenter.Services "kube-prometheus-stack") }}{{ (index .OpenCenter.Services "kube-prometheus-stack").AlertmanagerHostname | default (printf "alertmanager.%s" fqdn) }}{{ else }}{{ printf "alertmanager.%s" fqdn }}{{ end }}/oauth2/callback"
+    scopes:
+      - openid
+      - profile
+      - email
+      - roles
+    logoutPath: "/logout"
+`
+
+const prometheusSecurityPolicyTemplate = `---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: prometheus-oidc
+  namespace: {{ (kubePrometheusStack).Namespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: prometheus-gateway-route
+  oidc:
+    provider:
+      issuer: "https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter"
+    clientID: "opencenter"
+    clientSecret:
+      name: "gateway-oidc-secret"
+    redirectURL: "https://{{ if (index .OpenCenter.Services "kube-prometheus-stack") }}{{ (index .OpenCenter.Services "kube-prometheus-stack").PrometheusHostname | default (printf "prometheus.%s" fqdn) }}{{ else }}{{ printf "prometheus.%s" fqdn }}{{ end }}/oauth2/callback"
+    scopes:
+      - openid
+      - profile
+      - email
+      - roles
+    logoutPath: "/logout"
+`
+
+const gatewayOIDCSecretTemplate = `apiVersion: v1
+kind: Secret
+metadata:
+  name: gateway-oidc-secret
+  namespace: {{ (kubePrometheusStack).Namespace }}
+type: Opaque
+stringData:
+  client-secret: {{ .Secrets.Keycloak.ClientSecret }}
+`
+
+const grafanaOAuthSecretTemplate = `apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-oauth-secret
+  namespace: {{ (kubePrometheusStack).Namespace }}
+type: Opaque
+stringData:
+  client_id: opencenter
+  client_secret: {{ .Secrets.Keycloak.ClientSecret }}
+`
+
+const grafanaAdminPasswordSecretTemplate = `apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-admin-password
+  namespace: {{ (kubePrometheusStack).Namespace }}
+type: Opaque
+stringData:
+  admin-user: {{ .Secrets.Grafana.AdminUser | default "admin" }}
+  admin-password: {{ .Secrets.Grafana.AdminPassword }}
 `
