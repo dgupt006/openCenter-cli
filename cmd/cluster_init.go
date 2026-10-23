@@ -68,6 +68,9 @@ don't already exist, unless --no-keygen is specified.`,
   # Initialize a VMware cluster
   opencenter cluster init my-cluster --org production --type vmware
 
+  # Initialize with a specific region
+  opencenter cluster init my-cluster --type openstack --region sjc3
+
   # Initialize a Kind cluster with the built-in CNI disabled
   opencenter cluster init my-cluster --org local --type kind --kind-disable-default-cni
 
@@ -82,6 +85,7 @@ don't already exist, unless --no-keygen is specified.`,
 
 	cmd.Flags().String("org", "", "organization name (defaults to 'opencenter')")
 	cmd.Flags().String("type", "openstack", "cluster type: openstack, baremetal, kind, vmware, magnum")
+	cmd.Flags().String("region", "", "cluster region (e.g. dfw3, sjc3, iad3, ord1)")
 	cmd.Flags().String("config-file", "", "load configuration from file")
 	cmd.Flags().String("config", "", "load configuration from file")
 	_ = cmd.Flags().MarkHidden("config")
@@ -177,6 +181,9 @@ func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, e
 	opts.Organization, _ = cmd.Flags().GetString("org")
 	opts.Provider, _ = cmd.Flags().GetString("type")
 	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
+	opts.Region, _ = cmd.Flags().GetString("region")
+	opts.Region = strings.TrimSpace(opts.Region)
+	opts.RegionExplicit = cmd.Flags().Changed("region") && opts.Region != ""
 	opts.DeploymentMethod = "kubespray"
 
 	// Handle org/cluster identifier format: extract organization if embedded

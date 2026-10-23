@@ -363,3 +363,53 @@ func TestBastionConfigYAMLRoundTripPreservesEmptyAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestNewV2DefaultWithRegion(t *testing.T) {
+	t.Run("explicit sjc3 region populates all region-derived fields", func(t *testing.T) {
+		cfg, err := NewV2DefaultWithRegion("sjc-cluster", "openstack", "sjc3")
+		if err != nil {
+			t.Fatalf("NewV2DefaultWithRegion() error = %v", err)
+		}
+
+		if cfg.OpenCenter.Meta.Region != "sjc3" {
+			t.Errorf("Meta.Region = %q, want sjc3", cfg.OpenCenter.Meta.Region)
+		}
+		if cfg.OpenCenter.Cluster.ClusterFQDN != "sjc-cluster.sjc3.k8s.opencenter.cloud" {
+			t.Errorf("ClusterFQDN = %q, want sjc-cluster.sjc3.k8s.opencenter.cloud", cfg.OpenCenter.Cluster.ClusterFQDN)
+		}
+		if cfg.OpenCenter.Infrastructure.NodeNaming.Suffix != "sjc3" {
+			t.Errorf("NodeNaming.Suffix = %q, want sjc3", cfg.OpenCenter.Infrastructure.NodeNaming.Suffix)
+		}
+		osConfig := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+		if osConfig == nil {
+			t.Fatal("OpenStack config is nil")
+		}
+		if osConfig.Region != "sjc3" {
+			t.Errorf("OpenStack.Region = %q, want sjc3", osConfig.Region)
+		}
+		if osConfig.AuthURL != "https://keystone.api.sjc3.rackspacecloud.com/v3/" {
+			t.Errorf("OpenStack.AuthURL = %q, want https://keystone.api.sjc3.rackspacecloud.com/v3/", osConfig.AuthURL)
+		}
+		ntpServers := cfg.OpenCenter.Infrastructure.Networking.NTPServers
+		if len(ntpServers) == 0 || !strings.Contains(ntpServers[0], "sjc3") {
+			t.Errorf("NTPServers = %v, expected sjc3 ntp server", ntpServers)
+		}
+	})
+
+	t.Run("full template with region populates barbican and openstack", func(t *testing.T) {
+		cfg, err := NewV2FullTemplateWithRegion("full-cluster", "openstack", "iad3")
+		if err != nil {
+			t.Fatalf("NewV2FullTemplateWithRegion() error = %v", err)
+		}
+
+		if cfg.OpenCenter.Meta.Region != "iad3" {
+			t.Errorf("Meta.Region = %q, want iad3", cfg.OpenCenter.Meta.Region)
+		}
+		if cfg.OpenCenter.Secrets.Barbican.Region != "iad3" {
+			t.Errorf("Barbican.Region = %q, want iad3", cfg.OpenCenter.Secrets.Barbican.Region)
+		}
+		if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "iad3" {
+			t.Errorf("OpenStack.Region = %q, want iad3", cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+		}
+	})
+}

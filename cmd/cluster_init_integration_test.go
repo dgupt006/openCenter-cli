@@ -178,6 +178,64 @@ func TestClusterInitIntegration(t *testing.T) {
 	}
 }
 
+func TestClusterInitWithRegionFlag(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	cmd := newClusterInitCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"sjc-cluster", "--type", "openstack", "--region", "sjc3"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cmd.Execute() error = %v\nstderr: %s", err, stderr.String())
+	}
+
+	configPath := filepath.Join(dir, "clusters", "blueprints", "opencenter", "sjc-cluster", "sjc-cluster-config.yaml")
+	cfg := loadV2ConfigForTest(t, configPath)
+
+	if cfg.OpenCenter.Meta.Region != "sjc3" {
+		t.Errorf("Meta.Region = %q, want sjc3", cfg.OpenCenter.Meta.Region)
+	}
+	if cfg.OpenCenter.Cluster.ClusterFQDN != "sjc-cluster.sjc3.k8s.opencenter.cloud" {
+		t.Errorf("ClusterFQDN = %q, want sjc-cluster.sjc3.k8s.opencenter.cloud", cfg.OpenCenter.Cluster.ClusterFQDN)
+	}
+	osConfig := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+	if osConfig == nil {
+		t.Fatal("OpenStack config is nil")
+	}
+	if osConfig.Region != "sjc3" {
+		t.Errorf("OpenStack.Region = %q, want sjc3", osConfig.Region)
+	}
+	if osConfig.AuthURL != "https://keystone.api.sjc3.rackspacecloud.com/v3/" {
+		t.Errorf("OpenStack.AuthURL = %q, want https://keystone.api.sjc3.rackspacecloud.com/v3/", osConfig.AuthURL)
+	}
+
+	// Verify GitOps generation renders with sjc3
+	genCmd := newClusterGenerateCmd()
+	var genStdout, genStderr bytes.Buffer
+	genCmd.SetOut(&genStdout)
+	genCmd.SetErr(&genStderr)
+	genCmd.SetArgs([]string{"sjc-cluster", "--render-only", "--skip-validation"})
+	if err := genCmd.Execute(); err != nil {
+		t.Fatalf("cluster generate failed: %v\nstderr: %s", err, genStderr.String())
+	}
+
+	mainTfPath := filepath.Join(dir, "clusters", "gitops", "opencenter", "infrastructure", "clusters", "sjc-cluster", "main.tf")
+	mainTfBytes, err := os.ReadFile(mainTfPath)
+	if err != nil {
+		t.Fatalf("reading rendered main.tf: %v", err)
+	}
+	mainTf := string(mainTfBytes)
+	if !strings.Contains(mainTf, `openstack_region                        = "sjc3"`) {
+		t.Errorf("rendered main.tf does not contain openstack_region = \"sjc3\":\n%s", mainTf)
+	}
+	if !strings.Contains(mainTf, `openstack_auth_url                      = "https://keystone.api.sjc3.rackspacecloud.com/v3/"`) {
+		t.Errorf("rendered main.tf does not contain sjc3 auth_url:\n%s", mainTf)
+	}
+}
+
 func TestClusterInitIntegrationKindProvider(t *testing.T) {
 	dir := t.TempDir()
 	prepareCommandTestEnv(t, dir)

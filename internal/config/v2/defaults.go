@@ -100,6 +100,13 @@ type cliConfig struct {
 
 // NewV2Default creates a schema-valid v2 configuration with init defaults.
 func NewV2Default(name, provider string) (*Config, error) {
+	return NewV2DefaultWithRegion(name, provider, "")
+}
+
+// NewV2DefaultWithRegion creates a schema-valid v2 configuration with init defaults
+// and an explicit region. When region is empty, it falls back to CLI defaults or
+// defaultRegion (DFW3).
+func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 	defaults := loadCLIDefaults()
 	selectedProvider := canonicalInfrastructureProvider(strings.TrimSpace(provider))
 	if selectedProvider == "" {
@@ -109,10 +116,14 @@ func NewV2Default(name, provider string) (*Config, error) {
 		selectedProvider = defaultProvider
 	}
 
-	region := strings.TrimSpace(defaults.Region)
-	if region == "" {
-		region = defaultRegion
+	selectedRegion := strings.TrimSpace(region)
+	if selectedRegion == "" {
+		selectedRegion = strings.TrimSpace(defaults.Region)
 	}
+	if selectedRegion == "" {
+		selectedRegion = defaultRegion
+	}
+	region = selectedRegion
 	environment := strings.TrimSpace(defaults.Environment)
 	if environment == "" {
 		environment = defaultEnvironment
@@ -418,7 +429,13 @@ func NewV2Default(name, provider string) (*Config, error) {
 
 // NewV2FullTemplate returns a more explicit v2 template for --full-schema output.
 func NewV2FullTemplate(name, provider string) (*Config, error) {
-	cfg, err := NewV2Default(name, provider)
+	return NewV2FullTemplateWithRegion(name, provider, "")
+}
+
+// NewV2FullTemplateWithRegion returns a more explicit v2 template for --full-schema output
+// with an explicit region.
+func NewV2FullTemplateWithRegion(name, provider, region string) (*Config, error) {
+	cfg, err := NewV2DefaultWithRegion(name, provider, region)
 	if err != nil {
 		return nil, err
 	}

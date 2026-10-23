@@ -33,6 +33,8 @@ type InitOptions struct {
 	// resolved default. Only an explicit organization may override a value
 	// already present in a loaded --config-file.
 	OrganizationExplicit  bool
+	Region                string
+	RegionExplicit        bool
 	Provider              string
 	DeploymentMethod      string
 	ConfigFile            string
@@ -378,12 +380,12 @@ func (s *InitService) createDefaultConfig(opts InitOptions) (*v2.Config, map[str
 	)
 
 	if opts.FullSchema {
-		cfg, err = v2.NewV2FullTemplate(opts.ClusterName, opts.Provider)
+		cfg, err = v2.NewV2FullTemplateWithRegion(opts.ClusterName, opts.Provider, opts.Region)
 		if err != nil {
 			return nil, nil, fmt.Errorf("building v2 full template: %w", err)
 		}
 	} else {
-		cfg, err = v2.NewV2Default(opts.ClusterName, opts.Provider)
+		cfg, err = v2.NewV2DefaultWithRegion(opts.ClusterName, opts.Provider, opts.Region)
 		if err != nil {
 			return nil, nil, fmt.Errorf("building v2 defaults: %w", err)
 		}
@@ -436,7 +438,18 @@ func (s *InitService) applyOverrides(cfg *v2.Config, configMap map[string]any, o
 
 	// Apply CLI config defaults
 	cliConfig := s.configManager.GetConfig()
-	if cfg.OpenCenter.Meta.Region == "" {
+	if opts.RegionExplicit {
+		cfg.OpenCenter.Meta.Region = opts.Region
+		setNestedConfigValue(configMap, opts.Region, "opencenter", "meta", "region")
+		if cfg.OpenCenter.Infrastructure.Cloud.OpenStack != nil {
+			cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region = opts.Region
+			setNestedConfigValue(configMap, opts.Region, "opencenter", "infrastructure", "cloud", "openstack", "region")
+		}
+		if cfg.OpenCenter.Infrastructure.Cloud.Magnum != nil {
+			cfg.OpenCenter.Infrastructure.Cloud.Magnum.Region = opts.Region
+			setNestedConfigValue(configMap, opts.Region, "opencenter", "infrastructure", "cloud", "magnum", "region")
+		}
+	} else if cfg.OpenCenter.Meta.Region == "" {
 		if cliConfig.ClusterDefaults.Region != "" {
 			cfg.OpenCenter.Meta.Region = cliConfig.ClusterDefaults.Region
 			setNestedConfigValue(configMap, cliConfig.ClusterDefaults.Region, "opencenter", "meta", "region")

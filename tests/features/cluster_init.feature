@@ -76,3 +76,14 @@ Feature: Cluster initialisation
     When I run "opencenter cluster init validation-test --org validation-team --strict"
     Then the command should succeed
     And the cluster configuration "validation-test" should have "opencenter.meta.organization" set to "validation-team"
+
+  # ---------------------------------------------------------------------------
+  # Region-based initialisation (--region flag)
+  # ---------------------------------------------------------------------------
+
+  @init @region
+  Scenario: Init with region creates config with region-derived values
+    When I run "opencenter cluster init sjc-feature --type openstack --region sjc3"
+    Then the command should succeed
+    And the cluster configuration "sjc-feature" should have "opencenter.meta.region" set to "sjc3"
+    And the cluster configuration "sjc-feature" should have "opencenter.cluster.cluster_fqdn" containing "sjc3"

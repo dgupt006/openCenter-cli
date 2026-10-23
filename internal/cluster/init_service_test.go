@@ -443,6 +443,57 @@ func TestInitServiceApplyOverridesFillsEmptyRegionFromDefault(t *testing.T) {
 	}
 }
 
+func TestInitServiceApplyOverridesExplicitRegion(t *testing.T) {
+	t.Setenv("OPENCENTER_CONFIG_DIR", t.TempDir())
+	pathResolver := paths.NewPathResolver(t.TempDir())
+	configManager, err := config.NewConfigManager("")
+	if err != nil {
+		t.Fatalf("NewConfigManager() error = %v", err)
+	}
+	initService := NewInitService(pathResolver, setupValidationEngine(t), configManager)
+	cfg := &v2.Config{
+		OpenCenter: v2.OpenCenterConfig{
+			Infrastructure: v2.InfrastructureConfig{
+				Cloud: v2.CloudConfig{
+					OpenStack: &v2.OpenStackCloudConfig{
+						Region: "old-region",
+					},
+				},
+			},
+		},
+	}
+	cfg.OpenCenter.Meta.Region = "old-region"
+	configMap := map[string]any{
+		"opencenter": map[string]any{
+			"meta": map[string]any{
+				"region": "old-region",
+			},
+			"infrastructure": map[string]any{
+				"cloud": map[string]any{
+					"openstack": map[string]any{
+						"region": "old-region",
+					},
+				},
+			},
+		},
+	}
+
+	opts := InitOptions{
+		Region:         "sjc3",
+		RegionExplicit: true,
+	}
+
+	if err := initService.applyOverrides(cfg, configMap, opts); err != nil {
+		t.Fatalf("applyOverrides() error = %v", err)
+	}
+	if cfg.OpenCenter.Meta.Region != "sjc3" {
+		t.Fatalf("Meta.Region = %q, want sjc3", cfg.OpenCenter.Meta.Region)
+	}
+	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region != "sjc3" {
+		t.Fatalf("OpenStack.Region = %q, want sjc3", cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+	}
+}
+
 // TestInitServiceApplyOverridesRequiresExplicitOrganization guards against a
 // real bug: applyOverrides used to overwrite Meta.Organization whenever
 // opts.Organization was non-empty, but Initialize() force-defaults
