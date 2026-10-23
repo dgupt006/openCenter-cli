@@ -4,7 +4,7 @@ locals {
   # Prefix to add to Openstack resource names
   naming_prefix                           = "${local.cluster_name}-"
 {{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
-  openstack_auth_url                      = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL | default "https://keystone.api.dfw3.rackspacecloud.com/v3/" }}"
+  openstack_auth_url                      = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL | default "https://keystone.api.sjc3.rackspacecloud.com/v3/" }}"
   openstack_insecure                      = {{ .OpenCenter.Infrastructure.Cloud.OpenStack.Insecure | default false }}
   openstack_region                        = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Region | default "SJC3" }}"
   availability_zone                       = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AvailabilityZone | default "az1" }}"
@@ -141,7 +141,7 @@ locals {
   {{- if .OpenCenter.Cluster.Kubernetes.OIDC.Enabled }}
   #OIDC Settings
   kube_oidc_auth_enabled                 = {{ .OpenCenter.Cluster.Kubernetes.OIDC.Enabled | default true }}
-  kube_oidc_url                          = "{{ .OpenCenter.Cluster.Kubernetes.OIDC.IssuerURL | default "https://auth.gdo.prod.sjc3.k8s.opencenter.cloud/realms/opencenter" }}"
+  kube_oidc_url                          = "{{ .OpenCenter.Cluster.Kubernetes.OIDC.IssuerURL | default "https://auth.gdo.prod.dfw3.k8s.opencenter.cloud/realms/opencenter" }}"
   kube_oidc_client_id                    = "{{ .OpenCenter.Cluster.Kubernetes.OIDC.ClientID | default "opencenter" }}"
   # Optional settings fo OIDC
   kube_oidc_ca_file                      = "/etc/ssl/certs/ca-certificates.crt"
