@@ -18,7 +18,7 @@ import "strings"
 // kubesprayModuleSourceNeedsContract2Upgrade reports whether a Kubespray
 // module source pins the gitops-base kubespray module at a ref older than
 // lifecycle contract v2 (inventory_output_dir: the inventory renders once,
-// into the CLI state zone). A pre-contract-2 ref (2026.03-rc2 and older)
+// into the CLI state zone). A pre-contract-2 ref (2026.03-rc3 and older)
 // renders the inventory inside the GitOps worktree, so `cluster deploy` fails
 // in kubespray-prepare with "inventory rendered outside the cluster state
 // zone".

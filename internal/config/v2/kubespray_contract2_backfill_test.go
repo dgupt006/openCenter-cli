@@ -84,7 +84,7 @@ deployment:
   kubespray:
     version: 2.31.0
     kubespray_cluster:
-      source: github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2
+      source: github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc3
       enabled: true
     modules:
       kubespray:
@@ -117,7 +117,7 @@ func TestValidateGenerationBlocksStaleKubesprayModulePin(t *testing.T) {
 		t.Fatal(err)
 	}
 	module := cfg.Deployment.Kubespray.Modules["kubespray"]
-	module.Source = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc2"
+	module.Source = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc3"
 	cfg.Deployment.Kubespray.Modules["kubespray"] = module
 
 	report := ValidateGeneration(cfg)

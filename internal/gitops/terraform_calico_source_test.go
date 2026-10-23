@@ -27,7 +27,7 @@ import (
 // templates must resolve CNI/IaC modules from when no explicit override is
 // configured (OCTR-808). Keep this in sync with
 // internal/config/v2/defaults.go:defaultGitBaseRepoRelease.
-const defaultGitBaseRepoTag = "2026.03-rc2"
+const defaultGitBaseRepoTag = "2026.03-rc3"
 
 // kubesprayModuleTag is the gitops-base tag carrying the lifecycle contract v2
 // kubespray module (inventory_output_dir). The kubespray module pins this tag
