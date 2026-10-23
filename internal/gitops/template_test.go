@@ -289,6 +289,26 @@ func TestRenderInfrastructureClusterHardeningValues(t *testing.T) {
 	}
 }
 
+func TestRenderInfrastructureClusterHardeningDefaults(t *testing.T) {
+	for _, provider := range []string{"openstack", "baremetal", "vmware"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := mustNewGitOpsTestConfig("hardening-default-"+provider, provider)
+			cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
+
+			require.NoError(t, RenderInfrastructureCluster(cfg))
+			mainTFPath := filepath.Join(cfg.GitDir(), "infrastructure", "clusters", cfg.ClusterName(), "main.tf")
+			content, err := os.ReadFile(mainTFPath)
+			require.NoError(t, err)
+
+			mainTF := string(content)
+			assert.Contains(t, mainTF, "k8s_hardening_enabled                   = true")
+			assert.Contains(t, mainTF, "os_hardening_enabled                    = true")
+			assert.Contains(t, mainTF, "k8s_hardening_enabled                   = local.k8s_hardening_enabled")
+			assert.Contains(t, mainTF, "os_hardening_enabled                    = local.os_hardening_enabled")
+		})
+	}
+}
+
 func TestRenderInfrastructureClusterCloudInitTimeout(t *testing.T) {
 	for _, provider := range []string{"openstack", "baremetal", "vmware"} {
 		t.Run(provider, func(t *testing.T) {

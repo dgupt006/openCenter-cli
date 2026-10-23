@@ -210,6 +210,7 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 						PodSecurityStandards: "baseline",
 						AuditLogging:         true,
 						EncryptionAtRest:     true,
+						K8sHardening:         true,
 					},
 					OIDC: OIDCConfig{
 						Enabled:       false,
@@ -251,6 +252,7 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 					Security: NetworkSecurityConfig{
 						AllowedCIDRs: []string{"0.0.0.0/0"},
 						DenyAll:      false,
+						OSHardening:   true,
 					},
 				},
 				Compute: ComputeConfig{

@@ -413,3 +413,20 @@ func TestNewV2DefaultWithRegion(t *testing.T) {
 		}
 	})
 }
+
+func TestNewV2Default_HardeningDefaults(t *testing.T) {
+	for _, provider := range []string{"openstack", "baremetal", "vmware", "kind"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg, err := NewV2Default("hardening-defaults", provider)
+			if err != nil {
+				t.Fatalf("NewV2Default() error = %v", err)
+			}
+			if !cfg.OpenCenter.Cluster.Kubernetes.Security.K8sHardening {
+				t.Errorf("provider %s: K8sHardening = false, want true", provider)
+			}
+			if !cfg.OpenCenter.Infrastructure.Networking.Security.OSHardening {
+				t.Errorf("provider %s: OSHardening = false, want true", provider)
+			}
+		})
+	}
+}
