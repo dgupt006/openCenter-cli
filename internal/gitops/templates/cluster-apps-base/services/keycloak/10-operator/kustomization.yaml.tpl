@@ -4,3 +4,5 @@ kind: Kustomization
 resources:
   - ./operator-group.yaml
   - ./patch-subscription.yaml
+patches:
+  - path: patch-auto-approve.yaml
