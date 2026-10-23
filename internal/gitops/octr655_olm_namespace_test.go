@@ -16,7 +16,7 @@ func TestOCTR655OLMBaseKustomizationPreservesManifestNamespaces(t *testing.T) {
 	olmPath := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "olm.yaml")
 	olmContent := mustReadFile(t, olmPath)
 	require.NotEmpty(t, olmContent, "renderer did not produce %s", olmPath)
-	require.Contains(t, olmContent, "name: olm-base")
+	require.Contains(t, olmContent, "name: olm\n")
 	require.Contains(t, olmContent, "name: opencenter-olm-config")
 	require.Contains(t, olmContent, "path: applications/overlays/"+cfg.ClusterName()+"/services/olm")
 	require.NotContains(t, olmContent, "targetNamespace:")

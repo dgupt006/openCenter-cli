@@ -3,7 +3,9 @@ kind: Kustomization
 
 resources:
   - keycloak-cr-patch.yaml
+  {{- if .OpenCenter.Services.keycloak.InternalTLSEnabled }}
   - keycloak-certificate.yaml
+  {{- end }}
   - httproute.yaml
   - opencenter-realm.yaml
   {{- if and (.OpenCenter.Services.keycloak.MinReplicas) (.OpenCenter.Services.keycloak.MaxReplicas) }}

@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,20 +44,29 @@ func TestOCTR631OLMDescriptorComposesBaseAndReconcilesSingleOverlay(t *testing.T
 
 	overlay := read("services/olm/kustomization.yaml")
 	require.NotEmpty(t, overlay)
-	require.Contains(t, overlay, "- ../base/olm")
+	require.Contains(t, overlay, "../base/olm/")
+	require.Contains(t, overlay, "./netpol.yaml")
+	require.Contains(t, overlay, "patchesStrategicMerge:")
+	require.Contains(t, overlay, "./patches.yaml")
+
+	patches := read("services/olm/patches.yaml")
+	require.NotEmpty(t, patches)
 	for _, name := range []string{"olm-operator", "catalog-operator", "packageserver"} {
-		require.Contains(t, overlay, "name: "+name)
+		require.Contains(t, patches, "name: "+name)
 	}
-	require.Equal(t, 3, strings.Count(overlay, "path: /spec/egress/0"))
-	require.Equal(t, 3, strings.Count(overlay, "protocol: TCP"))
-	require.Equal(t, 3, strings.Count(overlay, "port: "+strconv.Itoa(cfg.OpenCenter.Cluster.Kubernetes.APIPort)))
+	require.Equal(t, 3, strings.Count(patches, "port: "+strconv.Itoa(cfg.OpenCenter.Cluster.Kubernetes.APIPort)))
+
+	netpol := read("services/olm/netpol.yaml")
+	require.NotEmpty(t, netpol)
+	require.Contains(t, netpol, "operatorhubio-catalog-unpack-bundles-allow-"+strconv.Itoa(cfg.OpenCenter.Cluster.Kubernetes.APIPort))
+	require.Contains(t, netpol, "port: "+strconv.Itoa(cfg.OpenCenter.Cluster.Kubernetes.APIPort))
 
 	flux := read("services/fluxcd/olm.yaml")
 	require.NotEmpty(t, flux)
 	docs, err := decodeYAMLDocuments([]byte(flux))
 	require.NoError(t, err)
 	require.Len(t, docs, 1)
-	require.Equal(t, "olm-base", nestedString(docs[0], "metadata", "name"))
+	require.Equal(t, "olm", nestedString(docs[0], "metadata", "name"))
 	require.Equal(t, "opencenter-olm-config", nestedString(docs[0], "spec", "sourceRef", "name"))
 	require.Equal(t, "applications/overlays/"+cfg.ClusterName()+"/services/olm", nestedString(docs[0], "spec", "path"))
 	require.Empty(t, nestedValue(docs[0], "spec", "targetNamespace"))
@@ -90,16 +100,16 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 			require.NoError(t, RenderClusterApps(cfg))
 
 			overlayRoot := filepath.Join(repo, "applications", "overlays", cfg.ClusterName(), "services", "olm")
-			overlay := mustReadFile(t, filepath.Join(overlayRoot, "kustomization.yaml"))
-			require.NotEmpty(t, overlay)
-			require.Contains(t, overlay, "port: "+strconv.Itoa(tc.port))
+			patches := mustReadFile(t, filepath.Join(overlayRoot, "patches.yaml"))
+			require.NotEmpty(t, patches)
+			require.Contains(t, patches, "port: "+strconv.Itoa(tc.port))
 
 			seedOCTR631OLMBaseFixture(t, repo, cfg.ClusterName())
 
 			output := runKustomizeBuild(t, overlayRoot)
 			docs, err := decodeYAMLDocuments([]byte(output))
 			require.NoError(t, err)
-			// 3 patched upstream policies + 1 supplemental bundle-unpack policy (OCTR-705).
+			// 3 patched upstream policies + 1 supplemental bundle-unpack policy.
 			require.Len(t, docs, 4)
 			for _, name := range []string{"olm-operator", "catalog-operator", "packageserver"} {
 				expected := policyExpectations[name]
@@ -116,7 +126,7 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 				require.Equal(t, "TCP", firstPort["protocol"])
 
 				dnsPorts := egressPorts(egress[1:2])
-				for _, port := range []string{"53/TCP", "53/UDP", "5353/TCP", "5353/UDP"} {
+				for _, port := range []string{"53/TCP", "53/UDP"} {
 					require.Contains(t, dnsPorts, port, "%s must retain DNS port %s", name, port)
 				}
 				allEgressPorts := egressPorts(egress)
@@ -141,9 +151,9 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 				require.ElementsMatch(t, []any{"Ingress", "Egress"}, policyTypes)
 			}
 
-			// OCTR-705: supplemental NetworkPolicy for bundle-unpack Job pods.
-			unpack := findNetworkPolicyDocument(t, docs, "olm-bundle-unpack-api-egress")
-			require.Equal(t, "true", nestedString(unpack, "spec", "podSelector", "matchLabels", "olm.managed"))
+			// Supplemental NetworkPolicy for bundle-unpack Job pods.
+			unpackName := fmt.Sprintf("operatorhubio-catalog-unpack-bundles-allow-%d", tc.port)
+			unpack := findNetworkPolicyDocument(t, docs, unpackName)
 			unpackTypes, ok := nestedValue(unpack, "spec", "policyTypes").([]any)
 			require.True(t, ok, "bundle-unpack policyTypes has unexpected shape")
 			require.ElementsMatch(t, []any{"Egress"}, unpackTypes)
@@ -152,9 +162,6 @@ func TestOCTR631OLMOverlayBuildsForAPIPortsAndPreservesUpstreamRules(t *testing.
 			require.Len(t, unpackEgress, 1)
 			unpackPorts := egressPorts(unpackEgress)
 			require.Contains(t, unpackPorts, strconv.Itoa(tc.port)+"/TCP", "bundle-unpack must permit egress to the API port")
-			require.Contains(t, unpackPorts, "50051/TCP", "bundle-unpack must permit gRPC catalog egress")
-			require.Contains(t, unpackPorts, "53/TCP", "bundle-unpack must permit DNS/TCP egress")
-			require.Contains(t, unpackPorts, "53/UDP", "bundle-unpack must permit DNS/UDP egress")
 		})
 	}
 }

@@ -14,6 +14,8 @@
 package gitops
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -37,6 +39,14 @@ func gatewayOverlayFilesRenderer(cfg v2.Config) (map[string]string, error) {
 		return nil, err
 	}
 	files["gateway.yaml"] = gatewayContent
+
+	if isDefaultClusterCertificateEnabled(cfg) {
+		certDoc, err := renderDefaultClusterCertificate(cfg)
+		if err != nil {
+			return nil, err
+		}
+		files["default-cluster-certificate.yaml"] = certDoc
+	}
 
 	// Non-default pools each get their own EnvoyProxy carrying the MetalLB
 	// address-pool annotation. None are emitted in the single-pool case.
@@ -70,6 +80,9 @@ func gatewayKustomizationRenderer(cfg v2.Config) (string, error) {
 	b.WriteString("  - \"gateway-class.yaml\"\n")
 	b.WriteString("  - \"gateway.yaml\"\n")
 	b.WriteString("  - \"envoy-proxy-config.yaml\"\n")
+	if isDefaultClusterCertificateEnabled(cfg) {
+		b.WriteString("  - \"default-cluster-certificate.yaml\"\n")
+	}
 	// gatewayPoolGroups returns non-default groups already sorted by pool name.
 	for _, group := range gatewayPoolGroups(cfg) {
 		if group.isDefault {
@@ -157,19 +170,104 @@ func gatewayServiceConfig(cfg v2.Config) *services.GatewayConfig {
 	return nil
 }
 
+func isDefaultClusterCertificateEnabled(cfg v2.Config) bool {
+	if gw := gatewayServiceConfig(cfg); gw != nil && gw.TLS != nil && gw.TLS.DefaultClusterCertificate {
+		return true
+	}
+	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
+		if cm, ok := svc.(*services.CertManagerConfig); ok && cm.DefaultClusterCertificateEnabled() {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultClusterCertificateSecretName(cfg v2.Config) string {
+	if gw := gatewayServiceConfig(cfg); gw != nil && gw.TLS != nil && gw.TLS.WildcardSecretName != "" {
+		return gw.TLS.WildcardSecretName
+	}
+	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
+		if cm, ok := svc.(*services.CertManagerConfig); ok {
+			return cm.DefaultClusterCertificateSecretName()
+		}
+	}
+	return "default-cluster-tls"
+}
+
 // gatewayIsBYO reports whether the gateway uses bring-your-own TLS.
 func gatewayIsBYO(cfg v2.Config) bool {
+	if isDefaultClusterCertificateEnabled(cfg) {
+		return true
+	}
 	return gatewayServiceConfig(cfg).IsBYO()
 }
 
 // gatewayDefaultIssuer returns the cert-manager cluster issuer, defaulting to
-// "rackspace-ca" to match the original template's `default` pipeline.
+// the Route53 ACME issuer when AWS cert-manager credentials are configured,
+// or "rackspace-ca" to match the original template's default pipeline.
 func gatewayDefaultIssuer(cfg v2.Config) string {
 	gw := gatewayServiceConfig(cfg)
 	if gw != nil && gw.DefaultIssuer != "" {
 		return gw.DefaultIssuer
 	}
+	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
+		if cm, ok := svc.(*services.CertManagerConfig); ok && cm.DefaultClusterCertificate != nil && cm.DefaultClusterCertificate.IssuerRef != "" {
+			return cm.DefaultClusterCertificate.IssuerRef
+		}
+	}
+	if awsCreds := cfg.EnabledCertManagerAWSCredentials(); len(awsCreds) > 0 {
+		var names []string
+		for name := range awsCreds {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return "letsencrypt-" + names[0]
+	}
+	if cfCreds := cfg.EnabledCertManagerCloudflareCredentials(); len(cfCreds) > 0 {
+		var names []string
+		for name := range cfCreds {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return "letsencrypt-" + names[0]
+	}
 	return "rackspace-ca"
+}
+
+func renderDefaultClusterCertificate(cfg v2.Config) (string, error) {
+	fqdn := cfg.OpenCenter.Cluster.ClusterFQDN
+	issuer := gatewayDefaultIssuer(cfg)
+	secretName := defaultClusterCertificateSecretName(cfg)
+	var dnsNames []string
+	if fqdn != "" {
+		dnsNames = append(dnsNames, fqdn, "*."+fqdn)
+	}
+	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
+		if cm, ok := svc.(*services.CertManagerConfig); ok && cm.DefaultClusterCertificate != nil {
+			for _, name := range cm.DefaultClusterCertificate.DNSNames {
+				if !containsString(dnsNames, name) {
+					dnsNames = append(dnsNames, name)
+				}
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString("apiVersion: cert-manager.io/v1\n")
+	b.WriteString("kind: Certificate\n")
+	b.WriteString("metadata:\n")
+	b.WriteString("  name: default-cluster-certificate\n")
+	b.WriteString("  namespace: " + gatewayNamespace + "\n")
+	b.WriteString("spec:\n")
+	b.WriteString("  secretName: " + secretName + "\n")
+	b.WriteString("  issuerRef:\n")
+	b.WriteString("    name: " + issuer + "\n")
+	b.WriteString("    kind: ClusterIssuer\n")
+	b.WriteString("  dnsNames:\n")
+	for _, name := range dnsNames {
+		b.WriteString("    - " + fmt.Sprintf("%q", name) + "\n")
+	}
+	return b.String(), nil
 }
 
 // renderPoolEnvoyProxy renders the EnvoyProxy for a non-default pool group,
@@ -259,7 +357,37 @@ func renderOverlayTemplate(tmpl string, cfg v2.Config) (string, error) {
 	// gw returns the gateway service config for BYO-TLS resolution in the
 	// per-listener blocks. Returning a non-nil zero value keeps templates safe
 	// when the gateway service is absent (pointer methods handle nil).
-	funcMap["gw"] = func() *services.GatewayConfig { return gatewayServiceConfig(cfg) }
+	funcMap["gw"] = func() *services.GatewayConfig {
+		gw := gatewayServiceConfig(cfg)
+		if isDefaultClusterCertificateEnabled(cfg) {
+			secretName := defaultClusterCertificateSecretName(cfg)
+			if gw == nil {
+				gw = &services.GatewayConfig{
+					TLS: &services.GatewayTLSConfig{
+						DefaultClusterCertificate: true,
+						WildcardSecretName:        secretName,
+					},
+				}
+			} else {
+				gwCopy := *gw
+				if gwCopy.TLS == nil {
+					gwCopy.TLS = &services.GatewayTLSConfig{
+						DefaultClusterCertificate: true,
+						WildcardSecretName:        secretName,
+					}
+				} else {
+					tlsCopy := *gwCopy.TLS
+					if tlsCopy.WildcardSecretName == "" {
+						tlsCopy.WildcardSecretName = secretName
+					}
+					tlsCopy.DefaultClusterCertificate = true
+					gwCopy.TLS = &tlsCopy
+				}
+				gw = &gwCopy
+			}
+		}
+		return gw
+	}
 	// gatewayNameFor returns the Gateway resource name a service's HTTPRoutes
 	// must target, given per-service MetalLB pool selection (OCTR-762). Defaults
 	// to rmpk-gateway when the service is on the default pool.

@@ -37,7 +37,7 @@ spec:
   # HTTP configuration
   http:
     httpEnabled: true
-    {{- if .OpenCenter.Services.keycloak.TLSEnabled | default true }}
+    {{- if .OpenCenter.Services.keycloak.InternalTLSEnabled }}
     tlsSecret: {{ .OpenCenter.Services.keycloak.TLSSecretName | default "keycloak-tls-secret" }}
     {{- end }}
   

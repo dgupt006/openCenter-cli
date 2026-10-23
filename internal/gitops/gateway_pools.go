@@ -173,6 +173,11 @@ func gatewayPoolGroups(cfg v2.Config) []gatewayPoolGroup {
 	// Assign each movable listener to its service's resolved pool.
 	listenerPool := map[string]string{}
 	for _, m := range movableListenerServices {
+		if m.service == "longhorn" {
+			if svc, ok := cfg.OpenCenter.Services[m.service]; ok && IsServiceDisabled(svc) {
+				continue
+			}
+		}
 		pool := resolveServicePool(cfg, m.service)
 		for _, l := range m.listeners {
 			listenerPool[l] = pool

@@ -2659,6 +2659,27 @@
                 "create_cluster_issuer": {
                   "type": "boolean"
                 },
+                "default_cluster_certificate": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dns_names": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "issuer_ref": {
+                      "type": "string"
+                    },
+                    "secret_name": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "dns_provider": {
                   "type": "string"
                 },
@@ -3031,6 +3052,9 @@
                 "tls": {
                   "additionalProperties": false,
                   "properties": {
+                    "default_cluster_certificate": {
+                      "type": "boolean"
+                    },
                     "per_listener_secrets": {
                       "additionalProperties": {
                         "type": "string"
@@ -3384,6 +3408,9 @@
                 },
                 "instances": {
                   "type": "integer"
+                },
+                "internal_tls_enabled": {
+                  "type": "boolean"
                 },
                 "log_format": {
                   "type": "string"
@@ -4894,6 +4921,27 @@
                 "create_cluster_issuer": {
                   "type": "boolean"
                 },
+                "default_cluster_certificate": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dns_names": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "issuer_ref": {
+                      "type": "string"
+                    },
+                    "secret_name": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "dns_provider": {
                   "type": "string"
                 },
@@ -5266,6 +5314,9 @@
                 "tls": {
                   "additionalProperties": false,
                   "properties": {
+                    "default_cluster_certificate": {
+                      "type": "boolean"
+                    },
                     "per_listener_secrets": {
                       "additionalProperties": {
                         "type": "string"
@@ -5619,6 +5670,9 @@
                 },
                 "instances": {
                   "type": "integer"
+                },
+                "internal_tls_enabled": {
+                  "type": "boolean"
                 },
                 "log_format": {
                   "type": "string"
@@ -7205,6 +7259,27 @@
                 "create_cluster_issuer": {
                   "type": "boolean"
                 },
+                "default_cluster_certificate": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dns_names": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "issuer_ref": {
+                      "type": "string"
+                    },
+                    "secret_name": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "dns_provider": {
                   "type": "string"
                 },
@@ -7577,6 +7652,9 @@
                 "tls": {
                   "additionalProperties": false,
                   "properties": {
+                    "default_cluster_certificate": {
+                      "type": "boolean"
+                    },
                     "per_listener_secrets": {
                       "additionalProperties": {
                         "type": "string"
@@ -7930,6 +8008,9 @@
                 },
                 "instances": {
                   "type": "integer"
+                },
+                "internal_tls_enabled": {
+                  "type": "boolean"
                 },
                 "log_format": {
                   "type": "string"

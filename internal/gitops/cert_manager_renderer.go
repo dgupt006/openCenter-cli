@@ -82,6 +82,7 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 	})
 
 	certManagerConfig := extractCertManagerConfig(cfg)
+	hasMaterializedSecret := secretArtifactTargetMaterialized(cfg, "cert-manager", artifacts)
 	for i := range credentials {
 		credentials[i].ClusterName = cfg.ClusterName()
 		credentials[i].ClusterFQDN = cfg.OpenCenter.Cluster.ClusterFQDN
@@ -89,6 +90,15 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		credentials[i].Email = certManagerConfig.email
 		if credentials[i].Region == "" {
 			credentials[i].Region = certManagerConfig.region
+		}
+		if hasMaterializedSecret {
+			credentials[i].SecretName = "opencenter-cert-manager-secret"
+			credentials[i].AccessKeyKey = "aws-access-key"
+			credentials[i].SecretAccessKeyKey = "aws-secret-access-key"
+		} else {
+			credentials[i].SecretName = fmt.Sprintf("opencenter-aws-credentials-secret-%s", credentials[i].Name)
+			credentials[i].AccessKeyKey = "access-key-id"
+			credentials[i].SecretAccessKeyKey = "secret-access-key"
 		}
 	}
 
@@ -177,6 +187,10 @@ type certManagerCredentialData struct {
 	ClusterFQDN       string
 	LetsEncryptServer string
 	Email             string
+
+	SecretName         string
+	AccessKeyKey       string
+	SecretAccessKeyKey string
 }
 
 // certManagerServiceConfig holds extracted cert-manager service configuration.
@@ -311,6 +325,8 @@ type: Opaque
 stringData:
   access-key-id: {{ .AWSAccessKey }}
   secret-access-key: {{ .AWSSecretAccessKey }}
+  aws-access-key: {{ .AWSAccessKey }}
+  aws-secret-access-key: {{ .AWSSecretAccessKey }}
 `
 
 const cloudflareSecretTemplate = `apiVersion: v1
@@ -337,11 +353,11 @@ spec:
           route53:
             region: {{ .Region }}
             accessKeyIDSecretRef:
-              name: "opencenter-aws-credentials-secret-{{ .Name }}"
-              key: access-key-id
+              name: "{{ .SecretName }}"
+              key: {{ .AccessKeyKey }}
             secretAccessKeySecretRef:
-              name: "opencenter-aws-credentials-secret-{{ .Name }}"
-              key: secret-access-key
+              name: "{{ .SecretName }}"
+              key: {{ .SecretAccessKeyKey }}
 {{- if .DNSZones }}
         selector:
           dnsZones:

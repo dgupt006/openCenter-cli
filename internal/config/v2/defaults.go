@@ -417,7 +417,7 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 			SOPSConfig: SOPSConfig{
 				Enabled:        true,
 				AgeKeyFile:     sopsAgeKeyPath,
-				EncryptedRegex: "^(data|stringData|secret)$",
+				EncryptedRegex: DefaultSOPSEncryptedRegex,
 			},
 		},
 	}

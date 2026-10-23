@@ -14,7 +14,27 @@ type CertManagerConfig struct {
 	DNSZones            []string     `yaml:"dns_zones,omitempty" json:"dns_zones,omitempty" jsonschema:"description=DNS zones for certificate validation"`
 	CreateClusterIssuer bool         `yaml:"create_cluster_issuer,omitempty" json:"create_cluster_issuer,omitempty" jsonschema:"description=Create external ClusterIssuer resource,default=true"`
 	Issuers             []CertIssuer `yaml:"issuers,omitempty" json:"issuers,omitempty" jsonschema:"description=List of certificate issuers"`
-	DNSProvider         string       `yaml:"dns_provider,omitempty" json:"dns_provider,omitempty" jsonschema:"description=DNS provider for ACME DNS-01 challenge,enum=route53,enum=designate,enum=cloudflare,enum=clouddns,enum=azuredns"`
+	DNSProvider         string                           `yaml:"dns_provider,omitempty" json:"dns_provider,omitempty" jsonschema:"description=DNS provider for ACME DNS-01 challenge,enum=route53,enum=designate,enum=cloudflare,enum=clouddns,enum=azuredns"`
+	DefaultClusterCertificate *DefaultClusterCertificateConfig `yaml:"default_cluster_certificate,omitempty" json:"default_cluster_certificate,omitempty" jsonschema:"description=Default cluster certificate configuration"`
+}
+
+// DefaultClusterCertificateConfig configures generation of a cluster-wide default wildcard certificate.
+type DefaultClusterCertificateConfig struct {
+	Enabled    bool     `yaml:"enabled" json:"enabled" jsonschema:"description=Enable generation of a default cluster-wide wildcard certificate"`
+	SecretName string   `yaml:"secret_name,omitempty" json:"secret_name,omitempty" jsonschema:"description=Secret name for the default cluster certificate,default=default-cluster-tls"`
+	IssuerRef  string   `yaml:"issuer_ref,omitempty" json:"issuer_ref,omitempty" jsonschema:"description=ClusterIssuer name to use; defaults to the configured Route53/ACME issuer"`
+	DNSNames   []string `yaml:"dns_names,omitempty" json:"dns_names,omitempty" jsonschema:"description=Additional DNS names for the certificate"`
+}
+
+func (c *CertManagerConfig) DefaultClusterCertificateEnabled() bool {
+	return c != nil && c.DefaultClusterCertificate != nil && c.DefaultClusterCertificate.Enabled
+}
+
+func (c *CertManagerConfig) DefaultClusterCertificateSecretName() string {
+	if c != nil && c.DefaultClusterCertificate != nil && c.DefaultClusterCertificate.SecretName != "" {
+		return c.DefaultClusterCertificate.SecretName
+	}
+	return "default-cluster-tls"
 }
 
 // CertIssuer represents a certificate issuer configuration.

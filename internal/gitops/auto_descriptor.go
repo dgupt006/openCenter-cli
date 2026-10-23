@@ -801,7 +801,7 @@ kind: Kustomization
 namespace: {{ .Namespace }}
 {{- if .HasOverrideValues }}
 secretGenerator:
-  - name: {{ .ServiceName }}-values-override
+  - name: {{ .KustomizationName | default .ServiceName }}-values-override
     type: Opaque
     files:
       - override.yaml=helm-values/override-values.yaml

@@ -21,6 +21,10 @@ type GatewayConfig struct {
 // option is set, the generator stops emitting the
 // cert-manager.io/cluster-issuer annotation on the Gateway.
 type GatewayTLSConfig struct {
+	// DefaultClusterCertificate, when true, makes every HTTPS listener terminate with
+	// the default cluster certificate Secret (default-cluster-tls) and drops the
+	// cert-manager annotation.
+	DefaultClusterCertificate bool `yaml:"default_cluster_certificate,omitempty" json:"default_cluster_certificate,omitempty" jsonschema:"description=Use the default cluster certificate secret for HTTPS listeners"`
 	// WildcardSecretName, when set, makes every HTTPS listener terminate with
 	// this single pre-existing TLS Secret (e.g. a wildcard certificate) and
 	// drops the cert-manager annotation.
@@ -40,12 +44,12 @@ func (g *GatewayConfig) IsBYO() bool {
 	if g == nil || g.TLS == nil {
 		return false
 	}
-	return g.TLS.WildcardSecretName != "" || len(g.TLS.PerListenerSecrets) > 0
+	return g.TLS.DefaultClusterCertificate || g.TLS.WildcardSecretName != "" || len(g.TLS.PerListenerSecrets) > 0
 }
 
 // TLSSecretFor returns the TLS Secret name for a listener identified by its
 // logical name (e.g. "keycloak") given the built-in default. Precedence:
-// per-listener override, then wildcard, then the built-in default.
+// per-listener override, then wildcard, then default cluster certificate, then the built-in default.
 func (g *GatewayConfig) TLSSecretFor(listener, defaultSecret string) string {
 	if g == nil || g.TLS == nil {
 		return defaultSecret
@@ -55,6 +59,9 @@ func (g *GatewayConfig) TLSSecretFor(listener, defaultSecret string) string {
 	}
 	if g.TLS.WildcardSecretName != "" {
 		return g.TLS.WildcardSecretName
+	}
+	if g.TLS.DefaultClusterCertificate {
+		return "default-cluster-tls"
 	}
 	return defaultSecret
 }

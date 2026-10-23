@@ -104,7 +104,7 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "gateway-api", DefaultNamespace: "envoy-gateway-system", HasOverrideValues: true,
 			SourceName: "opencenter-gateway-api", SourceGroup: "gateway-api", EmitSource: true,
 			BasePath: "applications/base/services/gateway-api", KustomizationName: "envoy-gateway-api",
-			OverrideValues: "---\nenvoyGateway:\n  config:\n    envoyGateway:\n      logging:\n        level:\n          default: info\n",
+			OverrideValues: "---\nconfig:\n  envoyGateway:\n    logging:\n      level:\n        default: info\n    extensionApis:\n      enableEnvoyPatchPolicy: true\n      enableBackend: true\n",
 		},
 		{
 			ServiceName: "headlamp", DefaultNamespace: "headlamp", HasOverrideValues: true,

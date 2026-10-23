@@ -268,6 +268,10 @@ type VSphereCsiSecrets struct {
 	Datastoreurl string `yaml:"datastoreurl,omitempty" json:"datastoreurl,omitempty"`
 }
 
+// DefaultSOPSEncryptedRegex defines the selective regex used to encrypt sensitive fields
+// across SOPS-managed configurations and service override-values.
+const DefaultSOPSEncryptedRegex = `^(data|stringData|credentials|password|secret|key|token|cert|ca|crt|tls|clientSecret|accessKeyId|secretAccessKey|secret_key|access_key|secret_access_key|access_key_id|application-credential-secret)$`
+
 // SOPSConfig represents SOPS encryption configuration.
 // Requirements: 18.5, 18.6
 type SOPSConfig struct {

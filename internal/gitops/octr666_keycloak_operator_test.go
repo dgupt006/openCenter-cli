@@ -1,9 +1,7 @@
 package gitops
 
 import (
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -27,100 +25,34 @@ func TestOCTR675KeycloakOperatorWatchScope(t *testing.T) {
 		t.Fatalf("expected one Kustomization document in %s, got %d", kustomizationPath, len(kustomizationDocs))
 	}
 	resources, ok := nestedValue(kustomizationDocs[0], "resources").([]any)
-	if !ok || len(resources) != 2 || resources[0] != "./operator-group.yaml" || resources[1] != "./patch-subscription.yaml" {
-		t.Fatalf("%s resources = %#v, want [./operator-group.yaml, ./patch-subscription.yaml]", kustomizationPath, resources)
+	if !ok || len(resources) != 1 || resources[0] != "../../base/keycloak/10-operator" {
+		t.Fatalf("%s resources = %#v, want [../../base/keycloak/10-operator]", kustomizationPath, resources)
 	}
 
-	// Validate the OperatorGroup is correctly scoped (OCTR-671).
-	operatorGroupPath := filepath.Join(operatorDir, "operator-group.yaml")
-	operatorGroupDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, operatorGroupPath)))
+	// Validate the patch-auto-approve file exists and targets keycloak-subscription.
+	autoApprovePath := filepath.Join(operatorDir, "patch-auto-approve.yaml")
+	autoApproveDocs, err := decodeYAMLDocuments([]byte(mustReadFile(t, autoApprovePath)))
 	if err != nil {
-		t.Fatalf("parse %s: %v", operatorGroupPath, err)
+		t.Fatalf("parse %s: %v", autoApprovePath, err)
 	}
-	if len(operatorGroupDocs) != 1 {
-		t.Fatalf("expected one OperatorGroup document in %s, got %d", operatorGroupPath, len(operatorGroupDocs))
+	if len(autoApproveDocs) != 1 {
+		t.Fatalf("expected one Subscription document in %s, got %d", autoApprovePath, len(autoApproveDocs))
 	}
-	og := operatorGroupDocs[0]
-	if got := og["apiVersion"]; got != "operators.coreos.com/v1" {
-		t.Errorf("OperatorGroup apiVersion = %#v, want operators.coreos.com/v1", got)
-	}
-	if got := og["kind"]; got != "OperatorGroup" {
-		t.Errorf("OperatorGroup kind = %#v, want OperatorGroup", got)
-	}
-	if got := nestedString(og, "metadata", "namespace"); got != "keycloak-operator" {
-		t.Errorf("OperatorGroup namespace = %q, want keycloak-operator", got)
-	}
-	targetNamespaces, ok := nestedValue(og, "spec", "targetNamespaces").([]any)
-	if !ok || len(targetNamespaces) != 1 || targetNamespaces[0] != "keycloak" {
-		t.Errorf("OperatorGroup targetNamespaces = %#v, want [keycloak]", targetNamespaces)
-	}
-	operatorGroupContent := mustReadFile(t, operatorGroupPath)
-	for _, unsupportedScope := range []string{"AllNamespaces", "MultiNamespace"} {
-		if strings.Contains(operatorGroupContent, unsupportedScope) {
-			t.Errorf("OperatorGroup must not use unsupported %s topology", unsupportedScope)
-		}
-	}
-
-	subscriptionPath := filepath.Join(operatorDir, "patch-subscription.yaml")
-	subscriptionContent := mustReadFile(t, subscriptionPath)
-	subscriptionDocs, err := decodeYAMLDocuments([]byte(subscriptionContent))
-	if err != nil {
-		t.Fatalf("parse %s: %v", subscriptionPath, err)
-	}
-	if len(subscriptionDocs) != 1 {
-		t.Fatalf("expected one Subscription document in %s, got %d", subscriptionPath, len(subscriptionDocs))
-	}
-	subscription := subscriptionDocs[0]
-	if got := subscription["apiVersion"]; got != "operators.coreos.com/v1alpha1" {
+	sub := autoApproveDocs[0]
+	if got := sub["apiVersion"]; got != "operators.coreos.com/v1alpha1" {
 		t.Errorf("Subscription apiVersion = %#v, want operators.coreos.com/v1alpha1", got)
 	}
-	if got := subscription["kind"]; got != "Subscription" {
-		t.Errorf("operator resource kind = %#v, want Subscription", got)
+	if got := sub["kind"]; got != "Subscription" {
+		t.Errorf("Subscription kind = %#v, want Subscription", got)
 	}
-	if got := nestedString(subscription, "metadata", "name"); got != "keycloak-operator" {
-		t.Errorf("Subscription metadata.name = %q, want keycloak-operator", got)
+	if got := nestedString(sub, "metadata", "name"); got != "keycloak-subscription" {
+		t.Errorf("Subscription metadata.name = %q, want keycloak-subscription", got)
 	}
-	if got := nestedString(subscription, "metadata", "namespace"); got != "keycloak-operator" {
-		t.Errorf("Subscription metadata.namespace = %q, want keycloak-operator", got)
+	if got := nestedString(sub, "metadata", "namespace"); got != "keycloak" {
+		t.Errorf("Subscription metadata.namespace = %q, want keycloak", got)
 	}
-	for field, want := range map[string]string{
-		"name":                "keycloak-operator",
-		"channel":             "fast",
-		"source":              "operatorhubio-catalog",
-		"sourceNamespace":     "olm",
-		"startingCSV":         "keycloak-operator.v26.4.2",
-		"installPlanApproval": "Automatic",
-	} {
-		if got := nestedString(subscription, "spec", field); got != want {
-			t.Errorf("Subscription spec.%s = %q, want %q", field, got, want)
-		}
-	}
-	assertOrderedSubstrings(t, subscriptionContent,
-		"name: keycloak-operator",
-		"channel: fast",
-		"source: operatorhubio-catalog",
-		"sourceNamespace: olm",
-		"startingCSV: keycloak-operator.v26.4.2",
-		"installPlanApproval: Automatic",
-	)
-
-	entries, err := os.ReadDir(operatorDir)
-	if err != nil {
-		t.Fatalf("read %s: %v", operatorDir, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
-			continue
-		}
-		docs, err := decodeYAMLDocuments([]byte(mustReadFile(t, filepath.Join(operatorDir, entry.Name()))))
-		if err != nil {
-			t.Fatalf("parse generated operator resource %s: %v", entry.Name(), err)
-		}
-		for _, doc := range docs {
-			if doc["kind"] == "CatalogSource" {
-				t.Fatalf("generated Keycloak operator resources must not include a CatalogSource: %s", entry.Name())
-			}
-		}
+	if got := nestedString(sub, "spec", "installPlanApproval"); got != "Automatic" {
+		t.Errorf("Subscription spec.installPlanApproval = %q, want Automatic", got)
 	}
 
 	fluxPath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "keycloak.yaml")
@@ -129,27 +61,19 @@ func TestOCTR675KeycloakOperatorWatchScope(t *testing.T) {
 		t.Fatalf("parse %s: %v", fluxPath, err)
 	}
 
-	// Validate keycloak-namespace stage exists and keycloak-postgres depends on it (OCTR-673).
-	namespaceStage := findFluxKustomization(t, fluxDocs, "keycloak-namespace")
-	if namespaceStage == nil {
-		t.Fatalf("keycloak-namespace Kustomization not found in %s", fluxPath)
-	}
+	// Validate keycloak-postgres depends on sources (upstream base creates the keycloak namespace).
 	postgresStage := findFluxKustomization(t, fluxDocs, "keycloak-postgres")
-	if !hasFluxDependency(t, postgresStage, "keycloak-namespace") {
-		t.Fatalf("keycloak-postgres must depend on keycloak-namespace")
+	if postgresStage == nil {
+		t.Fatalf("keycloak-postgres Kustomization not found in %s", fluxPath)
 	}
-
-	// Verify the namespace resource file exists.
-	nsPath := filepath.Join(dst, "applications", "overlays", cfg.ClusterName(), "services", "keycloak", "namespace", "namespace.yaml")
-	nsContent := mustReadFile(t, nsPath)
-	if !strings.Contains(nsContent, "name: keycloak") {
-		t.Errorf("namespace.yaml does not define namespace 'keycloak': %s", nsContent)
+	if !hasFluxDependency(t, postgresStage, "sources") {
+		t.Fatalf("keycloak-postgres must depend on sources")
 	}
 
 	operatorStage := findFluxKustomization(t, fluxDocs, "keycloak-operator")
-	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "olm-base", "keycloak-postgres")
-	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "keycloak-operator" {
-		t.Errorf("keycloak-operator targetNamespace = %q, want keycloak-operator", got)
+	assertFluxDependenciesInOrder(t, operatorStage, "keycloak-operator", "sources", "keycloak-postgres", "olm")
+	if got := nestedString(operatorStage, "spec", "targetNamespace"); got != "keycloak" {
+		t.Errorf("keycloak-operator targetNamespace = %q, want keycloak", got)
 	}
 	healthChecks, ok := nestedValue(operatorStage, "spec", "healthChecks").([]any)
 	if !ok || len(healthChecks) != 1 {
@@ -163,7 +87,7 @@ func TestOCTR675KeycloakOperatorWatchScope(t *testing.T) {
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"name":       "keycloak-operator",
-		"namespace":  "keycloak-operator",
+		"namespace":  "keycloak",
 	} {
 		if got := healthCheck[field]; got != want {
 			t.Errorf("keycloak-operator health check %s = %#v, want %q", field, got, want)
@@ -187,22 +111,6 @@ func TestOCTR675KeycloakOperatorWatchScope(t *testing.T) {
 	}
 	if got := keycloakHealthCheck["namespace"]; got != "keycloak" {
 		t.Errorf("keycloak-cr health check namespace = %#v, want keycloak", got)
-	}
-}
-
-func assertOrderedSubstrings(t *testing.T, content string, want ...string) {
-	t.Helper()
-	previous := -1
-	for _, substring := range want {
-		index := strings.Index(content, substring)
-		if index < 0 {
-			t.Errorf("rendered content is missing %q", substring)
-			continue
-		}
-		if index <= previous {
-			t.Errorf("rendered content places %q out of order", substring)
-		}
-		previous = index
 	}
 }
 

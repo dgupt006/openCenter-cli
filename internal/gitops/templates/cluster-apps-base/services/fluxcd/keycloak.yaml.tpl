@@ -2,38 +2,11 @@
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: keycloak-namespace
-  namespace: flux-system
-spec:
-  dependsOn:
-    - name: sources
-      namespace: flux-system
-  interval: 15m
-  retryInterval: 1m
-  timeout: 5m
-  sourceRef:
-    kind: GitRepository
-    name: opencenter-keycloak-config
-    namespace: flux-system
-  path: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/keycloak/namespace
-  prune: true
-  wait: true
-  commonMetadata:
-    labels:
-      app.kubernetes.io/part-of: keycloak
-      app.kubernetes.io/managed-by: flux
-      opencenter/managed-by: opencenter
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
   name: keycloak-postgres
   namespace: flux-system
 spec:
   dependsOn:
     - name: sources
-      namespace: flux-system
-    - name: keycloak-namespace
       namespace: flux-system
     - name: postgres-operator-base
       namespace: flux-system
@@ -69,9 +42,9 @@ spec:
   dependsOn:
     - name: sources
       namespace: flux-system
-    - name: olm-base
-      namespace: flux-system
     - name: keycloak-postgres
+      namespace: flux-system
+    - name: olm
       namespace: flux-system
   interval: 15m
   retryInterval: 1m
@@ -81,14 +54,14 @@ spec:
     name: opencenter-keycloak-config
     namespace: flux-system
   path: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/keycloak/10-operator
-  targetNamespace: keycloak-operator
+  targetNamespace: keycloak
   prune: true
   wait: true
   healthChecks:
     - apiVersion: apps/v1
       kind: Deployment
       name: keycloak-operator
-      namespace: keycloak-operator
+      namespace: keycloak
   commonMetadata:
     labels:
       app.kubernetes.io/part-of: keycloak

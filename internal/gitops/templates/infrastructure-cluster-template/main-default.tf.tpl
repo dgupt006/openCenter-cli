@@ -105,9 +105,7 @@ locals {
     worker_node_bfv_delete_on_termination = {{ $pool.BootVolume.DeleteOnTermination | default true }}
     additional_block_devices_worker     = []
     pf9_onboard                         = {{ $pool.PF9Onboard | default false }}
-    {{- if $pool.Image }}
-    image_id                            = "{{ $pool.Image }}"
-    {{- end }}
+    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
   }{{ end }}]{{ else }}[]{{ end }}
 
   # ===================================
@@ -175,9 +173,7 @@ locals {
     worker_count                        = {{ $pool.Count }}
     flavor_worker                       = "{{ $pool.Flavor }}"
     node_worker                         = "{{ $pool.Name }}"
-    {{- if $pool.Image }}
-    image_id                            = "{{ $pool.Image }}"
-    {{- end }}
+    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
     {{- if $pool.BootVolume.Size }}
     worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size }}
     {{- end }}
@@ -192,9 +188,7 @@ locals {
     worker_count                        = {{ $pool.Count }}
     flavor_worker                       = "{{ $pool.Flavor }}"
     node_worker                         = "{{ $pool.Name }}"
-    {{- if $pool.Image }}
-    image_id                            = "{{ $pool.Image }}"
-    {{- end }}
+    image_id                            = "{{ $pool.Image | default "${local.image_id}" }}"
     {{- if $pool.BootVolume.Size }}
     worker_node_bfv_volume_size         = {{ $pool.BootVolume.Size }}
     {{- end }}

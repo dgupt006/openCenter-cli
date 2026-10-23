@@ -10,6 +10,7 @@ import (
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderMetalLBOverlayBuildsWithKustomize(t *testing.T) {
@@ -95,6 +96,7 @@ func TestGeneratedDefaultOverlayKustomizeFailureMatrix(t *testing.T) {
 	// generated locally. Seed the v0.46-shaped source artifact so this matrix
 	// validates the composed overlay instead of failing on an absent include.
 	seedOCTR631OLMBaseFixture(t, repo, cfg.ClusterName())
+	seedKeycloakBaseFixture(t, repo, cfg.ClusterName())
 
 	// The root overlay kustomization references ./flux-system, which is written
 	// by `flux bootstrap` at deploy time (not by generate). Seed a stub so the
@@ -155,6 +157,35 @@ func seedFluxSystemFixture(t *testing.T, repo, clusterName string) {
 	if err := os.WriteFile(filepath.Join(fluxRoot, "gotk-sync.yaml"), []byte(sync), 0o644); err != nil {
 		t.Fatalf("seed gotk-sync: %v", err)
 	}
+}
+
+func seedKeycloakBaseFixture(t *testing.T, repo, clusterName string) {
+	t.Helper()
+	pgRoot := filepath.Join(repo, "applications", "overlays", clusterName, "services", "base", "keycloak", "00-postgres")
+	require.NoError(t, os.MkdirAll(pgRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pgRoot, "kustomization.yaml"), []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - postgres.yaml\n"), 0o644))
+	const pg = `apiVersion: "acid.zalan.do/v1"
+kind: postgresql
+metadata:
+  name: postgres-cluster
+  namespace: keycloak
+spec:
+  numberOfInstances: 1
+`
+	require.NoError(t, os.WriteFile(filepath.Join(pgRoot, "postgres.yaml"), []byte(pg), 0o644))
+
+	opRoot := filepath.Join(repo, "applications", "overlays", clusterName, "services", "base", "keycloak", "10-operator")
+	require.NoError(t, os.MkdirAll(opRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(opRoot, "kustomization.yaml"), []byte("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - sub.yaml\n"), 0o644))
+	const sub = `apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: keycloak-subscription
+  namespace: keycloak
+spec:
+  channel: fast
+`
+	require.NoError(t, os.WriteFile(filepath.Join(opRoot, "sub.yaml"), []byte(sub), 0o644))
 }
 
 func runKustomizeBuild(t *testing.T, root string) string {

@@ -109,9 +109,13 @@ func (m *DefaultSOPSManager) EncryptOverlayFiles(ctx context.Context, overlayPat
 }
 
 // EncryptServiceOverrideValues encrypts only credential-bearing service
-// override-values files using full-value encryption.
+// override-values files using selective credential encryption.
 func (m *DefaultSOPSManager) EncryptServiceOverrideValues(ctx context.Context, overlayPath string, cfg *v2.Config) error {
-	return m.encryptFiles(ctx, overlayPath, cfg, serviceOverrideValuesFilesToEncrypt(cfg), ".*")
+	regex := v2.DefaultSOPSEncryptedRegex
+	if cfg != nil && cfg.Secrets.SOPSConfig.EncryptedRegex != "" {
+		regex = cfg.Secrets.SOPSConfig.EncryptedRegex
+	}
+	return m.encryptFiles(ctx, overlayPath, cfg, serviceOverrideValuesFilesToEncrypt(cfg), regex)
 }
 
 func (m *DefaultSOPSManager) encryptFiles(ctx context.Context, overlayPath string, cfg *v2.Config, filesToEncrypt []string, encryptedRegex string) error {

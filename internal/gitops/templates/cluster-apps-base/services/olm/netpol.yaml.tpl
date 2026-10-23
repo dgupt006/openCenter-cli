@@ -1,0 +1,19 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: operatorhubio-catalog-unpack-bundles-allow-{{ .OpenCenter.Cluster.Kubernetes.APIPort | default 443 }}
+  namespace: olm
+spec:
+  podSelector:
+    matchExpressions:
+      - key: operatorframework.io/bundle-unpack-ref
+        operator: Exists
+      - key: olm.managed
+        operator: In
+        values: ['true']
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - protocol: TCP
+          port: {{ .OpenCenter.Cluster.Kubernetes.APIPort | default 443 }}

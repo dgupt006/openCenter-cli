@@ -52,8 +52,9 @@ type KeycloakConfig struct {
 	LogFormat           string `yaml:"log_format,omitempty" json:"log_format,omitempty" jsonschema:"description=Log format,enum=default,enum=json,default=json"`
 
 	// TLS
-	TLSSecretName string `yaml:"tls_secret_name,omitempty" json:"tls_secret_name,omitempty" jsonschema:"description=TLS secret name,default=keycloak-tls-secret"`
-	TLSEnabled    bool   `yaml:"tls_enabled,omitempty" json:"tls_enabled,omitempty" jsonschema:"description=Enable TLS,default=true"`
+	TLSSecretName      string `yaml:"tls_secret_name,omitempty" json:"tls_secret_name,omitempty" jsonschema:"description=TLS secret name,default=keycloak-tls-secret"`
+	TLSEnabled         bool   `yaml:"tls_enabled,omitempty" json:"tls_enabled,omitempty" jsonschema:"description=Enable TLS,default=true"`
+	InternalTLSEnabled bool   `yaml:"internal_tls_enabled,omitempty" json:"internal_tls_enabled,omitempty" jsonschema:"description=Enable internal TLS on Keycloak Pods (defaults to false when terminating at Gateway edge)"`
 
 	// Backup
 	BackupEnabled  bool   `yaml:"backup_enabled,omitempty" json:"backup_enabled,omitempty" jsonschema:"description=Enable automated realm backups,default=true"`

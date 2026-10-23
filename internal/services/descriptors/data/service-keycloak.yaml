@@ -7,11 +7,9 @@ aggregate_targets:
 roots:
   - path: services/keycloak
     excludes:
-      - 10-operator/patch-subscription.yaml.tpl
       - 20-keycloak/keycloak-backup-cronjob.yaml.tpl
       - 20-keycloak/keycloak-hpa.yaml.tpl
 files:
-  - template: services/keycloak/10-operator/patch-subscription.yaml.tpl
   - template: services/keycloak/20-keycloak/keycloak-backup-cronjob.yaml.tpl
     when:
       field: opencenter.services.keycloak.backup_enabled

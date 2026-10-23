@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/crypto"
 	utilerrors "github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
 )
@@ -86,8 +87,8 @@ func TestEncryptServiceOverrideValuesOnlyEncryptsSelectedOverrides(t *testing.T)
 	var got []string
 	for _, call := range encryptor.calls {
 		got = append(got, filepath.ToSlash(call.path[len(overlayPath)+1:]))
-		if call.config.EncryptedRegex != ".*" {
-			t.Fatalf("encrypted regex for %s = %q, want .*", call.path, call.config.EncryptedRegex)
+		if call.config.EncryptedRegex != v2.DefaultSOPSEncryptedRegex {
+			t.Fatalf("encrypted regex for %s = %q, want %s", call.path, call.config.EncryptedRegex, v2.DefaultSOPSEncryptedRegex)
 		}
 	}
 	want := serviceOverrideValuesFilesToEncrypt(cfg)
