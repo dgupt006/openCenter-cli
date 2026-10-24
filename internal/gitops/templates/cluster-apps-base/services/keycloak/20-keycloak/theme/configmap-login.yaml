@@ -1,0 +1,132 @@
+# OpenCenter login theme — top-level theme files.
+# Mounted read-only at /opt/keycloak/themes/opencenter/login/ (see keycloak-cr-theme-patch.yaml).
+# theme.properties declares `parent=base`, so the built-in base theme MUST remain
+# visible — this is why the mount targets the /opencenter subdirectory and never
+# the /opt/keycloak/themes root.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-theme-opencenter-login
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/part-of: keycloak
+    app.kubernetes.io/component: login-theme
+data:
+  theme.properties: |
+    parent=base
+    import=common/keycloak
+    styles=css/login.css
+  template.ftl: |
+    <#macro registrationLayout bodyClass="" displayInfo=false displayMessage=true displayRequiredFields=false displayTryAnotherWay=true>
+    <!DOCTYPE html>
+    <html lang="${lang!"en"}">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>${msg("loginTitleHtml")?no_esc}</title>
+        <#if properties.styles?has_content>
+            <#list properties.styles?split(' ') as style>
+                <link rel="stylesheet" href="${url.resourcesPath}/${style}">
+            </#list>
+        </#if>
+    </head>
+    <body class="oc-login ${bodyClass}">
+        <main class="oc-shell">
+            <header class="oc-brand" aria-label="OpenCenter">
+                <img class="oc-brand__mark oc-brand__mark--light" src="${url.resourcesPath}/img/opencenter-logo-light.png" alt="">
+                <img class="oc-brand__mark oc-brand__mark--dark" src="${url.resourcesPath}/img/opencenter-logo-dark.png" alt="">
+                <span class="oc-brand__name">OpenCenter</span>
+            </header>
+
+            <p class="oc-intro">Sign in to continue to OpenCenter.</p>
+
+            <section class="oc-card" aria-labelledby="oc-card-title">
+                <h1 id="oc-card-title" class="oc-card__title"><#nested "header"></h1>
+                <#if displayRequiredFields>
+                    <p class="oc-form__hint"><span aria-hidden="true">*</span> ${msg("requiredFields")}</p>
+                </#if>
+                <#if displayMessage && message?has_content && (message.type != 'warning' || !isAppInitiatedAction??)>
+                    <div class="oc-alert oc-alert--${message.type}" role="alert">
+                        ${kcSanitize(message.summary)?no_esc}
+                    </div>
+                </#if>
+                <#nested "form">
+                <#if displayTryAnotherWay && auth?has_content && auth.showTryAnotherWayLink()>
+                    <form id="kc-select-try-another-way-form" action="${url.loginAction}" method="post" novalidate="novalidate">
+                        <input type="hidden" name="tryAnotherWay" value="on">
+                        <p class="oc-link-row"><a id="try-another-way" href="javascript:document.forms['kc-select-try-another-way-form'].requestSubmit()">${kcSanitize(msg("doTryAnotherWay"))?no_esc}</a></p>
+                    </form>
+                </#if>
+                <#nested "socialProviders">
+                <#if displayInfo><div class="oc-card__info"><#nested "info"></div></#if>
+            </section>
+        </main>
+    </body>
+    </html>
+    </#macro>
+  login.ftl: |
+    <#import "template.ftl" as layout>
+    <#import "passkeys.ftl" as passkeys>
+    <@layout.registrationLayout displayMessage=!messagesPerField.existsError('username','password') displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
+        <#if section == "header">
+            Sign in
+        <#elseif section == "form">
+            <form id="kc-form-login" class="oc-form" action="${url.loginAction}" method="post">
+                <p class="oc-form__hint">Use your OpenCenter account to continue.</p>
+
+                <#if !usernameHidden?? || usernameHidden != true>
+                    <div class="oc-field">
+                        <label for="username">
+                            <#if !realm.loginWithEmailAllowed>Username<#elseif !realm.registrationEmailAsUsername>Email or username<#else>Email</#if>
+                        </label>
+                        <input id="username" name="username" value="${(login.username!'')}" type="text"
+                               autofocus autocomplete="${(enableWebAuthnConditionalUI?has_content)?then('username webauthn', 'username')}"
+                               aria-invalid="<#if messagesPerField.existsError('username')>true<#else>false</#if>"
+                               <#if messagesPerField.existsError('username')>aria-describedby="input-error"</#if>>
+                        <#if messagesPerField.existsError('username')>
+                            <p id="input-error" class="oc-field__error" role="alert">${kcSanitize(messagesPerField.getFirstError('username'))?no_esc}</p>
+                        </#if>
+                    </div>
+                </#if>
+
+                <div class="oc-field">
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" autocomplete="current-password"
+                           aria-invalid="<#if messagesPerField.existsError('password')>true<#else>false</#if>"
+                           <#if messagesPerField.existsError('password')>aria-describedby="password-error"</#if>>
+                    <#if messagesPerField.existsError('password')>
+                        <p id="password-error" class="oc-field__error" role="alert">${kcSanitize(messagesPerField.getFirstError('password'))?no_esc}</p>
+                    </#if>
+                </div>
+
+                <#if realm.rememberMe && !usernameEditDisabled??>
+                    <label class="oc-check" for="rememberMe">
+                        <input id="rememberMe" name="rememberMe" type="checkbox" <#if login.rememberMe?? && login.rememberMe>checked</#if>>
+                        <span>Remember me</span>
+                    </label>
+                </#if>
+
+                <input type="hidden" id="id-hidden-input" name="credentialId" <#if auth.selectedCredential?has_content>value="${auth.selectedCredential}"</#if>>
+                <button id="kc-login" class="oc-submit" name="login" type="submit">Sign in</button>
+            </form>
+            <@passkeys.conditionalUIData />
+
+            <#if realm.resetPasswordAllowed>
+                <p class="oc-link-row"><a href="${url.loginResetCredentialsUrl}">Forgot your password?</a></p>
+            </#if>
+
+        <#elseif section == "socialProviders">
+            <#if social.providers?? && social.providers?has_content>
+                <div class="oc-divider"><span>Or continue with</span></div>
+                <div class="oc-idps" aria-label="Sign-in options">
+                    <#list social.providers as p>
+                        <a class="oc-idp" id="social-${p.alias}" href="${p.loginUrl}">${p.displayName}</a>
+                    </#list>
+                </div>
+            </#if>
+        <#elseif section == "info">
+            <#if realm.registrationAllowed>
+                <p class="oc-register">New to OpenCenter? <a href="${url.registrationUrl}">Create an account</a></p>
+            </#if>
+        </#if>
+    </@layout.registrationLayout>

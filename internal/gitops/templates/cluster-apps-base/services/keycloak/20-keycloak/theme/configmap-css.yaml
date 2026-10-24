@@ -1,0 +1,284 @@
+# OpenCenter login theme — CSS resource.
+# Mounted read-only at /opt/keycloak/themes/opencenter/login/resources/css/.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-theme-opencenter-css
+  namespace: keycloak
+  labels:
+    app.kubernetes.io/part-of: keycloak
+    app.kubernetes.io/component: login-theme
+data:
+  login.css: |
+      :root {
+        color-scheme: dark;
+        --oc-bg: #020617;
+        --oc-panel: rgba(15, 23, 42, 0.94);
+        --oc-panel-raised: #1e293b;
+        --oc-border: #263552;
+        --oc-text: #f1f5f9;
+        --oc-muted: #94a3b8;
+        --oc-accent: #df3026;
+        --oc-accent-hover: #ef3f32;
+        --oc-danger: #ff8f83;
+      }
+      
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        min-height: 100%;
+      }
+      body.oc-login {
+        margin: 0;
+        min-width: 280px;
+        background:
+          radial-gradient(circle at 50% 0%, rgba(49, 46, 129, 0.3), transparent 35%), var(--oc-bg);
+        color: var(--oc-text);
+        font-family: 'Avenir Next', 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      
+      .oc-shell {
+        display: flex;
+        min-height: 100vh;
+        width: min(100%, 492px);
+        margin: 0 auto;
+        padding: clamp(40px, 12vh, 132px) 24px 48px;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .oc-brand {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+      }
+      .oc-brand__mark {
+        width: 56px;
+        height: 50px;
+        object-fit: contain;
+      }
+      .oc-brand__mark--light {
+        display: none;
+      }
+      .oc-brand__name {
+        font:
+          700 28px/1 'Avenir Next',
+          'Segoe UI',
+          sans-serif;
+        letter-spacing: -0.07em;
+      }
+      .oc-intro {
+        margin: 18px 0 28px;
+        color: var(--oc-muted);
+        text-align: center;
+      }
+      .oc-card {
+        border: 1px solid var(--oc-border);
+        border-radius: 14px;
+        padding: 25px 24px 22px;
+        background: var(--oc-panel);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+      }
+      .oc-card__title {
+        margin: 0 0 14px;
+        font:
+          600 20px/1.2 'Avenir Next',
+          'Segoe UI',
+          sans-serif;
+        letter-spacing: -0.03em;
+      }
+      .oc-form__hint {
+        margin: 0 0 18px;
+        color: var(--oc-muted);
+      }
+      .oc-field {
+        margin: 0 0 17px;
+      }
+      .oc-field label {
+        display: block;
+        margin: 0 0 7px;
+        color: #dedee7;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .oc-field input {
+        width: 100%;
+        height: 44px;
+        border: 1px solid var(--oc-border);
+        border-radius: 7px;
+        padding: 0 13px;
+        outline: 0;
+        background: var(--oc-panel-raised);
+        color: var(--oc-text);
+        font: inherit;
+        transition:
+          border-color 0.18s,
+          box-shadow 0.18s,
+          background 0.18s;
+      }
+      .oc-field input:hover {
+        border-color: #3c4261;
+      }
+      .oc-field input:focus {
+        border-color: var(--oc-accent-hover);
+        background: #1d2035;
+        box-shadow: 0 0 0 3px rgba(223, 48, 38, 0.24);
+      }
+      .oc-field input[aria-invalid='true'] {
+        border-color: var(--oc-danger);
+      }
+      .oc-field__error {
+        margin: 7px 0 0;
+        color: var(--oc-danger);
+        font-size: 12px;
+      }
+      .oc-submit {
+        width: 100%;
+        height: 45px;
+        margin-top: 2px;
+        border: 0;
+        border-radius: 7px;
+        background: var(--oc-accent);
+        color: #fff;
+        cursor: pointer;
+        font:
+          600 14px 'Avenir Next',
+          'Segoe UI',
+          sans-serif;
+        transition:
+          background 0.18s,
+          transform 0.18s,
+          box-shadow 0.18s;
+      }
+      .oc-submit:hover {
+        background: var(--oc-accent-hover);
+        box-shadow: 0 8px 22px rgba(221, 72, 37, 0.2);
+      }
+      .oc-submit:active {
+        transform: translateY(1px);
+      }
+      .oc-submit:focus-visible,
+      a:focus-visible,
+      .oc-check input:focus-visible {
+        outline: 3px solid rgba(239, 90, 50, 0.6);
+        outline-offset: 3px;
+      }
+      .oc-check {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: -2px 0 18px;
+        color: var(--oc-muted);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .oc-check input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--oc-accent);
+      }
+      a {
+        color: #c4a89e;
+        text-decoration: none;
+      }
+      a:hover {
+        color: #f09a7c;
+        text-decoration: underline;
+      }
+      .oc-link-row,
+      .oc-register {
+        margin: 17px 0 0;
+        color: var(--oc-muted);
+        text-align: center;
+        font-size: 13px;
+      }
+      .oc-divider {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 22px 0 15px;
+        color: #74788f;
+        font-size: 12px;
+      }
+      .oc-divider::before,
+      .oc-divider::after {
+        height: 1px;
+        flex: 1;
+        background: var(--oc-border);
+        content: '';
+      }
+      .oc-idps {
+        display: grid;
+        gap: 9px;
+      }
+      .oc-idp {
+        display: block;
+        border: 1px solid var(--oc-border);
+        border-radius: 7px;
+        padding: 10px;
+        color: var(--oc-text);
+        text-align: center;
+      }
+      .oc-idp:hover {
+        background: var(--oc-panel-raised);
+        text-decoration: none;
+      }
+      .oc-alert {
+        margin: 0 0 18px;
+        border: 1px solid #6b393b;
+        border-radius: 7px;
+        padding: 10px 12px;
+        color: var(--oc-danger);
+        background: rgba(111, 39, 43, 0.22);
+        font-size: 13px;
+      }
+      
+      @media (prefers-color-scheme: light) {
+        :root {
+          color-scheme: light;
+          --oc-bg: #f1efec;
+          --oc-panel: rgba(255, 255, 255, 0.94);
+          --oc-panel-raised: #f6f5f4;
+          --oc-border: #d9d5d1;
+          --oc-text: #202027;
+          --oc-muted: #686773;
+          --oc-danger: #b42318;
+        }
+        body.oc-login {
+          background: radial-gradient(circle at 50% 20%, #fff 0, var(--oc-bg) 70%);
+        }
+        .oc-brand__mark--dark {
+          display: none;
+        }
+        .oc-brand__mark--light {
+          display: block;
+        }
+        .oc-field label {
+          color: #3a3941;
+        }
+        .oc-field input:focus {
+          background: #fff;
+        }
+        .oc-idp {
+          color: var(--oc-text);
+        }
+      }
+      @media (max-width: 420px) {
+        .oc-shell {
+          padding: 30px 16px 32px;
+        }
+        .oc-card {
+          padding: 21px 18px 19px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+        }
+      }

@@ -139,3 +139,39 @@ spec:
       app.kubernetes.io/part-of: keycloak
       app.kubernetes.io/managed-by: flux
       opencenter/managed-by: opencenter
+{{- if and (index .OpenCenter.Services "keycloak").Enabled (index .OpenCenter.Services "kube-prometheus-stack").Enabled .OpenCenter.Identity.OIDC.Enabled }}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: oidc-security-policies
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: sources
+      namespace: flux-system
+    - name: keycloak-cr
+      namespace: flux-system
+    - name: kube-prometheus-stack-override
+      namespace: flux-system
+  interval: 15m
+  retryInterval: 1m
+  timeout: 5m
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  sourceRef:
+    kind: GitRepository
+    name: opencenter-keycloak-config
+    namespace: flux-system
+  path: applications/overlays/{{ .OpenCenter.Cluster.ClusterName }}/services/oidc-security-policies
+  targetNamespace: {{ (kubePrometheusStack).Namespace }}
+  prune: true
+  wait: true
+  commonMetadata:
+    labels:
+      app.kubernetes.io/part-of: keycloak
+      app.kubernetes.io/managed-by: flux
+      opencenter/managed-by: opencenter
+{{- end }}

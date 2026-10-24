@@ -37,15 +37,13 @@ const (
 	defaultGitURLPlaceholder      = "ssh://git@example.com/opencenter/cluster-config.git"
 	defaultHTTPSGitURLPlaceholder = "https://github.com/opencenter/cluster-config.git"
 	defaultGitBaseRepoURL         = "ssh://git@github.com/opencenter-cloud/openCenter-gitops-base.git"
-	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc3 tag so
+	// Base repo (gitops-base) is pinned to the immutable 2026.03-rc4 tag so
 	// generated clusters resolve to a reproducible commit. The release (tag) slot
 	// takes precedence over branch, so branch is left empty.
-	defaultGitBaseRepoRelease = "2026.03-rc3"
+	defaultGitBaseRepoRelease = "2026.03-rc4"
 	// kubesprayModuleTag pins the gitops-base tag carrying the lifecycle
-	// contract v2 kubespray module (inventory_output_dir). The kubespray
-	// module needs contract v2 while the CNI/IaC modules stay on the base
-	// release, so it is pinned independently.
-	kubesprayModuleTag                = "2026.10.21-contract2"
+	// contract v2 kubespray module (inventory_output_dir) and CoreDNS rewrite block.
+	kubesprayModuleTag                = "2026.03-rc4"
 	DefaultKubesprayModuleSourceURL   = "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=" + kubesprayModuleTag
 	defaultGitBaseRepoBranch          = ""
 	defaultGitopsAuthMethod           = "token"
@@ -591,7 +589,7 @@ func applyProviderCloudDefaults(cfg *Config, availabilityZone string) {
 			},
 			Modules: OpenStackModulesConfig{
 				OpenstackNova: OpenstackNovaModuleConfig{
-					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc3",
+					Source: "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc4",
 				},
 			},
 		}

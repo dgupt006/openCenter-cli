@@ -2,6 +2,11 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
+  {{- if .OpenCenter.Services.keycloak.IsThemeEnabled }}
+  - theme/configmap-login.yaml
+  - theme/configmap-css.yaml
+  - theme/configmap-img.yaml
+  {{- end }}
   - keycloak-cr-patch.yaml
   {{- if .OpenCenter.Services.keycloak.InternalTLSEnabled }}
   - keycloak-certificate.yaml

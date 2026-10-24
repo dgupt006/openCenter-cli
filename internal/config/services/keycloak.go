@@ -19,6 +19,9 @@ type KeycloakConfig struct {
 	RealmGroups        []string `yaml:"realm_groups,omitempty" json:"realm_groups,omitempty" jsonschema:"description=Additional realm groups to create"`
 	RealmAdminEmail    string   `yaml:"realm_admin_email,omitempty" json:"realm_admin_email,omitempty" jsonschema:"description=Admin user email address"`
 
+	// Theming
+	ThemeEnabled *bool `yaml:"theme_enabled,omitempty" json:"theme_enabled,omitempty" jsonschema:"description=Enable OpenCenter login theme,default=true"`
+
 	// Runtime
 	StartOptimized bool   `yaml:"start_optimized,omitempty" json:"start_optimized,omitempty" jsonschema:"description=Enable production-optimized startup,default=false"`
 	CacheEnabled   bool   `yaml:"cache_enabled,omitempty" json:"cache_enabled,omitempty" jsonschema:"description=Enable distributed caching,default=true"`
@@ -65,6 +68,14 @@ type KeycloakConfig struct {
 	SMTPPort     int    `yaml:"smtp_port,omitempty" json:"smtp_port,omitempty" jsonschema:"description=SMTP server port,default=587"`
 	SMTPFrom     string `yaml:"smtp_from,omitempty" json:"smtp_from,omitempty" jsonschema:"description=SMTP from address"`
 	SMTPStartTLS bool   `yaml:"smtp_starttls,omitempty" json:"smtp_starttls,omitempty" jsonschema:"description=Enable STARTTLS for SMTP,default=true"`
+}
+
+// IsThemeEnabled returns whether the OpenCenter login theme is enabled (defaulting to true).
+func (c *KeycloakConfig) IsThemeEnabled() bool {
+	if c == nil {
+		return true
+	}
+	return c.ThemeEnabled == nil || *c.ThemeEnabled
 }
 
 func init() {

@@ -324,9 +324,6 @@ func kubePrometheusStackOverlayFilesRenderer(cfg v2.Config) (map[string]string, 
 		"grafana-admin-password.yaml":  grafanaAdminPasswordSecretTemplate,
 	}
 	if cfg.OpenCenter.Identity.OIDC.Enabled {
-		templates["alertmanager-security-policy.yaml"] = alertmanagerSecurityPolicyTemplate
-		templates["prometheus-security-policy.yaml"] = prometheusSecurityPolicyTemplate
-		templates["gateway-oidc-secret.yaml"] = gatewayOIDCSecretTemplate
 		templates["grafana-oauth-secret.yaml"] = grafanaOAuthSecretTemplate
 	}
 	files := make(map[string]string, len(templates))
@@ -888,7 +885,7 @@ metadata:
   namespace: {{ (kubePrometheusStack).Namespace }}
 type: Opaque
 stringData:
-  client-secret: {{ .Secrets.Keycloak.ClientSecret }}
+  client-secret: {{ .Secrets.Keycloak.ClientSecret | quote }}
 `
 
 const grafanaOAuthSecretTemplate = `apiVersion: v1
@@ -899,7 +896,7 @@ metadata:
 type: Opaque
 stringData:
   client_id: opencenter
-  client_secret: {{ .Secrets.Keycloak.ClientSecret }}
+  client_secret: {{ .Secrets.Keycloak.ClientSecret | quote }}
 `
 
 const grafanaAdminPasswordSecretTemplate = `apiVersion: v1

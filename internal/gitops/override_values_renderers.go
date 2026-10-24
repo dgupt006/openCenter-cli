@@ -940,7 +940,7 @@ const headlampTemplate = `config:
         secret:
             create: true
         clientID: opencenter
-        clientSecret: {{ if and .Secrets.Keycloak.ClientSecret (ne .Secrets.Keycloak.ClientSecret "CHANGEME") }}{{ .Secrets.Keycloak.ClientSecret }}{{ else }}{{ .Secrets.Headlamp.OIDCClientSecret }}{{ end }}
+        clientSecret: {{ if and .Secrets.Keycloak.ClientSecret (ne .Secrets.Keycloak.ClientSecret "CHANGEME") }}{{ .Secrets.Keycloak.ClientSecret | quote }}{{ else }}{{ .Secrets.Headlamp.OIDCClientSecret | quote }}{{ end }}
         issuerURL: https://{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}/realms/opencenter
         scopes: openid profile email groups
         callbackURL: https://{{ (index .OpenCenter.Services "headlamp").Hostname | default (printf "headlamp.%s" fqdn) }}/oidc-callback

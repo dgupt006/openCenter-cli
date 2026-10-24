@@ -76,11 +76,14 @@ spec:
     {{- end }}
     - name: spi-connections-http-client-default-connection-timeout-millis
       value: "60000"
-  {{- if ne .OpenCenter.Infrastructure.Provider "kind" }}
-  # Pod topology spread for multi-AZ distribution (not needed for local Kind)
+  {{- $themeEnabled := .OpenCenter.Services.keycloak.IsThemeEnabled }}
+  {{- $hasTopology := ne .OpenCenter.Infrastructure.Provider "kind" }}
+  {{- if or $hasTopology $themeEnabled }}
   unsupported:
     podTemplate:
       spec:
+        {{- if $hasTopology }}
+        # Pod topology spread for multi-AZ distribution (not needed for local Kind)
         topologySpreadConstraints:
           - maxSkew: 1
             topologyKey: "topology.kubernetes.io/zone"
@@ -100,6 +103,31 @@ spec:
                 app.kubernetes.io/managed-by: "keycloak-operator"
                 app.kubernetes.io/instance: "keycloak"
                 app.kubernetes.io/component: "server"
+        {{- end }}
+        {{- if $themeEnabled }}
+        containers:
+          - name: keycloak
+            volumeMounts:
+              - name: theme-opencenter-login
+                mountPath: /opt/keycloak/themes/opencenter/login
+                readOnly: true
+              - name: theme-opencenter-css
+                mountPath: /opt/keycloak/themes/opencenter/login/resources/css
+                readOnly: true
+              - name: theme-opencenter-img
+                mountPath: /opt/keycloak/themes/opencenter/login/resources/img
+                readOnly: true
+        volumes:
+          - name: theme-opencenter-login
+            configMap:
+              name: keycloak-theme-opencenter-login
+          - name: theme-opencenter-css
+            configMap:
+              name: keycloak-theme-opencenter-css
+          - name: theme-opencenter-img
+            configMap:
+              name: keycloak-theme-opencenter-img
+        {{- end }}
   {{- end }}
 
 

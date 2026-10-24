@@ -31,7 +31,7 @@ func TestLegacyConfigRendersContract2KubespraySource(t *testing.T) {
 			require.NoError(t, err)
 			m := kubesprayModuleSourceRe.FindStringSubmatch(string(data))
 			require.NotNil(t, m)
-			require.Equal(t, "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.10.21-contract2", m[1])
+			require.Equal(t, "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/provider/kubespray?ref=2026.03-rc4", m[1])
 		})
 	}
 }

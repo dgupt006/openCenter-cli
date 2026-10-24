@@ -31,10 +31,10 @@ deployment:
 	if cfg.Deployment.Kubespray == nil {
 		t.Fatal("nil kubespray")
 	}
-	if !strings.Contains(cfg.Deployment.Kubespray.KubesprayCluster.Source, "2026.10.21-contract2") {
+	if !strings.Contains(cfg.Deployment.Kubespray.KubesprayCluster.Source, "2026.03-rc4") {
 		t.Fatalf("kubespray_cluster source not backfilled: %q", cfg.Deployment.Kubespray.KubesprayCluster.Source)
 	}
-	if !strings.Contains(cfg.Deployment.Kubespray.Modules["kubespray"].Source, "2026.10.21-contract2") {
+	if !strings.Contains(cfg.Deployment.Kubespray.Modules["kubespray"].Source, "2026.03-rc4") {
 		t.Fatalf("modules.kubespray source not backfilled: %#v", cfg.Deployment.Kubespray.Modules)
 	}
 }

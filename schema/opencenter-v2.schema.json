@@ -3489,6 +3489,9 @@
                 "start_optimized": {
                   "type": "boolean"
                 },
+                "theme_enabled": {
+                  "type": "boolean"
+                },
                 "tls_enabled": {
                   "type": "boolean"
                 },
@@ -5749,6 +5752,9 @@
                   "type": "object"
                 },
                 "start_optimized": {
+                  "type": "boolean"
+                },
+                "theme_enabled": {
                   "type": "boolean"
                 },
                 "tls_enabled": {
@@ -8087,6 +8093,9 @@
                   "type": "object"
                 },
                 "start_optimized": {
+                  "type": "boolean"
+                },
+                "theme_enabled": {
                   "type": "boolean"
                 },
                 "tls_enabled": {

@@ -239,6 +239,22 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 		return gatewayNameForService(cfg, serviceName)
 	}
 
+	funcMap["fqdn"] = clusterFQDNFunc(cfg)
+	funcMap["cluster_fqdn"] = clusterFQDNFunc(cfg)
+	funcMap["kubePrometheusStack"] = func() (kubePrometheusStackRenderContract, error) {
+		contract, err := resolveKubePrometheusStackContract(cfg)
+		if err != nil {
+			return kubePrometheusStackRenderContract{
+				ReleaseName:             kubePrometheusStackDefaultReleaseName,
+				Namespace:               "observability",
+				PrometheusServiceName:   kubePrometheusStackDefaultReleaseName + "-prometheus",
+				AlertmanagerServiceName: kubePrometheusStackDefaultReleaseName + "-alertmanager",
+				GrafanaServiceName:      kubePrometheusStackDefaultReleaseName + "-grafana",
+			}, nil
+		}
+		return contract, nil
+	}
+
 	funcMap["managedAdoptionMode"] = func(serviceName string) string {
 		if service, exists := managedServices(cfg)[serviceName]; exists {
 			return string(GetAdoptionMode(service))

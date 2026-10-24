@@ -1,6 +1,7 @@
 locals {
   # this will be the user's name and the DNS zone prefix
   cluster_name                            = "{{ .OpenCenter.Cluster.ClusterName }}"
+  cluster_fqdn                            = "{{ .OpenCenter.Cluster.ClusterFQDN }}"
   # Prefix to add to Openstack resource names
   naming_prefix                           = "${local.cluster_name}-"
 {{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
@@ -269,7 +270,7 @@ locals {
 
 {{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
 module "openstack-nova" {
-  source = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Modules.OpenstackNova.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Modules.OpenstackNova.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cloud/openstack/openstack-nova?ref=2026.03-rc4" }}"
   # source = "../../../gitclones/openCenter-gitops-base/iac/cloud/openstack/openstack-nova"
   availability_zone             = local.availability_zone
   additional_block_devices_worker      = local.additional_block_devices_worker
@@ -439,13 +440,14 @@ module "kubespray-cluster" {
   kube_oidc_groups_prefix                 = local.kube_oidc_groups_prefix
   {{- else }}
   {{- end }}
+  coredns_rewrite_block                   = "rewrite name exact auth.${local.cluster_fqdn} envoy-gateway.gateway.svc.cluster.local"
 }
 
 
 {{- /* Only include Calico Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.InstallMethod | default "helm") "kubespray") }}
 module "calico" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc4" }}"
 
   calico_interface_autodetect      = local.calico_interface_autodetect
   calico_encapsulation_type        = local.calico_encapsulation_type
@@ -470,7 +472,7 @@ module "calico" {
 {{- /* Only include Cilium Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.InstallMethod | default "helm") "kubespray") }}
 module "cilium" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc4" }}"
 
   cluster_name                     = local.cluster_name
   deploy_cluster                   = local.deploy_cluster
@@ -487,7 +489,7 @@ module "cilium" {
 {{- /* Only include Kube-OVN Terraform module when install_method is explicitly "kubespray" */}}
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.InstallMethod | default "helm") "kubespray") }}
 module "kube-ovn" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc4" }}"
 
   cluster_name                     = local.cluster_name
   deploy_cluster                   = local.deploy_cluster

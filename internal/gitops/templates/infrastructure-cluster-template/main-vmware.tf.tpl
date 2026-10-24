@@ -1,6 +1,7 @@
 locals {
   # Cluster identification
   cluster_name                            = "{{ .OpenCenter.Cluster.ClusterName }}"
+  cluster_fqdn                            = "{{ .OpenCenter.Cluster.ClusterFQDN }}"
 
   # Network configuration - VMware node network
   subnet_nodes                            = "{{ .OpenCenter.Infrastructure.Networking.SubnetNodes | default "172.26.0.0/24" }}"
@@ -187,12 +188,13 @@ module "kubespray-cluster" {
   kube_oidc_groups_claim                  = local.kube_oidc_groups_claim
   kube_oidc_groups_prefix                 = local.kube_oidc_groups_prefix
   {{- end }}
+  coredns_rewrite_block                   = "rewrite name exact auth.${local.cluster_fqdn} envoy-gateway.gateway.svc.cluster.local"
 }
 
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Enabled (eq (.OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.InstallMethod | default "helm") "kubespray") }}
 # Calico CNI module for VMware networking
 module "calico" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Calico.Modules.Calico.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/calico?ref=2026.03-rc4" }}"
   
   # Calico configuration
   calico_interface_autodetect      = local.calico_interface_autodetect
@@ -222,7 +224,7 @@ module "calico" {
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Enabled }}
 # Cilium CNI module for VMware networking
 module "cilium" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.Cilium.Modules.Cilium.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/cilium?ref=2026.03-rc4" }}"
   
   # Cluster configuration
   cluster_name                     = local.cluster_name
@@ -244,7 +246,7 @@ module "cilium" {
 {{- if and .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Enabled }}
 # Kube-OVN CNI module for VMware networking
 module "kube-ovn" {
-  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc3" }}"
+  source = "{{ .OpenCenter.Cluster.Kubernetes.NetworkPlugin.KubeOVN.Modules.KubeOVN.Source | default "github.com/opencenter-cloud/openCenter-gitops-base.git//iac/cni/kube-ovn?ref=2026.03-rc4" }}"
   
   # Cluster configuration
   cluster_name                     = local.cluster_name

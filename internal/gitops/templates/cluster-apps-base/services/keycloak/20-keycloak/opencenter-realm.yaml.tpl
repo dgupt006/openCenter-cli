@@ -19,6 +19,9 @@ spec:
     realm: opencenter
     enabled: true
     displayName: opencenter
+    {{- if .OpenCenter.Services.keycloak.IsThemeEnabled }}
+    loginTheme: opencenter
+    {{- end }}
     sslRequired: external
     registrationAllowed: false
     loginWithEmailAllowed: true

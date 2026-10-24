@@ -27,14 +27,12 @@ import (
 // templates must resolve CNI/IaC modules from when no explicit override is
 // configured (OCTR-808). Keep this in sync with
 // internal/config/v2/defaults.go:defaultGitBaseRepoRelease.
-const defaultGitBaseRepoTag = "2026.03-rc3"
+const defaultGitBaseRepoTag = "2026.03-rc4"
 
 // kubesprayModuleTag is the gitops-base tag carrying the lifecycle contract v2
-// kubespray module (inventory_output_dir). The kubespray module pins this tag
-// independently of the CNI/IaC modules because the CLI deploy path requires
-// contract v2 while the other modules did not change. Keep in sync with
-// internal/config/v2/defaults.go kubespray module sources.
-const kubesprayModuleTag = "2026.10.21-contract2"
+// kubespray module (inventory_output_dir and coredns_rewrite_block).
+// Keep in sync with internal/config/v2/defaults.go kubespray module sources.
+const kubesprayModuleTag = "2026.03-rc4"
 
 // calicoModuleSource matches the quoted source assignment of the rendered
 // Terraform `module "calico"` block, e.g. `source = "github.com/...calico?ref=..."`.

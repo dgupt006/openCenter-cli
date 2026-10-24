@@ -21,3 +21,19 @@ files:
   - template: services/sources/opencenter-keycloak.yaml.tpl
   - template: services/sources/opencenter-keycloak-config.yaml.tpl
   - template: services/fluxcd/keycloak.yaml.tpl
+  - template: services/oidc-security-policies/kustomization.yaml.tpl
+    when:
+      field: opencenter.identity.oidc.enabled
+      operator: true
+  - template: services/oidc-security-policies/alertmanager-security-policy.yaml.tpl
+    when:
+      field: opencenter.identity.oidc.enabled
+      operator: true
+  - template: services/oidc-security-policies/prometheus-security-policy.yaml.tpl
+    when:
+      field: opencenter.identity.oidc.enabled
+      operator: true
+  - template: services/oidc-security-policies/gateway-oidc-secret.yaml.tpl
+    when:
+      field: opencenter.identity.oidc.enabled
+      operator: true

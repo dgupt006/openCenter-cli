@@ -50,10 +50,7 @@ func TestKubePrometheusStackContractAlignsDefaultValuesPatchAndRoutes(t *testing
 
 	files, err := kubePrometheusStackOverlayFilesRenderer(cfg)
 	require.NoError(t, err)
-	require.Len(t, files, 8)
-	require.Contains(t, files, "alertmanager-security-policy.yaml")
-	require.Contains(t, files, "prometheus-security-policy.yaml")
-	require.Contains(t, files, "gateway-oidc-secret.yaml")
+	require.Len(t, files, 5)
 	require.Contains(t, files, "grafana-oauth-secret.yaml")
 	require.Contains(t, files, "grafana-admin-password.yaml")
 	require.Contains(t, files["prometheus-http-route.yaml"], "namespace: "+contract.Namespace)
@@ -83,10 +80,7 @@ func TestKubePrometheusStackContractAlignsCustomValuesPatchAndRoutes(t *testing.
 
 	files, err := kubePrometheusStackOverlayFilesRenderer(cfg)
 	require.NoError(t, err)
-	require.Len(t, files, 8)
-	require.Contains(t, files, "alertmanager-security-policy.yaml")
-	require.Contains(t, files, "prometheus-security-policy.yaml")
-	require.Contains(t, files, "gateway-oidc-secret.yaml")
+	require.Len(t, files, 5)
 	require.Contains(t, files, "grafana-oauth-secret.yaml")
 	require.Contains(t, files, "grafana-admin-password.yaml")
 	patch, err := kubePrometheusStackBaseKustomizationPatchesRenderer(cfg)
@@ -213,9 +207,6 @@ func TestKubePrometheusStackRoutesAreIncludedAndWaitForGatewayAPI(t *testing.T) 
 		"prometheus-http-route.yaml",
 		"alertmanager-http-route.yaml",
 		"grafana-http-route.yaml",
-		"alertmanager-security-policy.yaml",
-		"prometheus-security-policy.yaml",
-		"gateway-oidc-secret.yaml",
 		"grafana-oauth-secret.yaml",
 		"grafana-admin-password.yaml",
 	}
@@ -227,6 +218,25 @@ func TestKubePrometheusStackRoutesAreIncludedAndWaitForGatewayAPI(t *testing.T) 
 		require.Contains(t, kustomization, "- "+filename)
 	}
 	require.NotContains(t, kustomization, "patches:")
+
+	oidcBase := filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services", "oidc-security-policies")
+	oidcExpectedFiles := []string{
+		"kustomization.yaml",
+		"alertmanager-security-policy.yaml",
+		"prometheus-security-policy.yaml",
+		"gateway-oidc-secret.yaml",
+	}
+	for _, filename := range oidcExpectedFiles {
+		require.FileExists(t, filepath.Join(oidcBase, filename))
+	}
+
+	keycloakFlux := mustReadFile(t, filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "keycloak.yaml"))
+	keycloakDocs, err := decodeYAMLDocuments([]byte(keycloakFlux))
+	require.NoError(t, err)
+	oidcKustomization := findFluxKustomization(t, keycloakDocs, "oidc-security-policies")
+	require.True(t, hasFluxDependency(t, oidcKustomization, "sources"))
+	require.True(t, hasFluxDependency(t, oidcKustomization, "keycloak-cr"))
+	require.True(t, hasFluxDependency(t, oidcKustomization, "kube-prometheus-stack-override"))
 
 	flux := mustReadFile(t, filepath.Join(cfg.OpenCenter.GitOps.Repository.LocalDir, "applications", "overlays", cfg.ClusterName(), "services", "fluxcd", "kube-prometheus-stack.yaml"))
 	docs, err := decodeYAMLDocuments([]byte(flux))
