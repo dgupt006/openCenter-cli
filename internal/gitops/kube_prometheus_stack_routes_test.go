@@ -5,8 +5,21 @@ import (
 	"testing"
 
 	configservices "github.com/opencenter-cloud/opencenter-cli/internal/config/services"
+	"github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/stretchr/testify/require"
 )
+
+// withKeycloakClientSecrets fills the Keycloak client secrets with usable
+// values. The OIDC SecurityPolicies and their client-secret Secrets are only
+// emitted once the secrets are real, because a CHANGEME placeholder committed
+// to Git is rejected by ScanGitOpsSecrets and is a credential Keycloak would
+// reject anyway.
+func withKeycloakClientSecrets(cfg v2.Config) v2.Config {
+	cfg.OpenCenter.Identity.OIDC.Enabled = true
+	cfg.Secrets.Keycloak.ClientSecret = "test-opencenter-client-secret"
+	cfg.Secrets.Keycloak.GrafanaClientSecret = "test-grafana-client-secret"
+	return cfg
+}
 
 func TestKubePrometheusStackOverlayRendersRoutesWithPinnedChartBackends(t *testing.T) {
 	cfg := newDefault("monitoring-routes")
@@ -34,7 +47,7 @@ func TestKubePrometheusStackOverlayRendersRoutesWithPinnedChartBackends(t *testi
 }
 
 func TestKubePrometheusStackContractAlignsDefaultValuesPatchAndRoutes(t *testing.T) {
-	cfg := newDefault("monitoring-contract-default")
+	cfg := withKeycloakClientSecrets(newDefault("monitoring-contract-default"))
 
 	contract, err := resolveKubePrometheusStackContract(cfg)
 	require.NoError(t, err)
@@ -64,7 +77,7 @@ func TestKubePrometheusStackContractAlignsDefaultValuesPatchAndRoutes(t *testing
 }
 
 func TestKubePrometheusStackContractAlignsCustomValuesPatchAndRoutes(t *testing.T) {
-	cfg := newDefault("monitoring-contract-custom")
+	cfg := withKeycloakClientSecrets(newDefault("monitoring-contract-custom"))
 	stack := cfg.OpenCenter.Services["kube-prometheus-stack"].(*configservices.PrometheusStackConfig)
 	stack.ReleaseName = "metrics"
 	stack.Namespace = "monitoring"
@@ -198,7 +211,7 @@ func TestKubePrometheusStackGeneratedYAMLUsesContractStructurally(t *testing.T) 
 }
 
 func TestKubePrometheusStackRoutesAreIncludedAndWaitForGatewayAPI(t *testing.T) {
-	cfg := newDefault("monitoring-routes")
+	cfg := withKeycloakClientSecrets(newDefault("monitoring-routes"))
 	cfg.OpenCenter.GitOps.Repository.LocalDir = t.TempDir()
 	require.NoError(t, RenderClusterApps(cfg))
 

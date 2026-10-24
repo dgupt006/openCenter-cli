@@ -107,6 +107,11 @@ var deprecatedConfigKeys = []DeprecatedConfigKey{
 		Reason:   "it controls whether an internal generated Helm override secret is emitted",
 		Guidance: "set supported service values through the service configuration instead",
 	},
+	{
+		Key:      "tls_enabled",
+		Reason:   "it was never read by any renderer; TLS at the edge is always terminated by the Gateway",
+		Guidance: "use internal_tls_enabled to enable TLS on the service's own pods",
+	},
 }
 
 // DeprecatedServiceConfigKeys returns the ordered service configuration

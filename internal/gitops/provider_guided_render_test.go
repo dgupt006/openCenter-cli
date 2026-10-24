@@ -566,7 +566,7 @@ func TestRenderClusterAppsCertManagerMultiCredential(t *testing.T) {
 	if !strings.Contains(prodSecret, "name: opencenter-aws-credentials-secret-production") {
 		t.Fatalf("expected production secret name:\n%s", prodSecret)
 	}
-	if !strings.Contains(prodSecret, "access-key-id: AKIAPROD123") {
+	if !strings.Contains(prodSecret, `aws-access-key: "AKIAPROD123"`) {
 		t.Fatalf("expected production access key:\n%s", prodSecret)
 	}
 
@@ -719,12 +719,19 @@ func TestRenderClusterAppsCertManagerAWSSecretUsesStringData(t *testing.T) {
 		t.Fatalf("AWS credential secret should declare 'type: Opaque'.\nGot:\n%s", secret)
 	}
 
-	// Verify the credential values are present as-is (not base64-encoded)
-	if !strings.Contains(secret, "access-key-id: AKIAIOSFODNN7EXAMPLE") {
+	// Verify the credential values are present as-is (not base64-encoded) under
+	// the key names the ClusterIssuer actually resolves.
+	if !strings.Contains(secret, `aws-access-key: "AKIAIOSFODNN7EXAMPLE"`) {
 		t.Fatalf("expected plaintext access key in stringData.\nGot:\n%s", secret)
 	}
-	if !strings.Contains(secret, "secret-access-key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY") {
+	if !strings.Contains(secret, `aws-secret-access-key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`) {
 		t.Fatalf("expected plaintext secret key in stringData.\nGot:\n%s", secret)
+	}
+	// The pre-2026.10 key pair must not come back: the issuer never reads them.
+	for _, legacy := range []string{"\n  access-key-id:", "\n  secret-access-key:"} {
+		if strings.Contains(secret, legacy) {
+			t.Fatalf("unexpected legacy key %q in stringData.\nGot:\n%s", legacy, secret)
+		}
 	}
 }
 

@@ -431,6 +431,9 @@ spec:
         baseUrl: https://{{ $grafanaHost }}
         enabled: true
         publicClient: false
+        {{- if .Secrets.Keycloak.GrafanaClientSecret }}
+        secret: {{ .Secrets.Keycloak.GrafanaClientSecret | quote }}
+        {{- end }}
         standardFlowEnabled: true
         implicitFlowEnabled: false
         directAccessGrantsEnabled: true

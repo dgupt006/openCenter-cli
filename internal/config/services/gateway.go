@@ -49,7 +49,15 @@ func (g *GatewayConfig) IsBYO() bool {
 
 // TLSSecretFor returns the TLS Secret name for a listener identified by its
 // logical name (e.g. "keycloak") given the built-in default. Precedence:
-// per-listener override, then wildcard, then default cluster certificate, then the built-in default.
+// per-listener override, then wildcard, then default cluster certificate, then
+// the built-in default.
+//
+// The default-cluster-certificate branch returns
+// DefaultClusterCertificateSecretName. A non-default name configured on the
+// cert-manager service is resolved by the renderer, which copies it into
+// WildcardSecretName before calling this method (see
+// gitops.defaultClusterCertificateSecretName) — GatewayConfig has no view of
+// the cert-manager service, so the override cannot be resolved here.
 func (g *GatewayConfig) TLSSecretFor(listener, defaultSecret string) string {
 	if g == nil || g.TLS == nil {
 		return defaultSecret
@@ -61,7 +69,7 @@ func (g *GatewayConfig) TLSSecretFor(listener, defaultSecret string) string {
 		return g.TLS.WildcardSecretName
 	}
 	if g.TLS.DefaultClusterCertificate {
-		return "default-cluster-tls"
+		return DefaultClusterCertificateSecretName
 	}
 	return defaultSecret
 }

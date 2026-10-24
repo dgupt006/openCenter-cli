@@ -310,7 +310,7 @@ func (s *InitService) generateKeycloakSecrets(cfg *v2.Config, configMap map[stri
 
 	keyManager := sops.NewKeyManager("")
 
-	// Generate Keycloak OIDC client secret if missing
+	// Generate the `opencenter` OIDC client secret if missing.
 	if isMissingSecret(cfg.Secrets.Keycloak.ClientSecret) {
 		clientSecret, err := keyManager.GenerateRandomPassword(32)
 		if err != nil {
@@ -318,6 +318,18 @@ func (s *InitService) generateKeycloakSecrets(cfg *v2.Config, configMap map[stri
 		}
 		cfg.Secrets.Keycloak.ClientSecret = clientSecret
 		setNestedConfigValue(configMap, clientSecret, "secrets", "keycloak", "client_secret")
+	}
+
+	// Generate the dedicated `grafana-oauth` client secret if missing. It must
+	// not reuse ClientSecret: Keycloak authenticates the token exchange against
+	// the secret of the client named in client_id.
+	if isMissingSecret(cfg.Secrets.Keycloak.GrafanaClientSecret) {
+		grafanaSecret, err := keyManager.GenerateRandomPassword(32)
+		if err != nil {
+			return fmt.Errorf("generating Keycloak grafana-oauth client secret: %w", err)
+		}
+		cfg.Secrets.Keycloak.GrafanaClientSecret = grafanaSecret
+		setNestedConfigValue(configMap, grafanaSecret, "secrets", "keycloak", "grafana_client_secret")
 	}
 
 	// Propagate client secret to Headlamp if Headlamp secret is missing

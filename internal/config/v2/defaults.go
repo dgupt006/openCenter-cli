@@ -363,8 +363,9 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 				},
 			},
 			Keycloak: KeycloakSecrets{
-				ClientSecret:  PlaceholderSecret,
-				AdminPassword: PlaceholderSecret,
+				ClientSecret:        PlaceholderSecret,
+				GrafanaClientSecret: PlaceholderSecret,
+				AdminPassword:       PlaceholderSecret,
 			},
 			Headlamp: HeadlampSecrets{
 				OIDCClientSecret: PlaceholderSecret,

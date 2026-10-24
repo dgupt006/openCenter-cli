@@ -54,9 +54,11 @@ type KeycloakConfig struct {
 	LogLevel            string `yaml:"log_level,omitempty" json:"log_level,omitempty" jsonschema:"description=Log level,enum=INFO,enum=DEBUG,enum=WARN,enum=ERROR,default=INFO"`
 	LogFormat           string `yaml:"log_format,omitempty" json:"log_format,omitempty" jsonschema:"description=Log format,enum=default,enum=json,default=json"`
 
-	// TLS
-	TLSSecretName      string `yaml:"tls_secret_name,omitempty" json:"tls_secret_name,omitempty" jsonschema:"description=TLS secret name,default=keycloak-tls-secret"`
-	TLSEnabled         bool   `yaml:"tls_enabled,omitempty" json:"tls_enabled,omitempty" jsonschema:"description=Enable TLS,default=true"`
+	// TLS. TLSSecretName is only consumed when InternalTLSEnabled is set (the
+	// Certificate and the Keycloak CR tlsSecret are both gated on it); TLS at
+	// the edge is the Gateway's default-cluster certificate. The former
+	// tls_enabled knob had no readers and is registered as deprecated.
+	TLSSecretName      string `yaml:"tls_secret_name,omitempty" json:"tls_secret_name,omitempty" jsonschema:"description=TLS secret name,only used with internal_tls_enabled,default=keycloak-tls-secret"`
 	InternalTLSEnabled bool   `yaml:"internal_tls_enabled,omitempty" json:"internal_tls_enabled,omitempty" jsonschema:"description=Enable internal TLS on Keycloak Pods (defaults to false when terminating at Gateway edge)"`
 
 	// Backup

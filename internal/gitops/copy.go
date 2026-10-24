@@ -304,6 +304,17 @@ func renderTemplateAtomic(path, dst string, cfg v2.Config, workspace *GitOpsWork
 		return v2.DefaultKubesprayModuleSourceURL
 	}
 
+	// oidcClientSecretsConfigured reports whether the Keycloak client secrets
+	// the OIDC SecurityPolicies authenticate with are real (set, not the
+	// CHANGEME placeholder). The oidc-security-policies templates gate on it:
+	// emitting a Secret that still holds the placeholder would commit a stub
+	// credential to Git (rejected by ScanGitOpsSecrets) and hand Envoy Gateway
+	// a credential Keycloak is guaranteed to reject.
+	funcMap["oidcClientSecretsConfigured"] = func() bool {
+		return isConfiguredSecret(cfg.Secrets.Keycloak.ClientSecret) &&
+			isConfiguredSecret(cfg.Secrets.Keycloak.GrafanaClientSecret)
+	}
+
 	// autoServices returns service names that use auto-descriptors (no explicit
 	// descriptor) and own their own source (not shared). Used by aggregate templates
 	// to include dynamically-added services.

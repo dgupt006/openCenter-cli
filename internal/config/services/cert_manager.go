@@ -18,6 +18,13 @@ type CertManagerConfig struct {
 	DefaultClusterCertificate *DefaultClusterCertificateConfig `yaml:"default_cluster_certificate,omitempty" json:"default_cluster_certificate,omitempty" jsonschema:"description=Default cluster certificate configuration"`
 }
 
+// DefaultClusterCertificateSecretName is the Secret name used for the
+// cluster-wide wildcard certificate when neither cert-manager's
+// default_cluster_certificate.secret_name nor the Gateway's
+// tls.wildcard_secret_name overrides it. Gateway listeners and the rendered
+// Certificate must agree on this name, so it is defined once here.
+const DefaultClusterCertificateSecretName = "default-cluster-tls"
+
 // DefaultClusterCertificateConfig configures generation of a cluster-wide default wildcard certificate.
 type DefaultClusterCertificateConfig struct {
 	Enabled    bool     `yaml:"enabled" json:"enabled" jsonschema:"description=Enable generation of a default cluster-wide wildcard certificate"`
@@ -30,11 +37,21 @@ func (c *CertManagerConfig) DefaultClusterCertificateEnabled() bool {
 	return c != nil && c.DefaultClusterCertificate != nil && c.DefaultClusterCertificate.Enabled
 }
 
-func (c *CertManagerConfig) DefaultClusterCertificateSecretName() string {
-	if c != nil && c.DefaultClusterCertificate != nil && c.DefaultClusterCertificate.SecretName != "" {
-		return c.DefaultClusterCertificate.SecretName
+// DefaultClusterCertificateSecretNameOverride returns the configured Secret name
+// for the default cluster certificate, or "" when unset. Callers fall back to
+// DefaultClusterCertificateSecretName.
+func (c *CertManagerConfig) DefaultClusterCertificateSecretNameOverride() string {
+	if c == nil || c.DefaultClusterCertificate == nil {
+		return ""
 	}
-	return "default-cluster-tls"
+	return c.DefaultClusterCertificate.SecretName
+}
+
+func (c *CertManagerConfig) DefaultClusterCertificateSecretName() string {
+	if name := c.DefaultClusterCertificateSecretNameOverride(); name != "" {
+		return name
+	}
+	return DefaultClusterCertificateSecretName
 }
 
 // CertIssuer represents a certificate issuer configuration.

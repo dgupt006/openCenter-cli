@@ -317,16 +317,21 @@ func derefValue(obj any) reflect.Value {
 	return val
 }
 
+// awsSecretTemplate renders the per-credential Route53 Secret referenced by
+// issuerAWSTemplate. The key names must stay in lockstep with
+// certManagerCredentialData.AccessKeyKey/SecretAccessKeyKey: the ClusterIssuer
+// resolves accessKeyIDSecretRef.key against this Secret, so an extra or renamed
+// key here is silently ignored by cert-manager. The pre-2026.10 pair
+// (access-key-id / secret-access-key) was dropped once the issuer standardized
+// on the aws-* names; nothing references them any more.
 const awsSecretTemplate = `apiVersion: v1
 kind: Secret
 metadata:
   name: opencenter-aws-credentials-secret-{{ .Name }}
 type: Opaque
 stringData:
-  access-key-id: {{ .AWSAccessKey }}
-  secret-access-key: {{ .AWSSecretAccessKey }}
-  aws-access-key: {{ .AWSAccessKey }}
-  aws-secret-access-key: {{ .AWSSecretAccessKey }}
+  aws-access-key: {{ .AWSAccessKey | quote }}
+  aws-secret-access-key: {{ .AWSSecretAccessKey | quote }}
 `
 
 const cloudflareSecretTemplate = `apiVersion: v1
@@ -438,6 +443,12 @@ resources:
   - "./letsencrypt-{{ .Name }}-issuer.yaml"
 {{- end }}
 {{- if .HasMaterializedSecret }}
+  # secret.yaml is the generic per-service Secret written by the secrets
+  # manager (name: opencenter-cert-manager-secret) from the flat legacy
+  # Secrets.CertManager fields. It intentionally coexists with the
+  # per-credential Secrets rendered above: the flat fields are retained for
+  # migration compatibility (see secretartifacts.certManagerPayload), while the
+  # ClusterIssuers only ever reference opencenter-aws-credentials-secret-<name>.
   - "./secret.yaml"
 {{- end }}
 secretGenerator:
