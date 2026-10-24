@@ -4,5 +4,8 @@ kind: Kustomization
 resources:
   - "../base/olm/"
   - "./netpol.yaml"
-patchesStrategicMerge:
-  - "./patches.yaml"
+# Each document in patches.yaml matches its upstream NetworkPolicy by
+# group/version/kind/name/namespace, which is how kustomize v5 resolves
+# inline patches.
+patches:
+  - path: "./patches.yaml"

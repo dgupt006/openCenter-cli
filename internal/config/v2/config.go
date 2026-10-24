@@ -183,8 +183,16 @@ type LokiSecrets struct {
 }
 
 type KeycloakSecrets struct {
-	ClientSecret  string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
-	AdminPassword string `yaml:"admin_password,omitempty" json:"admin_password,omitempty"`
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+	// GrafanaClientSecret is the client secret of the realm's dedicated
+	// `grafana-oauth` OIDC client. It is deliberately separate from
+	// ClientSecret (the `opencenter` client used by the Kubernetes API,
+	// Headlamp and the Envoy Gateway OIDC policies): Keycloak validates a
+	// token exchange against the secret of the client that is named in
+	// client_id, so reusing ClientSecret makes Grafana's exchange fail with
+	// invalid_client.
+	GrafanaClientSecret string `yaml:"grafana_client_secret,omitempty" json:"grafana_client_secret,omitempty"`
+	AdminPassword       string `yaml:"admin_password,omitempty" json:"admin_password,omitempty"`
 }
 
 type HeadlampSecrets struct {
@@ -268,9 +276,26 @@ type VSphereCsiSecrets struct {
 	Datastoreurl string `yaml:"datastoreurl,omitempty" json:"datastoreurl,omitempty"`
 }
 
-// DefaultSOPSEncryptedRegex defines the selective regex used to encrypt sensitive fields
-// across SOPS-managed configurations and service override-values.
-const DefaultSOPSEncryptedRegex = `^(data|stringData|credentials|password|secret|key|token|cert|ca|crt|tls|clientSecret|accessKeyId|secretAccessKey|secret_key|access_key|secret_access_key|access_key_id|application-credential-secret)$`
+// DefaultSOPSEncryptedRegex is the selective regex used to encrypt
+// credential-bearing fields in SOPS-managed service override-values files.
+//
+// SOPS matches this against each mapping key name, and the match is anchored
+// (^...$), so every sensitive spelling has to be enumerated: a bare `secret`
+// does NOT match `secretAccessKey`, `secret_key`, or the one-word `secretkey`.
+// The list is derived from the leaf keys actually rendered into the files this
+// regex is applied to (see sops.serviceOverrideValuesFilesToEncrypt):
+// Kubernetes Secret containers (data/stringData), the generic credential
+// blocks (credentials, password, secret, token), and the camel/snake/one-word
+// AWS, OpenStack, Swift and Harbor key pairs. TestDefaultSOPSEncryptedRegex-
+// MatchesCredentialKeys enumerates them so a new spelling that reaches an
+// override-values file must be added here or it ships in plaintext.
+//
+// Deliberately absent: bare `key`, `cert`, `ca`, `crt`, `tls`. They matched
+// benign configuration keys (`ca_bundle`, `keys`, `kubeconfig`) without ever
+// being the only carrier of a credential, and encrypting a non-secret key
+// makes the file unreadable to tools that only need the plain value. Also
+// absent: `datastoreurl` — a vCenter endpoint, not a credential.
+const DefaultSOPSEncryptedRegex = `^(data|stringData|credentials|password|passwordHash|htpasswdString|secret|token|clientSecret|client_secret|accessKeyId|access_key_id|access_key|accesskey|secretAccessKey|secret_access_key|secret_key|secretkey|application_credential_secret|application-credential-secret|tls\.crt|tls\.key)$`
 
 // SOPSConfig represents SOPS encryption configuration.
 // Requirements: 18.5, 18.6

@@ -170,6 +170,15 @@ func gatewayServiceConfig(cfg v2.Config) *services.GatewayConfig {
 	return nil
 }
 
+// isConfiguredSecret reports whether a secret value is usable, i.e. neither
+// empty nor left at the generated placeholder. Renderers use it to withhold
+// Secret manifests until real credentials exist, so a placeholder never reaches
+// the GitOps repository (see ScanGitOpsSecrets).
+func isConfiguredSecret(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && !strings.EqualFold(trimmed, v2.PlaceholderSecret)
+}
+
 func isDefaultClusterCertificateEnabled(cfg v2.Config) bool {
 	if gw := gatewayServiceConfig(cfg); gw != nil && gw.TLS != nil && gw.TLS.DefaultClusterCertificate {
 		return true
@@ -182,6 +191,13 @@ func isDefaultClusterCertificateEnabled(cfg v2.Config) bool {
 	return false
 }
 
+// defaultClusterCertificateSecretName resolves the Secret every HTTPS listener
+// and the rendered Certificate agree on. Precedence: an explicit Gateway
+// tls.wildcard_secret_name, then cert-manager's
+// default_cluster_certificate.secret_name, then
+// services.DefaultClusterCertificateSecretName. The gateway listener templates
+// reach the same value through the `gw` helper, which copies this result into
+// TLS.WildcardSecretName (see renderOverlayTemplate).
 func defaultClusterCertificateSecretName(cfg v2.Config) string {
 	if gw := gatewayServiceConfig(cfg); gw != nil && gw.TLS != nil && gw.TLS.WildcardSecretName != "" {
 		return gw.TLS.WildcardSecretName
@@ -191,7 +207,7 @@ func defaultClusterCertificateSecretName(cfg v2.Config) string {
 			return cm.DefaultClusterCertificateSecretName()
 		}
 	}
-	return "default-cluster-tls"
+	return services.DefaultClusterCertificateSecretName
 }
 
 // gatewayIsBYO reports whether the gateway uses bring-your-own TLS.
@@ -321,9 +337,25 @@ func kubePrometheusStackOverlayFilesRenderer(cfg v2.Config) (map[string]string, 
 		"prometheus-http-route.yaml":   prometheusHTTPRouteTemplate,
 		"alertmanager-http-route.yaml": alertmanagerHTTPRouteTemplate,
 		"grafana-http-route.yaml":      grafanaHTTPRouteTemplate,
-		"grafana-admin-password.yaml":  grafanaAdminPasswordSecretTemplate,
 	}
-	if cfg.OpenCenter.Identity.OIDC.Enabled {
+	// Grafana's Helm values reference an existingSecret named
+	// grafana-admin-password. Emit it only when a password is actually
+	// configured: an empty admin-password would produce a Secret that Flux
+	// reconciles over the real one applied during bootstrap
+	// (cluster.newGrafanaAdminSecretStep), locking operators out of Grafana.
+	if strings.TrimSpace(cfg.Secrets.Grafana.AdminPassword) != "" {
+		templates["grafana-admin-password.yaml"] = grafanaAdminPasswordSecretTemplate
+	}
+	// The Grafana OIDC client Secret is emitted only once both client secrets
+	// are real. Rendering a Secret that still holds the CHANGEME placeholder
+	// would commit a stub credential to Git (rejected by ScanGitOpsSecrets) and
+	// hand Grafana a credential Keycloak is guaranteed to reject. The Envoy
+	// Gateway SecurityPolicies and their gateway-oidc-secret live in the
+	// descriptor-rendered services/oidc-security-policies layer, which applies
+	// the same gate.
+	if cfg.OpenCenter.Identity.OIDC.Enabled &&
+		isConfiguredSecret(cfg.Secrets.Keycloak.ClientSecret) &&
+		isConfiguredSecret(cfg.Secrets.Keycloak.GrafanaClientSecret) {
 		templates["grafana-oauth-secret.yaml"] = grafanaOAuthSecretTemplate
 	}
 	files := make(map[string]string, len(templates))
@@ -826,68 +858,11 @@ spec:
           port: 80
 `
 
-const alertmanagerSecurityPolicyTemplate = `---
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: SecurityPolicy
-metadata:
-  name: alertmanager-oidc
-  namespace: {{ (kubePrometheusStack).Namespace }}
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: HTTPRoute
-    name: alertmanager-gateway-route
-  oidc:
-    provider:
-      issuer: "https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter"
-    clientID: "opencenter"
-    clientSecret:
-      name: "gateway-oidc-secret"
-    redirectURL: "https://{{ if (index .OpenCenter.Services "kube-prometheus-stack") }}{{ (index .OpenCenter.Services "kube-prometheus-stack").AlertmanagerHostname | default (printf "alertmanager.%s" fqdn) }}{{ else }}{{ printf "alertmanager.%s" fqdn }}{{ end }}/oauth2/callback"
-    scopes:
-      - openid
-      - profile
-      - email
-      - roles
-    logoutPath: "/logout"
-`
-
-const prometheusSecurityPolicyTemplate = `---
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: SecurityPolicy
-metadata:
-  name: prometheus-oidc
-  namespace: {{ (kubePrometheusStack).Namespace }}
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: HTTPRoute
-    name: prometheus-gateway-route
-  oidc:
-    provider:
-      issuer: "https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter"
-    clientID: "opencenter"
-    clientSecret:
-      name: "gateway-oidc-secret"
-    redirectURL: "https://{{ if (index .OpenCenter.Services "kube-prometheus-stack") }}{{ (index .OpenCenter.Services "kube-prometheus-stack").PrometheusHostname | default (printf "prometheus.%s" fqdn) }}{{ else }}{{ printf "prometheus.%s" fqdn }}{{ end }}/oauth2/callback"
-    scopes:
-      - openid
-      - profile
-      - email
-      - roles
-    logoutPath: "/logout"
-`
-
-const gatewayOIDCSecretTemplate = `apiVersion: v1
-kind: Secret
-metadata:
-  name: gateway-oidc-secret
-  namespace: {{ (kubePrometheusStack).Namespace }}
-type: Opaque
-stringData:
-  client-secret: {{ .Secrets.Keycloak.ClientSecret | quote }}
-`
-
+// grafanaOAuthSecretTemplate carries the credentials of the realm's dedicated
+// `grafana-oauth` client. Grafana reads them through $__file from the mounted
+// Secret (see the kube-prometheus-stack grafana values). The client_id must be
+// `grafana-oauth` and the secret must be the one rendered onto that client in
+// opencenter-realm.yaml.tpl, or Keycloak rejects the exchange.
 const grafanaOAuthSecretTemplate = `apiVersion: v1
 kind: Secret
 metadata:
@@ -895,10 +870,14 @@ metadata:
   namespace: {{ (kubePrometheusStack).Namespace }}
 type: Opaque
 stringData:
-  client_id: opencenter
-  client_secret: {{ .Secrets.Keycloak.ClientSecret | quote }}
+  client_id: grafana-oauth
+  client_secret: {{ .Secrets.Keycloak.GrafanaClientSecret | quote }}
 `
 
+// grafanaAdminPasswordSecretTemplate backs the existingSecret referenced by the
+// kube-prometheus-stack Grafana values. The imperative bootstrap step
+// (cluster.newGrafanaAdminSecretStep) writes the same name/keys; keep the key
+// names and the default user in sync with it.
 const grafanaAdminPasswordSecretTemplate = `apiVersion: v1
 kind: Secret
 metadata:
@@ -906,6 +885,6 @@ metadata:
   namespace: {{ (kubePrometheusStack).Namespace }}
 type: Opaque
 stringData:
-  admin-user: {{ .Secrets.Grafana.AdminUser | default "admin" }}
-  admin-password: {{ .Secrets.Grafana.AdminPassword }}
+  admin-user: {{ .Secrets.Grafana.AdminUser | default "admin" | quote }}
+  admin-password: {{ .Secrets.Grafana.AdminPassword | quote }}
 `

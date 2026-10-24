@@ -1759,6 +1759,12 @@ func (m *DefaultSecretsManager) writeEncryptedManifest(
 		return false, fmt.Errorf("SOPS encryptor not available")
 	}
 
+	// Narrower than v2.DefaultSOPSEncryptedRegex on purpose. This target is a
+	// Kubernetes Secret manifest: everything sensitive lives under data or
+	// stringData, and both are wholly credential material, so encrypting the
+	// whole subtree is both sufficient and cheaper than enumerating key names.
+	// The broader regex exists for Helm override-values files, where a
+	// credential can sit at any depth under an arbitrary key.
 	encryptConfig := sops.EncryptionConfig{
 		AgeKeys:          []string{ageKey},
 		EncryptedRegex:   "^(data|stringData)$",

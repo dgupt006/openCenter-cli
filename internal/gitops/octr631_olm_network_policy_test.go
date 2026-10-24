@@ -46,7 +46,8 @@ func TestOCTR631OLMDescriptorComposesBaseAndReconcilesSingleOverlay(t *testing.T
 	require.NotEmpty(t, overlay)
 	require.Contains(t, overlay, "../base/olm/")
 	require.Contains(t, overlay, "./netpol.yaml")
-	require.Contains(t, overlay, "patchesStrategicMerge:")
+	require.Contains(t, overlay, "patches:")
+	require.NotContains(t, overlay, "patchesStrategicMerge", "deprecated kustomize field must not return")
 	require.Contains(t, overlay, "./patches.yaml")
 
 	patches := read("services/olm/patches.yaml")

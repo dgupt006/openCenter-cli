@@ -39,6 +39,16 @@ func templateRenderer(tmpl string) OverrideValuesRenderer {
 		funcMap["mimirStorage"] = func() (mimirStorageTemplateData, error) {
 			return resolveMimirStorageTemplateData(cfg)
 		}
+		// serviceEnabled reports whether a service is present and enabled. Used
+		// to gate values that only make sense when a companion service is
+		// installed (e.g. Prometheus remote-write requires Mimir).
+		funcMap["serviceEnabled"] = func(serviceName string) bool {
+			svc, ok := cfg.OpenCenter.Services[serviceName]
+			if !ok {
+				return false
+			}
+			return !IsServiceDisabled(svc)
+		}
 		t, err := template.New("override-values").Funcs(funcMap).Parse(tmpl)
 		if err != nil {
 			return "", err
@@ -1131,6 +1141,7 @@ alertmanager:
           - alertname =~ "CPUThrottlingHigh"
         equal: [namespace, cluster]
     route:
+      receiver: "null"
       group_by: [namespace, alertname, cluster, service]
       group_wait: 30s
       group_interval: 60s
@@ -1204,14 +1215,22 @@ prometheus:
       cluster: {{ .OpenCenter.Meta.Name }}
       region: {{ .OpenCenter.Meta.Region }}
       customer: {{ .OpenCenter.Meta.Organization }}
+    # The three selector flags keep Prometheus discovering ServiceMonitors,
+    # PodMonitors and Rules cluster-wide (Flux emits its own in flux-system).
+    # They are intentionally unconditional: they are not Mimir-specific.
     serviceMonitorSelectorNilUsesHelmValues: false
     podMonitorSelectorNilUsesHelmValues: false
     ruleSelectorNilUsesHelmValues: false
+{{- if serviceEnabled "mimir" }}
+    # Remote-write only when Mimir is installed; a permanently failing
+    # remote-write target otherwise keeps Prometheus reporting a degraded sync
+    # state on every scrape cycle.
     enableRemoteWriteReceiver: true
     remoteWrite:
       - url: http://observability-mimir-gateway.observability.svc.cluster.local:80/api/v1/push
         headers:
           X-Scope-OrgID: "default"
+{{- end }}
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -1263,7 +1282,13 @@ grafana:
       auth_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/auth
       token_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/token
       api_url: https://{{ if (index .OpenCenter.Services "keycloak") }}{{ (index .OpenCenter.Services "keycloak").Hostname | default (printf "auth.%s" fqdn) }}{{ else }}{{ printf "auth.%s" fqdn }}{{ end }}/realms/opencenter/protocol/openid-connect/userinfo
-      role_attribute_path: (contains(groups[*], 'cluster-admins') || contains(groups[*], '/cluster-admins') || contains(groups[*], 'grafana-admins') || contains(groups[*], '/grafana-admins')) && 'Admin' || (contains(groups[*], 'grafana-editors') || contains(groups[*], '/grafana-editors')) && 'Editor' || 'Viewer'
+      # Roles come from two claims the realm actually emits: groups
+      # (oidc-group-membership-mapper on the client) and roles
+      # (oidc-usermodel-client-role-mapper scoped to grafana-oauth, so it
+      # carries grafana-admin / grafana-editor / grafana-viewer). Realm groups
+      # are matched with and without their leading slash because the mapper is
+      # configured with full.path=false.
+      role_attribute_path: (contains(groups[*], 'cluster-admins') || contains(groups[*], '/cluster-admins') || contains(roles[*], 'grafana-admin')) && 'Admin' || (contains(roles[*], 'grafana-editor')) && 'Editor' || (contains(roles[*], 'grafana-viewer')) && 'Viewer' || 'Viewer'
       role_attribute_strict: false
       allow_assign_grafana_admin: true
   extraSecretMounts:

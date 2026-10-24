@@ -1169,4 +1169,63 @@ func TestInitServiceGeneratesKeycloakSecrets(t *testing.T) {
 		t.Fatalf("expected Headlamp client secret to match Keycloak client secret, got %q vs %q",
 			cfg.Secrets.Headlamp.OIDCClientSecret, cfg.Secrets.Keycloak.ClientSecret)
 	}
+
+	// The realm's grafana-oauth client needs its own secret: Keycloak
+	// authenticates a token exchange against the secret of the client named in
+	// client_id, so sharing ClientSecret yields invalid_client.
+	grafana := cfg.Secrets.Keycloak.GrafanaClientSecret
+	if grafana == "" || grafana == v2.PlaceholderSecret {
+		t.Fatalf("expected generated grafana-oauth client secret, got %q", grafana)
+	}
+	if len(grafana) < 32 {
+		t.Fatalf("expected grafana-oauth client secret length >= 32, got %d", len(grafana))
+	}
+	if grafana == cfg.Secrets.Keycloak.ClientSecret {
+		t.Fatal("grafana-oauth client secret must not reuse the opencenter client secret")
+	}
+}
+
+// TestInitServiceKeepsConfiguredKeycloakSecrets guards the isMissingSecret
+// guards on the path that actually matters: initializing from a config file
+// that already carries client secrets must reuse them, not mint new ones that
+// no longer match what is committed in the GitOps repository.
+func TestInitServiceKeepsConfiguredKeycloakSecrets(t *testing.T) {
+	const (
+		wantClient  = "configured-opencenter-secret"
+		wantGrafana = "configured-grafana-secret"
+	)
+	configFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configFile, []byte(fmt.Sprintf(`schema_version: "2.0"
+opencenter:
+  meta:
+    name: kc-keep-test
+    organization: testorg
+  infrastructure:
+    provider: kind
+secrets:
+  keycloak:
+    client_secret: %s
+    grafana_client_secret: %s
+`, wantClient, wantGrafana)), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	initService := newInitServiceForPublicDecodeTest(t)
+	result, err := initService.Initialize(context.Background(), InitOptions{
+		ClusterName:  "kc-keep-test",
+		Organization: "testorg",
+		Provider:     "kind",
+		ConfigFile:   configFile,
+		NoGitInit:    true,
+	})
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	if got := result.Config.Secrets.Keycloak.ClientSecret; got != wantClient {
+		t.Errorf("opencenter client secret = %q, want the configured value", got)
+	}
+	if got := result.Config.Secrets.Keycloak.GrafanaClientSecret; got != wantGrafana {
+		t.Errorf("grafana-oauth client secret = %q, want the configured value", got)
+	}
 }
