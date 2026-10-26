@@ -760,6 +760,13 @@ func validateMaterializedSecretMembership(cfg v2.Config, actions []clusterAppAct
 				break
 			}
 		}
+		// kube-prometheus-stack owns Grafana's admin credential through the
+		// dedicated renderer. That manifest intentionally replaces the generic
+		// secret.yaml artifact because both have the same Kubernetes identity.
+		if !included && artifact.TargetService == "kube-prometheus-stack" {
+			_, statErr := os.Stat(filepath.Join(filepath.Dir(kustomizationPath), "grafana-admin-password.yaml"))
+			included = statErr == nil
+		}
 		if !included {
 			return fmt.Errorf("secret artifact %q is materialized but final kustomization for service %q does not include secret.yaml in resources", artifact.Path, artifact.TargetService)
 		}

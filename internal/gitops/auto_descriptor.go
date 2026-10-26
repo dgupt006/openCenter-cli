@@ -229,7 +229,12 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 	}
 
 	generatedResourceFiles := append([]string{}, spec.GeneratedResourceFiles...)
-	if secretArtifactTargetMaterialized(cfg, serviceName, artifacts) && !containsString(generatedResourceFiles, "secret.yaml") {
+	// kube-prometheus-stack has a dedicated renderer for the Grafana admin
+	// Secret. Do not also add the generic secret-artifact manifest: both
+	// resources resolve to observability/grafana-admin-password and Kustomize
+	// rejects the duplicate identity.
+	grafanaDedicatedSecret := serviceName == "kube-prometheus-stack" && strings.TrimSpace(cfg.Secrets.Grafana.AdminPassword) != ""
+	if !grafanaDedicatedSecret && secretArtifactTargetMaterialized(cfg, serviceName, artifacts) && !containsString(generatedResourceFiles, "secret.yaml") {
 		generatedResourceFiles = append(generatedResourceFiles, "secret.yaml")
 	}
 	namespace := base.Namespace
