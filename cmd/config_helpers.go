@@ -117,10 +117,16 @@ func loadConfigWithIdentifier(ctx context.Context, identifier string) (v2.Config
 		}
 	}
 
-	// If organization was specified in the identifier, verify it matches the config metadata
+	// If organization was specified in the identifier, verify it matches the
+	// stored configuration. The on-disk zone location is authoritative for
+	// resolution: manager.Load("org/cluster") already resolved the blueprint
+	// under blueprints/<org>/, so a mismatch here means the blueprint was
+	// moved between organizations (or was created before the org was set)
+	// while meta.organization still names the old one. Trust the directory and
+	// heal the stale metadata; a hard failure would leave the cluster listed
+	// yet unaddressable by every org-qualified command, including destroy.
 	if organization != "" && cfg.OpenCenter.Meta.Organization != organization {
-		return v2.Config{}, "", "", fmt.Errorf("cluster %s not found in organization %s (found in %s)",
-			clusterName, organization, cfg.OpenCenter.Meta.Organization)
+		cfg.OpenCenter.Meta.Organization = organization
 	}
 
 	return cfg, clusterName, cfg.OpenCenter.Meta.Organization, nil

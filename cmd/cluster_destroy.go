@@ -376,6 +376,21 @@ func removeClusterFiles(ctx context.Context, cmd *cobra.Command, cfg v2.Config, 
 	fmt.Fprintf(cmd.OutOrStdout(), "Removed config file: %s\n", configPath)
 	logging.LogActionMessage(ctx, "removed config file: %s", configPath)
 
+	// Remove the blueprint directory itself. saveConfig leaves a
+	// <cluster>-config.yaml.backup next to the config file, and other sidecar
+	// files (e.g. .harbor.storage-recovery.json) outlive the config file too.
+	// Deleting only the config file left a bare blueprint directory behind:
+	// a phantom that listing no longer shows but that litters the blueprints
+	// zone forever.
+	if !isFlatConfig && clusterPaths != nil {
+		blueprintDir := filepath.Dir(clusterPaths.ConfigPath)
+		if err := os.RemoveAll(blueprintDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove blueprint directory: %w", err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed blueprint directory: %s\n", blueprintDir)
+		logging.LogActionMessage(ctx, "removed blueprint directory: %s", blueprintDir)
+	}
+
 	// Remove from active cluster if it was active
 	activeCluster, err := getActiveCluster()
 	if err == nil && activeCluster == name {

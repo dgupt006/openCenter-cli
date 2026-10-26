@@ -240,6 +240,11 @@ func TestOpenStackDestroyProvider_BuildSteps_TofuDisabled(t *testing.T) {
 	}
 }
 
+// TestOpenStackDestroyProvider_BuildSteps_MissingClusterDir asserts that a
+// vanished infrastructure directory (already destroyed, or a gitops
+// local_dir under a deleted temp checkout) is an idempotent no-op: no tofu
+// steps are built, no commands run, and no error is returned, so destroy
+// --remove-files can still complete local cleanup.
 func TestOpenStackDestroyProvider_BuildSteps_MissingClusterDir(t *testing.T) {
 	dir := t.TempDir()
 	gitopsDir := filepath.Join(dir, "gitops")
@@ -253,14 +258,29 @@ func TestOpenStackDestroyProvider_BuildSteps_MissingClusterDir(t *testing.T) {
 	cfg.OpenTofu.Path = "tofu"
 
 	runner := &fakeDestroyCommandRunner{}
-	provider := newTestOpenStackDestroyProvider(runner, &bytes.Buffer{})
+	var out bytes.Buffer
+	provider := newTestOpenStackDestroyProvider(runner, &out)
 
-	_, err := provider.BuildSteps(cfg, &DestroyInfraOptions{})
-	if err == nil {
-		t.Fatal("expected error when cluster directory doesn't exist")
+	steps, err := provider.BuildSteps(cfg, &DestroyInfraOptions{})
+	if err != nil {
+		t.Fatalf("BuildSteps() error = %v, want idempotent no-op", err)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("unexpected error message: %v", err)
+	for _, s := range steps {
+		if s.ID == "opentofu-init" || s.ID == "opentofu-destroy" {
+			t.Fatalf("unexpected tofu step %q when infrastructure directory is missing", s.ID)
+		}
+	}
+	ctx := context.Background()
+	for _, s := range steps {
+		if err := s.Run(ctx); err != nil {
+			t.Fatalf("step %q failed: %v", s.ID, err)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected no commands when infrastructure directory is missing, got %d calls", len(runner.calls))
+	}
+	if !strings.Contains(out.String(), "infrastructure may already be destroyed") {
+		t.Errorf("expected warning about already-destroyed infrastructure, got: %s", out.String())
 	}
 }
 

@@ -51,28 +51,51 @@ func (p *openstackDestroyProvider) BuildSteps(cfg *v2.Config, opts *DestroyInfra
 		return nil, fmt.Errorf("opentofu must be enabled for openstack destroy")
 	}
 
-	// Check if infrastructure directory exists - if not, nothing to destroy
-	if _, err := os.Stat(clusterDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster infrastructure directory not found: %s (infrastructure may already be destroyed)", clusterDir)
+	// An absent infrastructure directory means there is nothing left to run
+	// OpenTofu against: the infrastructure was already destroyed, or the
+	// GitOps working directory (gitops.repository.local_dir) no longer exists
+	// (e.g. a checkout under a deleted temp directory). Treat it as an
+	// idempotent no-op so `cluster destroy --remove-files` can still complete
+	// local cleanup instead of failing permanently on a vanished directory.
+	infraAlreadyGone := false
+	if _, err := os.Stat(clusterDir); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("checking cluster infrastructure directory: %w", err)
+		}
+		infraAlreadyGone = true
+		p.logf("Cluster infrastructure directory not found: %s\n", clusterDir)
+		p.logf("Nothing to destroy via OpenTofu; infrastructure may already be destroyed.\n")
 	}
 
-	extractor := credentials.NewExtractor(*cfg)
-	creds, err := extractor.ExtractOpenStack()
-	if err != nil {
-		return nil, fmt.Errorf("extract openstack credentials: %w", err)
-	}
+	var (
+		env          map[string]string
+		openTofuPath string
+		destroyArgs  []string
+		creds        *credentials.OpenStackCredentials
+	)
 
-	env := buildDestroyEnvironment()
-	mergeBootstrapEnvironment(env, creds.ToEnvMap())
+	// The tofu binary and OpenStack credentials are only needed when there is
+	// an infrastructure directory to destroy. Skip them when the directory is
+	// gone so a broken credential section cannot block local file cleanup.
+	if !infraAlreadyGone {
+		extracted, err := credentials.NewExtractor(*cfg).ExtractOpenStack()
+		if err != nil {
+			return nil, fmt.Errorf("extract openstack credentials: %w", err)
+		}
 
-	openTofuPath, err := resolveTofuBinary(cfg.OpenTofu.Path)
-	if err != nil {
-		return nil, err
-	}
+		env = buildDestroyEnvironment()
+		mergeBootstrapEnvironment(env, extracted.ToEnvMap())
+		creds = extracted
 
-	destroyArgs := []string{"destroy"}
-	if opts != nil && opts.AutoApprove {
-		destroyArgs = append(destroyArgs, "-auto-approve")
+		openTofuPath, err = resolveTofuBinary(cfg.OpenTofu.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		destroyArgs = []string{"destroy"}
+		if opts != nil && opts.AutoApprove {
+			destroyArgs = append(destroyArgs, "-auto-approve")
+		}
 	}
 
 	// CSI volume cleanup is only applicable to the OpenStack provider. The
@@ -108,24 +131,26 @@ func (p *openstackDestroyProvider) BuildSteps(cfg *v2.Config, opts *DestroyInfra
 		})
 	}
 
-	steps = append(steps,
-		destroyStep{
-			ID:          "opentofu-init",
-			Description: "Initialize OpenTofu",
-			Run: func(ctx context.Context) error {
-				_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, "init")
-				return err
+	if !infraAlreadyGone {
+		steps = append(steps,
+			destroyStep{
+				ID:          "opentofu-init",
+				Description: "Initialize OpenTofu",
+				Run: func(ctx context.Context) error {
+					_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, "init")
+					return err
+				},
 			},
-		},
-		destroyStep{
-			ID:          "opentofu-destroy",
-			Description: "Destroy OpenTofu infrastructure",
-			Run: func(ctx context.Context) error {
-				_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, destroyArgs...)
-				return err
+			destroyStep{
+				ID:          "opentofu-destroy",
+				Description: "Destroy OpenTofu infrastructure",
+				Run: func(ctx context.Context) error {
+					_, err := p.runner.Run(ctx, clusterDir, env, openTofuPath, destroyArgs...)
+					return err
+				},
 			},
-		},
-	)
+		)
+	}
 
 	if isOpenStack {
 		deleteVolumes := opts != nil && opts.DeleteVolumes

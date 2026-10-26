@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-02
+last_updated: "2026-10-26"
 id: destroy-openstack-cluster
 title: Destroy an OpenStack cluster
 sidebar_label: Destroy an OpenStack cluster
@@ -113,6 +113,19 @@ Add `--remove-files` to delete them as well:
 ```bash
 opencenter cluster destroy <org>/<cluster> --force --delete-volumes --remove-files
 ```
+
+## Idempotent teardown
+
+Destroy is safe to re-run. If the OpenTofu working directory is already gone —
+the infrastructure was destroyed earlier, or `gitops.repository.local_dir`
+points at a checkout that no longer exists — the destroy step is skipped with
+`Nothing to destroy via OpenTofu; infrastructure may already be destroyed.`
+instead of failing, and `--remove-files` still completes local cleanup. The
+organization prefix in `<org>/<cluster>` is resolved from the blueprint's
+on-disk location, which is authoritative when the stored
+`opencenter.meta.organization` is stale. With `--remove-files`, destroy also
+removes the whole blueprint directory, including the `<cluster>-config.yaml.backup`
+sidecar, so no phantom directory is left behind.
 
 ## Safety guarantees
 
