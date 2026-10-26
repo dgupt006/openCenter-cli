@@ -1229,3 +1229,66 @@ secrets:
 		t.Errorf("grafana-oauth client secret = %q, want the configured value", got)
 	}
 }
+
+// TestInitServiceResultMessageOmitsOverriddenDefaults pins the contract that
+// the "Using cluster_defaults" summary never lists a default an explicit flag
+// overrode: a --region flag must not print the config.yaml region, or the
+// output contradicts the region written to the generated config.
+func TestInitServiceResultMessageOmitsOverriddenDefaults(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("OPENCENTER_CONFIG_DIR", configDir)
+	configYAML := "cluster_defaults:\n  provider: openstack\n  region: DFW3\n  environment: dev\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0o600); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	pathResolver := paths.NewPathResolver(t.TempDir())
+	cliConfigManager, err := config.NewConfigManager("")
+	if err != nil {
+		t.Fatalf("Failed to create config manager: %v", err)
+	}
+	initService := NewInitService(pathResolver, setupValidationEngine(t), cliConfigManager)
+
+	initOpts := InitOptions{
+		ClusterName:    "msg-probe",
+		Organization:   "msgorg",
+		Provider:       "openstack",
+		Region:         "iad3",
+		RegionExplicit: true,
+		NoKeyGen:       true,
+		NoGitInit:      true,
+	}
+	result, err := initService.Initialize(context.Background(), initOpts)
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if result.Config.OpenCenter.Meta.Region != "iad3" {
+		t.Fatalf("written region = %q, want iad3", result.Config.OpenCenter.Meta.Region)
+	}
+	if strings.Contains(result.Message, "region:") {
+		t.Errorf("message must not list the DFW3 default overridden by --region:\n%s", result.Message)
+	}
+	if !strings.Contains(result.Message, "environment:") {
+		t.Errorf("message must still list the environment default that was used:\n%s", result.Message)
+	}
+	// The provider default stays listed: cobra's --type default is
+	// indistinguishable from an explicit --type openstack here.
+	if !strings.Contains(result.Message, "provider:") {
+		t.Errorf("message must list the provider default matching --type:\n%s", result.Message)
+	}
+
+	// Without an explicit region the default is used and must be reported.
+	initOpts.ClusterName = "msg-probe-2"
+	initOpts.Region = ""
+	initOpts.RegionExplicit = false
+	result, err = initService.Initialize(context.Background(), initOpts)
+	if err != nil {
+		t.Fatalf("Initialize() without region error = %v", err)
+	}
+	if result.Config.OpenCenter.Meta.Region != "DFW3" {
+		t.Fatalf("written region = %q, want the DFW3 default", result.Config.OpenCenter.Meta.Region)
+	}
+	if !strings.Contains(result.Message, "region:              DFW3") {
+		t.Errorf("message must list the region default that was used:\n%s", result.Message)
+	}
+}

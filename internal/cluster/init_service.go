@@ -220,7 +220,7 @@ func (s *InitService) Initialize(ctx context.Context, opts InitOptions) (*InitRe
 	}
 
 	// Build result message
-	result.Message = s.buildResultMessage(clusterPaths, opts.Organization, cfg.OpenCenter.GitOps.Repository.LocalDir, result.KeysGenerated)
+	result.Message = s.buildResultMessage(clusterPaths, opts.Organization, cfg.OpenCenter.GitOps.Repository.LocalDir, result.KeysGenerated, opts)
 
 	return result, nil
 }
@@ -717,8 +717,11 @@ func (s *InitService) saveConfig(ctx context.Context, cfg *v2.Config, configPath
 	return verifyMode(configPath, 0o600)
 }
 
-// buildResultMessage builds a user-friendly result message
-func (s *InitService) buildResultMessage(clusterPaths *paths.ClusterPaths, organization, gitDir string, keysGenerated bool) string {
+// buildResultMessage builds a user-friendly result message. The cluster_defaults
+// section reports only the defaults that actually shaped the generated config:
+// a field overridden by an explicit flag (e.g. --region) is not a "used default"
+// and must not be listed, or the output contradicts the written configuration.
+func (s *InitService) buildResultMessage(clusterPaths *paths.ClusterPaths, organization, gitDir string, keysGenerated bool, opts InitOptions) string {
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "Created cluster configuration in organization '%s' at '%s'\n", organization, clusterPaths.ConfigPath)
 	fmt.Fprintf(&msg, "GitOps repository root: %s\n", gitDir)
@@ -733,7 +736,7 @@ func (s *InitService) buildResultMessage(clusterPaths *paths.ClusterPaths, organ
 		if cd.Provider != "" {
 			defaults = append(defaults, fmt.Sprintf("  provider:            %s", cd.Provider))
 		}
-		if cd.Region != "" {
+		if cd.Region != "" && !opts.RegionExplicit {
 			defaults = append(defaults, fmt.Sprintf("  region:              %s", cd.Region))
 		}
 		if cd.Environment != "" {
