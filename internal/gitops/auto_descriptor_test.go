@@ -485,7 +485,7 @@ func TestBuildAutoServiceContextConditionalSecretArtifact(t *testing.T) {
 	require.NoError(t, err)
 	materializeSecretArtifact(t, cfg, artifacts[0].Path)
 	ctx = buildAutoServiceContextWithArtifacts("kube-prometheus-stack", base, cfg, artifacts)
-	assert.Contains(t, ctx.GeneratedResourceFiles, "secret.yaml")
+	assert.NotContains(t, ctx.GeneratedResourceFiles, "secret.yaml")
 
 	cfg.Secrets.Grafana = v2.GrafanaSecrets{}
 	cfg.Secrets.ServiceSecrets = map[string]any{"custom_service": map[string]any{"token": "value"}}

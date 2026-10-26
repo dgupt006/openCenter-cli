@@ -1,3 +1,13 @@
+---
+id: deployment-recommendations
+title: Deployment recommendations
+sidebar_label: Deployment recommendations
+description: Analysis of cluster deploy behavior with optimization recommendations for OIDC bootstrapping.
+doc_type: explanation
+audience: openCenter operators
+tags: [deployment, oidc, keycloak]
+last_updated: 2026-10-24
+---
 # openCenter Cluster Deployment: Current Architecture, Commit Analysis & Optimization Recommendations
 
 This document reviews the `opencenter cluster deploy` command, analyzes the latest commits regarding OIDC confidential secrets and `gitops-base` tagging, and provides actionable recommendations to accelerate deployment and eliminate OIDC-related bootstrapping failures.

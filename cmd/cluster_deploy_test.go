@@ -398,3 +398,71 @@ func TestCheckSecretsSyncedPreflight(t *testing.T) {
 		t.Fatalf("preflight should pass when secret is created and wired, got %v", err)
 	}
 }
+
+// TestCheckSecretsSyncedPreflightGrafanaDedicatedSecret locks the PR #55
+// exemption: when a Grafana admin password is set, kube-prometheus-stack's
+// credential is rendered as the dedicated grafana-admin-password.yaml (the
+// generic secret.yaml shares the observability/grafana-admin-password identity
+// and is intentionally omitted). The preflight must accept the dedicated
+// manifest in place of secret.yaml, and still block when it is absent or
+// unwired.
+func TestCheckSecretsSyncedPreflightGrafanaDedicatedSecret(t *testing.T) {
+	cfgPtr, err := v2.NewV2Default("gp", "kind")
+	if err != nil {
+		t.Fatalf("v2 default: %v", err)
+	}
+	cfg := *cfgPtr
+	// Isolate the preflight to the Grafana artifact.
+	cfg.Secrets.Loki = v2.LokiSecrets{}
+	cfg.Secrets.Global.AWS = v2.AWSGlobalSecrets{}
+	cfg.Secrets.Tempo = v2.TempoSecrets{}
+	cfg.Secrets.Headlamp = v2.HeadlampSecrets{}
+	cfg.Secrets.Mimir = v2.MimirSecrets{}
+	cfg.OpenCenter.Services["kube-prometheus-stack"] = &services.PrometheusStackConfig{
+		BaseConfig: services.BaseConfig{Enabled: true, Namespace: "observability"},
+	}
+	cfg.Secrets.Grafana = v2.GrafanaSecrets{AdminPassword: "s3cret-password"}
+
+	gitDir := filepath.Join(t.TempDir(), "opencenter")
+	cfg.OpenCenter.GitOps.Repository.LocalDir = gitDir
+	svcDir := filepath.Join(gitDir, "applications", "overlays", "gp", "services", "kube-prometheus-stack")
+	if err := os.MkdirAll(svcDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// (1) Dedicated manifest rendered and wired, generic secret.yaml absent
+	// (the post-generate state) -> must pass.
+	if err := os.WriteFile(filepath.Join(svcDir, "grafana-admin-password.yaml"), []byte("kind: Secret\n"), 0o600); err != nil {
+		t.Fatalf("write dedicated secret: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(svcDir, "kustomization.yaml"),
+		[]byte("resources:\n  - custom/\n  - grafana-admin-password.yaml\n"), 0o644); err != nil {
+		t.Fatalf("write kustomization: %v", err)
+	}
+	if err := checkSecretsSynced(&cfg, "gp"); err != nil {
+		t.Fatalf("preflight should pass with the dedicated Grafana secret wired, got %v", err)
+	}
+
+	// (2) Dedicated manifest present but NOT wired -> must fail.
+	if err := os.WriteFile(filepath.Join(svcDir, "kustomization.yaml"),
+		[]byte("resources:\n  - custom/\n"), 0o644); err != nil {
+		t.Fatalf("rewrite kustomization: %v", err)
+	}
+	if err := checkSecretsSynced(&cfg, "gp"); err == nil ||
+		!strings.Contains(err.Error(), "kube-prometheus-stack") {
+		t.Fatalf("expected preflight failure for unwired dedicated secret, got %v", err)
+	}
+
+	// (3) Stale generic secret.yaml (e.g. materialized by an older release)
+	// without either manifest wired -> must still fail.
+	if err := os.WriteFile(filepath.Join(svcDir, "secret.yaml"), []byte("kind: Secret\n"), 0o600); err != nil {
+		t.Fatalf("write stale secret: %v", err)
+	}
+	if err := os.Remove(filepath.Join(svcDir, "grafana-admin-password.yaml")); err != nil {
+		t.Fatalf("remove dedicated secret: %v", err)
+	}
+	if err := checkSecretsSynced(&cfg, "gp"); err == nil ||
+		!strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("expected 'not wired' failure when neither manifest is wired, got %v", err)
+	}
+}
