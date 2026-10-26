@@ -322,12 +322,22 @@ func checkSecretsSynced(cfg *v2.Config, clusterName string) error {
 	for _, artifact := range artifacts {
 		rel := filepath.FromSlash(artifact.Path) // services/<svc>/secret.yaml
 		full := filepath.Join(overlay, rel)
+		dir := filepath.Dir(full)
 		if _, statErr := os.Stat(full); statErr != nil {
+			// kube-prometheus-stack consumes Grafana's admin credential through
+			// the dedicated grafana-admin-password.yaml rendered by cluster
+			// generate. The generic secret.yaml shares that Kubernetes identity,
+			// so the renderer intentionally omits it; accept the dedicated
+			// manifest in its place (PR #55).
+			if grafanaDedicatedSecretReplacesArtifact(cfg, artifact.TargetService) &&
+				grafanaDedicatedSecretWired(dir) {
+				continue
+			}
 			missing = append(missing, artifact.Path+" (not created)")
 			continue
 		}
-		wired, wErr := secretWiredIntoKustomization(filepath.Dir(full))
-		if wErr == nil && !wired {
+		wired, wErr := secretWiredIntoKustomization(dir, "secret.yaml")
+		if wErr == nil && !wired && !grafanaDedicatedSecretWired(dir) {
 			missing = append(missing, artifact.Path+" (created but not wired into kustomization)")
 		}
 	}
@@ -343,9 +353,30 @@ func checkSecretsSynced(cfg *v2.Config, clusterName string) error {
 		strings.Join(missing, "\n  "), clusterName)
 }
 
+// grafanaDedicatedSecretReplacesArtifact reports whether the dedicated
+// grafana-admin-password.yaml renderer owns the credential for this artifact
+// target, which happens exactly when kube-prometheus-stack is the target and a
+// Grafana admin password is configured (the same gate as
+// kubePrometheusStackOverlayFilesRenderer).
+func grafanaDedicatedSecretReplacesArtifact(cfg *v2.Config, targetService string) bool {
+	return targetService == "kube-prometheus-stack" &&
+		strings.TrimSpace(cfg.Secrets.Grafana.AdminPassword) != ""
+}
+
+// grafanaDedicatedSecretWired reports whether dir contains the dedicated
+// grafana-admin-password.yaml manifest AND its kustomization.yaml lists it in
+// resources so Flux applies it.
+func grafanaDedicatedSecretWired(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "grafana-admin-password.yaml")); err != nil {
+		return false
+	}
+	wired, err := secretWiredIntoKustomization(dir, "grafana-admin-password.yaml")
+	return err == nil && wired
+}
+
 // secretWiredIntoKustomization reports whether the kustomization.yaml in dir
-// lists secret.yaml in its resources so Flux actually applies it.
-func secretWiredIntoKustomization(dir string) (bool, error) {
+// lists filename in its resources so Flux actually applies it.
+func secretWiredIntoKustomization(dir, filename string) (bool, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "kustomization.yaml"))
 	if err != nil {
 		return false, err
@@ -355,7 +386,7 @@ func secretWiredIntoKustomization(dir string) (bool, error) {
 		trimmed = strings.TrimPrefix(trimmed, "- ")
 		trimmed = strings.Trim(trimmed, "\"'")
 		trimmed = strings.TrimPrefix(trimmed, "./")
-		if trimmed == "secret.yaml" {
+		if trimmed == filename {
 			return true, nil
 		}
 	}
