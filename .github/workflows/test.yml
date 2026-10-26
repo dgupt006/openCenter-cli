@@ -8,6 +8,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HELM_VERSION: v4.3.1
 
 jobs:
   go-test:
@@ -31,6 +32,27 @@ jobs:
           GOBIN="${install_dir}" go install github.com/getsops/sops/v3/cmd/sops@v3.13.3
           echo "${install_dir}" >> "${GITHUB_PATH}"
           "${install_dir}/sops" --version
+
+      - name: Install Helm
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/bin"
+          archive="${RUNNER_TEMP}/helm.tar.gz"
+          mkdir -p "${install_dir}" "${RUNNER_TEMP}/helm-extract"
+          curl --fail --silent --show-error --location \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+            -o "${archive}"
+          curl --fail --silent --show-error --location \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" \
+            -o "${archive}.sha256sum"
+          expected="$(awk '{print $1; exit}' "${archive}.sha256sum")"
+          [[ "${expected}" =~ ^[[:xdigit:]]{64}$ ]]
+          printf '%s  %s\n' "${expected}" "${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}/helm-extract"
+          install -m 0755 "${RUNNER_TEMP}/helm-extract/linux-amd64/helm" "${install_dir}/helm"
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          helm version --short
 
       - name: Run cluster and bootstrap tests with race detector
         run: go test ./internal/cluster/... -count=1 -race
