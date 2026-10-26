@@ -37,6 +37,10 @@ opencenter cluster provider openstack plan my-org/demo --os-cloud PROFILE
 opencenter cluster provider openstack apply my-org/demo --os-cloud PROFILE
 ```
 
+`cluster init --os-cloud PROFILE` combines both steps: it creates the
+blueprint and then runs the apply pass against it (selector flags such as
+`--create-internal-network` and `--import-auth` are accepted and forwarded).
+
 The plan is read-only. Selectors include image, internal/external network,
 subnet, and availability zone; each accepts a resource name or ID (`--image-name`,
 `--windows-image-name`, `--network-id`, `--subnet-id`, `--external-network-id`,
