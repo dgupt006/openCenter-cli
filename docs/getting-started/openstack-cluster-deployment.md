@@ -1,3 +1,13 @@
+---
+id: openstack-cluster-deployment
+title: Deploy an OpenStack cluster
+sidebar_label: Deploy an OpenStack cluster
+description: Repeatable SJC3 workflow to deploy a Kubernetes cluster on OpenStack with Kubespray, Flux, and Calico.
+doc_type: tutorial
+audience: openCenter users
+tags: [openstack, deployment, kubespray]
+last_updated: 2026-10-24
+---
 # Deploying a Kubernetes Cluster on OpenStack with openCenter
 
 ## A repeatable SJC3 workflow with Kubespray, Flux, Calico, and OpenStack cloud integration
