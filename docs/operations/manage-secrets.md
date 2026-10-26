@@ -6,7 +6,7 @@ description: Generate keys and manage encrypted secret files with openCenter.
 doc_type: how-to
 audience: openCenter operators
 tags: [secrets, security]
-last_updated: 2026-09-28
+last_updated: 2026-10-26
 ---
 # Manage secrets
 
@@ -74,6 +74,14 @@ Run 'opencenter secrets sync ORG/CLUSTER' before deploying ...
 ```
 
 Re-run `secrets sync` (and let its manifest refresh complete) to resolve it.
+
+One exception: when `secrets.grafana.admin_password` is set, the Grafana
+credential is rendered by `cluster generate` as the dedicated
+`services/kube-prometheus-stack/grafana-admin-password.yaml` manifest instead
+of the generic `secret.yaml` (both share the `observability/grafana-admin-password`
+identity, and Kustomize rejects the duplicate). The preflight accepts the
+dedicated manifest in place of `secret.yaml` for that service.
+
 
 ## Rotate and back up keys
 
