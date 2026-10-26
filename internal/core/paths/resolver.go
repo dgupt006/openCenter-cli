@@ -256,7 +256,9 @@ func (r *PathResolver) ResolveWithFallback(ctx context.Context, clusterName stri
 		}
 	}
 
-	// Search for cluster in all organization directories under the blueprints root.
+	// Search for cluster in all organization directories under the blueprints
+	// root. The blueprint config file is the existence criterion: a bare
+	// blueprint directory (leftover sidecar files after destroy) is skipped.
 	r.mu.RLock()
 	blueprintsRoot := r.roots.BlueprintsDir
 	r.mu.RUnlock()
@@ -279,9 +281,8 @@ func (r *PathResolver) ResolveWithFallback(ctx context.Context, clusterName stri
 		}
 
 		orgName := entry.Name()
-		blueprintDir := filepath.Join(blueprintsRoot, orgName, clusterName)
-		configFile := filepath.Join(blueprintDir, clusterName+"-config.yaml")
-		if _, err := os.Stat(blueprintDir); err == nil {
+		configFile := filepath.Join(blueprintsRoot, orgName, clusterName, clusterName+"-config.yaml")
+		if _, err := os.Stat(configFile); err == nil {
 			paths, err := r.Resolve(ctx, clusterName, orgName)
 			if err == nil {
 				matches = append(matches, paths)
@@ -289,12 +290,6 @@ func (r *PathResolver) ResolveWithFallback(ctx context.Context, clusterName stri
 			}
 			if _, ok := err.(*LegacyLayoutError); ok {
 				return nil, err
-			}
-		} else if _, err := os.Stat(configFile); err == nil {
-			paths, err := r.Resolve(ctx, clusterName, orgName)
-			if err == nil {
-				matches = append(matches, paths)
-				continue
 			}
 		}
 	}
@@ -383,8 +378,9 @@ func (r *PathResolver) DetectStructureType(ctx context.Context, clusterName stri
 	return StructureTypeUnknown, nil
 }
 
-// GetOrganization determines the organization for a cluster.
-// GetOrganization determines the organization for a cluster by scanning the blueprints zone.
+// GetOrganization determines the organization for a cluster by scanning the
+// blueprints zone for the cluster's blueprint config file. A bare blueprint
+// directory does not count as an existing cluster.
 // Returns empty string if the cluster cannot be found in the secure layout.
 func (r *PathResolver) GetOrganization(ctx context.Context, clusterName string) (string, error) {
 	if err := r.validateClusterName(clusterName); err != nil {
@@ -413,8 +409,8 @@ func (r *PathResolver) GetOrganization(ctx context.Context, clusterName string) 
 		}
 
 		orgName := entry.Name()
-		blueprintDir := filepath.Join(blueprintsRoot, orgName, clusterName)
-		if _, err := os.Stat(blueprintDir); err == nil {
+		configFile := filepath.Join(blueprintsRoot, orgName, clusterName, clusterName+"-config.yaml")
+		if _, err := os.Stat(configFile); err == nil {
 			matches = append(matches, orgName)
 		}
 	}

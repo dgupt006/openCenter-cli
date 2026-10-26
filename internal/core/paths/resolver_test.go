@@ -21,6 +21,8 @@ import (
 	"testing"
 )
 
+// createSecureClusterForTest creates a blueprint directory with its config
+// file, which is the cluster-existence criterion.
 func createSecureClusterForTest(t testing.TB, baseDir, organization, clusterName string) {
 	t.Helper()
 	if organization == "" {
@@ -28,6 +30,10 @@ func createSecureClusterForTest(t testing.TB, baseDir, organization, clusterName
 	}
 	blueprintsDir := filepath.Join(baseDir, "blueprints", organization, clusterName)
 	if err := os.MkdirAll(blueprintsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(blueprintsDir, clusterName+"-config.yaml")
+	if err := os.WriteFile(configFile, []byte("schema_version: \"2.0\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

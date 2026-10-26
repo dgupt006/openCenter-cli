@@ -136,7 +136,13 @@ func (s *OrgBasedStrategy) Name() string {
 	return "org-based"
 }
 
-// CanResolve checks if the cluster blueprint exists.
+// CanResolve checks if the cluster blueprint exists. Either the blueprint
+// directory or its config file counts: init creates the directory before the
+// first save, so the directory must stay resolvable between those steps.
+// Listing is stricter (config file only, see
+// ConfigurationManager.discoverClustersInBlueprints) so that bare blueprint
+// directories left behind by destroy - sidecar files like .backup outlive the
+// config file - never surface as phantom clusters.
 func (s *OrgBasedStrategy) CanResolve(ctx context.Context, clusterName, organization string) (bool, error) {
 	if organization == "" {
 		organization = "opencenter"

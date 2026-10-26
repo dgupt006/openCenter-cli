@@ -563,7 +563,12 @@ func legacyLayoutErrorIfMixed(orgDir string) error {
 }
 
 // discoverClustersInBlueprints returns deduplicated cluster names found in a
-// blueprints organization directory.
+// blueprints organization directory. A directory counts as a cluster only when
+// it contains <cluster>-config.yaml: the config file is the single existence
+// criterion shared with Load and CanResolve. Bare blueprint directories left
+// behind by destroy (sidecar files like .backup outlive the config file) must
+// not be listed, or they surface as phantom clusters that every other command
+// rejects with "cluster configuration not found".
 func (cm *ConfigurationManager) discoverClustersInBlueprints(orgDir string) []string {
 	seen := make(map[string]struct{})
 
@@ -575,7 +580,7 @@ func (cm *ConfigurationManager) discoverClustersInBlueprints(orgDir string) []st
 			}
 			clusterName := entry.Name()
 			configPath := filepath.Join(orgDir, clusterName, clusterName+"-config.yaml")
-			if cm.fileSystem.Exists(configPath) || cm.fileSystem.Exists(filepath.Join(orgDir, clusterName)) {
+			if cm.fileSystem.Exists(configPath) {
 				seen[clusterName] = struct{}{}
 			}
 		}

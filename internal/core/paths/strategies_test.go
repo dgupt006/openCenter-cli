@@ -97,9 +97,11 @@ func TestOrgBasedStrategy_CanResolve(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name: "cluster found via infrastructure directory when config file missing",
+			name: "cluster found via blueprint directory when config file missing",
 			setup: func() string {
-				createSecureClusterForTest(t, tmpDir, "infra-only-org", "infra-only-cluster")
+				if err := os.MkdirAll(filepath.Join(tmpDir, "blueprints", "infra-only-org", "infra-only-cluster"), 0o755); err != nil {
+					t.Fatal(err)
+				}
 				return tmpDir
 			},
 			clusterName:  "infra-only-cluster",
