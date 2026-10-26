@@ -22,6 +22,17 @@ opencenter cluster init demo --org my-org --type openstack
 opencenter cluster describe my-org/demo
 ```
 
+To create the configuration and bind it to a cloud in one step, pass
+`--os-cloud` (it implies `--type openstack`). Initialization is followed
+immediately by the same discovery-and-apply pass as
+`cluster provider openstack apply`, including its confirmation prompt
+(`--yes` skips it):
+
+```bash
+opencenter cluster init demo --org my-org --os-cloud my-profile \
+  --create-internal-network --import-auth --yes
+```
+
 The generated v2 file lives at:
 
 ```text

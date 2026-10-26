@@ -30,6 +30,15 @@ By default, the organization is set to "opencenter". Use --org to specify a diff
 SOPS Age encryption keys and SSH key pairs are automatically generated if they
 don't already exist, unless --no-keygen is specified.
 
+With --os-cloud, initialization is followed immediately by the OpenStack
+provider binding: the same discovery-and-apply pass as
+'cluster provider openstack apply', run against the freshly created cluster
+configuration. --os-cloud implies --type openstack. Provider selector flags
+(--clouds-yaml, --image-name, --windows-image-name, --network-id,
+--external-network-id, --subnet-id, --availability-zone,
+--create-internal-network, --replace, --import-auth, --import-tls) are only
+valid together with --os-cloud and are forwarded to the provider apply pass.
+
 ```
 opencenter cluster init [name] [flags]
 ```
@@ -49,6 +58,9 @@ opencenter cluster init [name] [flags]
   # Initialize a VMware cluster
   opencenter cluster init my-cluster --org production --type vmware
 
+  # Initialize with a specific region
+  opencenter cluster init my-cluster --type openstack --region sjc3
+
   # Initialize a Kind cluster with the built-in CNI disabled
   opencenter cluster init my-cluster --org local --type kind --kind-disable-default-cni
 
@@ -57,6 +69,10 @@ opencenter cluster init [name] [flags]
 
   # Overwrite existing config
   opencenter cluster init my-cluster --force
+
+  # Initialize and bind to an OpenStack cloud in one step
+  opencenter cluster init my-cluster --org production --os-cloud prod-profile \
+    --create-internal-network --import-auth --yes
 ```
 
 ### Options
@@ -70,7 +86,9 @@ opencenter cluster init [name] [flags]
       --no-keygen                  do not auto-generate keys
       --no-sops-keygen             do not auto-generate SOPS keys
       --org string                 organization name (defaults to 'opencenter')
+      --os-cloud string            after init, bind the cluster to this clouds.yaml profile (implies --type openstack)
       --regenerate-keys            regenerate keys even if they exist
+      --region string              cluster region (e.g. dfw3, sjc3, iad3, ord1)
       --server-pool stringArray    additional server pool configuration
       --strict                     fail if required values are missing
       --type string                cluster type: openstack, baremetal, kind, vmware, magnum (default "openstack")

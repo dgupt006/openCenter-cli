@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 
+	cloudopenstack "github.com/opencenter-cloud/opencenter-cli/internal/cloud/openstack"
 	"github.com/opencenter-cloud/opencenter-cli/internal/cluster"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
@@ -55,7 +56,16 @@ The configuration is created in an organization-based directory structure:
 By default, the organization is set to "opencenter". Use --org to specify a different organization.
 
 SOPS Age encryption keys and SSH key pairs are automatically generated if they
-don't already exist, unless --no-keygen is specified.`,
+don't already exist, unless --no-keygen is specified.
+
+With --os-cloud, initialization is followed immediately by the OpenStack
+provider binding: the same discovery-and-apply pass as
+'cluster provider openstack apply', run against the freshly created cluster
+configuration. --os-cloud implies --type openstack. Provider selector flags
+(--clouds-yaml, --image-name, --windows-image-name, --network-id,
+--external-network-id, --subnet-id, --availability-zone,
+--create-internal-network, --replace, --import-auth, --import-tls) are only
+valid together with --os-cloud and are forwarded to the provider apply pass.`,
 		Example: `  # Initialize with defaults
   opencenter cluster init my-cluster
 
@@ -78,7 +88,11 @@ don't already exist, unless --no-keygen is specified.`,
   opencenter cluster init my-cluster --no-keygen
 
   # Overwrite existing config
-  opencenter cluster init my-cluster --force`,
+  opencenter cluster init my-cluster --force
+
+  # Initialize and bind to an OpenStack cloud in one step
+  opencenter cluster init my-cluster --org production --os-cloud prod-profile \
+    --create-internal-network --import-auth --yes`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runClusterInit,
 	}
@@ -97,6 +111,19 @@ don't already exist, unless --no-keygen is specified.`,
 	cmd.Flags().Bool("full-schema", false, "generate configuration with all available fields")
 	cmd.Flags().Bool(kindDisableDefaultCNIFlagName, false, "disable Kind's default CNI so cluster networking is managed by openCenter")
 	cmd.Flags().StringArray("server-pool", []string{}, "additional server pool configuration")
+	cmd.Flags().String("os-cloud", "", "after init, bind the cluster to this clouds.yaml profile (implies --type openstack)")
+	registerProviderOpenStackFlags(cmd, &providerOpenStackFlags{})
+	_ = cmd.Flags().MarkHidden("clouds-yaml")
+	_ = cmd.Flags().MarkHidden("image-name")
+	_ = cmd.Flags().MarkHidden("windows-image-name")
+	_ = cmd.Flags().MarkHidden("network-id")
+	_ = cmd.Flags().MarkHidden("external-network-id")
+	_ = cmd.Flags().MarkHidden("subnet-id")
+	_ = cmd.Flags().MarkHidden("availability-zone")
+	_ = cmd.Flags().MarkHidden("create-internal-network")
+	_ = cmd.Flags().MarkHidden("replace")
+	_ = cmd.Flags().MarkHidden("import-auth")
+	_ = cmd.Flags().MarkHidden("import-tls")
 
 	return cmd
 }
@@ -111,7 +138,7 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 	initService := app.InitService
 
 	// Parse command-line options
-	opts, err := parseInitOptions(cmd, args)
+	opts, flags, err := parseInitOptions(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -119,6 +146,15 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 	// Reject planned providers that are not yet available
 	if err := checkProviderAvailability(opts.Provider); err != nil {
 		return err
+	}
+	// Fail before writing anything if the requested cloud profile cannot be
+	// used: a missing/unreadable clouds.yaml, an unknown profile, or an
+	// --import-auth profile without a persistable credential pair must not
+	// leave a half-created cluster behind.
+	if flags != nil {
+		if err := preflightInitProviderBinding(flags); err != nil {
+			return err
+		}
 	}
 
 	// Execute initialization
@@ -129,8 +165,36 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 
 	// Display results
 	fmt.Fprint(cmd.OutOrStdout(), result.Message)
+
+	// Post-init OpenStack provider binding (--os-cloud)
+	if flags == nil {
+		return nil
+	}
+	return runInitProviderOpenStackApply(cmd, "apply", true, opts.Organization+"/"+opts.ClusterName, *flags)
+}
+
+// preflightInitProviderBinding validates everything runClusterProviderOpenStack
+// checks before its first remote call, so 'cluster init --os-cloud' fails with
+// no cluster files written when the profile is unusable.
+func preflightInitProviderBinding(flags *providerOpenStackFlags) error {
+	cloudsPath := strings.TrimSpace(flags.cloudsYAML)
+	if cloudsPath == "" {
+		cloudsPath = cloudopenstack.DefaultCloudsYAMLPath()
+	}
+	profile, err := cloudopenstack.LoadProfile(cloudsPath, flags.cloudName)
+	if err != nil {
+		return err
+	}
+	if flags.importAuth && (strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "") {
+		return NewExitError(2, "--import-auth requires an application credential ID and secret; name-only application credentials cannot be persisted", nil)
+	}
 	return nil
 }
+
+// runInitProviderOpenStackApply is the seam through which 'cluster init
+// --os-cloud' invokes the provider apply pass; tests replace it to assert the
+// binding without a live cloud.
+var runInitProviderOpenStackApply = runClusterProviderOpenStack
 
 // setupContainer initializes the DI container with all required services
 func setupContainer(container di.Container) error {
@@ -156,8 +220,9 @@ func setupContainer(container di.Container) error {
 }
 
 // parseInitOptions parses command-line flags into InitOptions
-func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, error) {
+func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, *providerOpenStackFlags, error) {
 	opts := cluster.InitOptions{}
+	var providerFlags *providerOpenStackFlags
 
 	// Get cluster name from args, config file, or active cluster
 	if len(args) > 0 {
@@ -165,14 +230,14 @@ func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, e
 	} else if configFile := getInitConfigFileFlag(cmd); configFile != "" {
 		name, err := extractClusterNameFromConfig(configFile)
 		if err != nil {
-			return opts, err
+			return opts, nil, err
 		}
 		opts.ClusterName = name
 		opts.ConfigFile = configFile
 	} else {
 		activeName, err := getActiveCluster()
 		if err != nil || activeName == "" {
-			return opts, fmt.Errorf("no cluster name provided and no active cluster set")
+			return opts, nil, fmt.Errorf("no cluster name provided and no active cluster set")
 		}
 		opts.ClusterName = activeName
 	}
@@ -205,7 +270,7 @@ func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, e
 
 	flagOverrides, deprecatedOrg, err := parseInitFlagOverrides(cmd)
 	if err != nil {
-		return opts, err
+		return opts, nil, err
 	}
 	opts.FlagOverrides = flagOverrides
 	if opts.Organization == "" && deprecatedOrg != "" {
@@ -213,15 +278,24 @@ func parseInitOptions(cmd *cobra.Command, args []string) (cluster.InitOptions, e
 	}
 
 	if enabled, changed, err := kindDisableDefaultCNIValue(cmd, opts.Provider); err != nil {
-		return opts, err
+		return opts, nil, err
 	} else if changed {
 		opts.KindDisableDefaultCNI = &enabled
 	}
 
+	providerFlags, err = parseInitProviderBindingFlags(cmd)
+	if err != nil {
+		return opts, nil, err
+	}
 	opts.SchemaVersion = "2.0"
+	if providerFlags != nil {
+		// --os-cloud implies an OpenStack cluster; an explicit conflicting
+		// --type was rejected in parseInitProviderBindingFlags.
+		opts.Provider = "openstack"
+	}
 	opts.OrganizationExplicit = opts.Organization != ""
 
-	return opts, nil
+	return opts, providerFlags, nil
 }
 
 func getInitConfigFileFlag(cmd *cobra.Command) string {
@@ -230,6 +304,53 @@ func getInitConfigFileFlag(cmd *cobra.Command) string {
 	}
 	configFile, _ := cmd.Flags().GetString("config")
 	return configFile
+}
+
+// providerOpenStackSelectorFlagNames are the hidden passthrough flags that
+// only make sense with --os-cloud on 'cluster init'.
+var providerOpenStackSelectorFlagNames = []string{
+	"clouds-yaml", "image-name", "windows-image-name", "network-id",
+	"external-network-id", "subnet-id", "availability-zone",
+	"create-internal-network", "replace", "import-auth", "import-tls",
+}
+
+// parseInitProviderBindingFlags reads --os-cloud and the hidden provider
+// selector flags into a providerOpenStackFlags struct, or returns nil when
+// --os-cloud is absent. It rejects selector flags without --os-cloud and a
+// conflicting explicit --type, so a typo cannot silently produce an unbound or
+// wrong-provider cluster.
+func parseInitProviderBindingFlags(cmd *cobra.Command) (*providerOpenStackFlags, error) {
+	cloudName, err := cmd.Flags().GetString("os-cloud")
+	if err != nil {
+		return nil, err
+	}
+	cloudName = strings.TrimSpace(cloudName)
+	if cloudName == "" {
+		for _, name := range providerOpenStackSelectorFlagNames {
+			if cmd.Flags().Changed(name) {
+				return nil, fmt.Errorf("--%s is only valid together with --os-cloud", name)
+			}
+		}
+		return nil, nil
+	}
+	if t, _ := cmd.Flags().GetString("type"); cmd.Flags().Changed("type") && !strings.EqualFold(strings.TrimSpace(t), "openstack") {
+		return nil, fmt.Errorf("--os-cloud implies --type openstack; cannot combine with --type %s", strings.TrimSpace(t))
+	}
+	flags := &providerOpenStackFlags{cloudName: cloudName}
+	get := func(name string) string { v, _ := cmd.Flags().GetString(name); return v }
+	getBool := func(name string) bool { v, _ := cmd.Flags().GetBool(name); return v }
+	flags.cloudsYAML = get("clouds-yaml")
+	flags.imageName = get("image-name")
+	flags.windowsImageName = get("windows-image-name")
+	flags.networkID = get("network-id")
+	flags.externalNetworkID = get("external-network-id")
+	flags.subnetID = get("subnet-id")
+	flags.availabilityZone = get("availability-zone")
+	flags.createInternalNetwork = getBool("create-internal-network")
+	flags.replace = getBool("replace")
+	flags.importAuth = getBool("import-auth")
+	flags.importTLS = getBool("import-tls")
+	return flags, nil
 }
 
 func kindDisableDefaultCNIValue(cmd *cobra.Command, provider string) (bool, bool, error) {

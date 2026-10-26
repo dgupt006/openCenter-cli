@@ -34,6 +34,23 @@ type providerOpenStackFlags struct {
 	importTLS             bool
 }
 
+// registerProviderOpenStackFlags registers the provider selector flags on cmd,
+// bound to the given flags struct. Shared by 'cluster provider openstack
+// plan/apply' and the post-init binding pass of 'cluster init --os-cloud'.
+func registerProviderOpenStackFlags(cmd *cobra.Command, flags *providerOpenStackFlags) {
+	cmd.Flags().StringVar(&flags.cloudsYAML, "clouds-yaml", "", "path to clouds.yaml")
+	cmd.Flags().StringVar(&flags.imageName, "image-name", "", "Linux image name or ID")
+	cmd.Flags().StringVar(&flags.windowsImageName, "windows-image-name", "", "Windows image name or ID")
+	cmd.Flags().StringVar(&flags.networkID, "network-id", "", "internal network name or ID")
+	cmd.Flags().StringVar(&flags.externalNetworkID, "external-network-id", "", "external network name or ID")
+	cmd.Flags().StringVar(&flags.subnetID, "subnet-id", "", "internal subnet name or ID")
+	cmd.Flags().StringVar(&flags.availabilityZone, "availability-zone", "", "availability zone name or ID")
+	cmd.Flags().BoolVar(&flags.createInternalNetwork, "create-internal-network", false, "let OpenTofu create and manage the internal network and subnet")
+	cmd.Flags().BoolVar(&flags.replace, "replace", false, "allow replacing populated provider selections")
+	cmd.Flags().BoolVar(&flags.importAuth, "import-auth", false, "write application credential fields from the selected profile")
+	cmd.Flags().BoolVar(&flags.importTLS, "import-tls", false, "persist selected profile TLS settings")
+}
+
 func newClusterProviderOpenStackCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "openstack",
@@ -119,17 +136,7 @@ Use 'apply' with identical flags to persist the same change set.`
 		},
 	}
 	cmd.Flags().StringVar(&flags.cloudName, "os-cloud", "", "profile name inside clouds.yaml to use for discovery")
-	cmd.Flags().StringVar(&flags.cloudsYAML, "clouds-yaml", "", "path to clouds.yaml")
-	cmd.Flags().StringVar(&flags.imageName, "image-name", "", "Linux image name or ID")
-	cmd.Flags().StringVar(&flags.windowsImageName, "windows-image-name", "", "Windows image name or ID")
-	cmd.Flags().StringVar(&flags.networkID, "network-id", "", "internal network name or ID")
-	cmd.Flags().StringVar(&flags.externalNetworkID, "external-network-id", "", "external network name or ID")
-	cmd.Flags().StringVar(&flags.subnetID, "subnet-id", "", "internal subnet name or ID")
-	cmd.Flags().StringVar(&flags.availabilityZone, "availability-zone", "", "availability zone name or ID")
-	cmd.Flags().BoolVar(&flags.createInternalNetwork, "create-internal-network", false, "let OpenTofu create and manage the internal network and subnet")
-	cmd.Flags().BoolVar(&flags.replace, "replace", false, "allow replacing populated provider selections")
-	cmd.Flags().BoolVar(&flags.importAuth, "import-auth", false, "write application credential fields from the selected profile")
-	cmd.Flags().BoolVar(&flags.importTLS, "import-tls", false, "persist selected profile TLS settings")
+	registerProviderOpenStackFlags(cmd, &flags)
 	return cmd
 }
 
