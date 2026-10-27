@@ -107,6 +107,10 @@ func (cl *ConfigLoader) LoadFromBytes(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("stage 4 (apply defaults): %w", err)
 	}
 
+	// Stage 4b: Settings-file hydration for provenance-tagged identity
+	// fields (managed.base_domain) and cluster_fqdn re-derivation.
+	applySettingsProvenance(cfg)
+
 	// Stage 5: Validate
 	if err := cl.validator.ValidateForSet(cfg); err != nil {
 		return nil, fmt.Errorf("stage 5 (validate): %w", err)

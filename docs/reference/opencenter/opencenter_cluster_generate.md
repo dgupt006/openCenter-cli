@@ -23,6 +23,13 @@ Use --render-only to render templates without running the full repository setup 
 Use --gitops-auth to select the GitOps authentication method for the base repository
 sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from settings.
 
+base_domain provenance: a cluster whose opencenter.cluster.managed.base_domain is
+"default" follows cluster_defaults.base_domain from settings automatically at every
+load. A pinned (or hand-edited) domain is never rewritten; generate warns when the
+settings domain changed since the last successful generation. Use --sync-base-domain
+to adopt the settings domain into a pinned cluster config (rewrites the derived
+cluster_fqdn).
+
 ```
 opencenter cluster generate [name] [flags]
 ```
@@ -45,6 +52,9 @@ opencenter cluster generate [name] [flags]
   # Generate with explicit GitOps auth method
   opencenter cluster generate my-cluster --gitops-auth=token
   opencenter cluster generate my-cluster --gitops-auth=ssh
+
+  # Adopt a changed cluster_defaults.base_domain into the cluster config
+  opencenter cluster generate my-cluster --sync-base-domain
 ```
 
 ### Options
@@ -57,6 +67,7 @@ opencenter cluster generate [name] [flags]
       --prune                remove stale generated files (use --prune=false to report but retain them) (default true)
       --render-only          render templates without running repository setup
       --skip-validation      skip configuration validation before generation
+      --sync-base-domain     adopt cluster_defaults.base_domain from settings into the cluster config (rewrites the derived cluster_fqdn) before generating
 ```
 
 ### Options inherited from parent commands

@@ -1142,12 +1142,27 @@
                 "version"
               ],
               "type": "object"
+            },
+            "last_generated_base_domain": {
+              "type": "string"
+            },
+            "managed": {
+              "additionalProperties": false,
+              "properties": {
+                "base_domain": {
+                  "enum": [
+                    "default",
+                    "pinned"
+                  ],
+                  "type": "string"
+                }
+              },
+              "type": "object"
             }
           },
           "required": [
             "admin_email",
             "base_domain",
-            "cluster_fqdn",
             "cluster_name",
             "kubernetes"
           ],

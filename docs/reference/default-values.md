@@ -55,7 +55,16 @@ Kind uses its own, separate default constants (not the table above):
 
 `v2.NewV2Default` reads `<config-dir>/config.yaml` (or `$OPENCENTER_CONFIG_DIR/config.yaml`) for `cluster_defaults`. This is separate from the CLI settings file, which is `<config-dir>/settings.yaml`. The values currently consumed for a new cluster are `organization`, `provider`, `region`, `environment`, `gitops_auth_method`, and `ssh_authorized_keys`.
 
-The loader also parses `base_domain`, `admin_email`, `kubernetes_version`, `cni`, and `ssh_user`, but those fields are not currently applied by `NewV2Default`; setting them in `config.yaml` does not change the corresponding generated values. Verify against `internal/config/v2/defaults.go` when relying on this compatibility file.
+The loader also parses `base_domain`, `admin_email`, `kubernetes_version`, `cni`, and `ssh_user`, but those fields are not currently applied by `NewV2Default`; setting them in `config.yaml` does not change the corresponding generated values. (`base_domain` is applied from the **settings** file `settings.yaml` via provenance propagation at load time -- see [base_domain provenance](#base_domain-provenance-settingsyaml) below -- not from this compatibility file.) Verify against `internal/config/v2/defaults.go` when relying on this compatibility file.
+
+## base_domain provenance (`settings.yaml`)
+
+`opencenter.cluster.base_domain` carries per-field provenance in `opencenter.cluster.managed.base_domain`:
+
+* `default` -- the CLI settings file (`<config-dir>/settings.yaml`, `cluster_defaults.base_domain`) owns the value. Every config load re-applies the settings domain and re-derives `cluster_fqdn`, so a settings change propagates through `generate`, `validate`, and `deploy` without rewriting the cluster config file.
+* `pinned` (absent means pinned) -- the cluster config owns the value. Settings changes never rewrite it. `cluster generate` warns when the settings domain changed since the last successful generation (tracked in `opencenter.cluster.last_generated_base_domain`) and offers `--sync-base-domain` to adopt it explicitly.
+* A legacy config still holding the placeholder domain `k8s.opencenter.cloud` with an unmodified `cluster_fqdn` adopts the settings domain on load and tags itself `default`. A hand-edited `cluster_fqdn` proves deliberate ownership and self-pins.
+* Once a cluster enters the `bootstrap` (deploy) stage, `base_domain` pins automatically: re-pointing a live cluster's DNS identity is a destructive rename, not a default refresh.
 
 ## Default platform-service namespaces
 

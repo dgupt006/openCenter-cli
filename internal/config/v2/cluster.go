@@ -13,19 +13,89 @@
 
 package v2
 
+import "strings"
+
 // ClusterConfig represents Kubernetes-specific configuration independent of infrastructure.
 // Requirements: 1.4, 3.2, 9.3, 9.4, 9.5
 type ClusterConfig struct {
 	ClusterName string           `yaml:"cluster_name" json:"cluster_name" validate:"required,dns1123"`
 	BaseDomain  string           `yaml:"base_domain" json:"base_domain" validate:"required,fqdn"`
-	ClusterFQDN string           `yaml:"cluster_fqdn" json:"cluster_fqdn" validate:"required,fqdn"`
+	ClusterFQDN string           `yaml:"cluster_fqdn" json:"cluster_fqdn" validate:"omitempty,fqdn"`
 	AdminEmail  string           `yaml:"admin_email" json:"admin_email" validate:"required,email"`
 	Kubernetes  KubernetesConfig `yaml:"kubernetes" json:"kubernetes" validate:"required"`
+
+	// Managed records per-field provenance for fields that CLI settings
+	// (cluster_defaults) can seed. "default" means the settings file owns the
+	// value and changes propagate at config load; "pinned" (the default for
+	// legacy configs) means the cluster owns it and settings changes are
+	// ignored. Absent means pinned.
+	Managed FieldProvenance `yaml:"managed,omitempty" json:"managed,omitempty"`
+
+	// LastGeneratedBaseDomain is the base_domain value the most recent
+	// successful 'cluster generate' rendered with. It distinguishes a
+	// settings-file change (cluster value unchanged since generation) from a
+	// deliberate cluster-side edit, and is stamped automatically.
+	LastGeneratedBaseDomain string `yaml:"last_generated_base_domain,omitempty" json:"last_generated_base_domain,omitempty"`
 
 	// HostnameSubstitution opts the generator into emitting Flux
 	// postBuild.substitute placeholders (e.g. ${CLUSTER_FQDN}) instead of
 	// literal hostnames. Off by default; when disabled the output is unchanged.
 	HostnameSubstitution HostnameSubstitutionConfig `yaml:"hostname_substitution,omitempty" json:"hostname_substitution,omitempty"`
+}
+
+// FieldProvenance records, per field, whether a cluster_defaults-seeded value
+// is owned by the CLI settings file ("default") or by the cluster config
+// ("pinned"). The zero value (empty map) means every field is pinned, which is
+// the safe interpretation for configs written before provenance existed.
+type FieldProvenance struct {
+	BaseDomain string `yaml:"base_domain,omitempty" json:"base_domain,omitempty" jsonschema_validate:"oneof=default pinned"`
+}
+
+// Provenance values for FieldProvenance entries.
+const (
+	// ProvenanceDefault marks a field whose authority is the CLI settings
+	// file; loader hydration re-applies the settings value on every load.
+	ProvenanceDefault = "default"
+	// ProvenancePinned marks a field whose authority is the cluster config;
+	// settings changes never rewrite it.
+	ProvenancePinned = "pinned"
+)
+
+// BaseDomainManaged reports whether base_domain is owned by the settings file.
+func (p FieldProvenance) BaseDomainManaged() bool {
+	return strings.EqualFold(strings.TrimSpace(p.BaseDomain), ProvenanceDefault)
+}
+
+// PinBaseDomain marks base_domain cluster-owned. It is called when the user
+// edits the field (cluster set / hand edit detection) and when the cluster
+// transitions to a deployed stage, because changing the DNS domain of a live
+// cluster is a destructive rename, not a default refresh.
+func (p *FieldProvenance) PinBaseDomain() {
+	p.BaseDomain = ProvenancePinned
+}
+
+// DefaultBaseDomain marks base_domain settings-owned so future
+// cluster_defaults.base_domain changes propagate at load.
+func (p *FieldProvenance) DefaultBaseDomain() {
+	p.BaseDomain = ProvenanceDefault
+}
+
+// DeriveClusterFQDN computes the canonical cluster FQDN
+// (<cluster-name>.<region>.<base_domain>) from the cluster identity. The FQDN
+// is a derivation, never an independent source of truth: loader hydration
+// recomputes it whenever base_domain is settings-owned, so a settings change
+// moves the FQDN and every hostname derived from it together.
+func (c ClusterConfig) DeriveClusterFQDN(region string) string {
+	name := strings.ToLower(strings.TrimSpace(c.ClusterName))
+	base := strings.ToLower(strings.TrimSpace(c.BaseDomain))
+	region = strings.ToLower(strings.TrimSpace(region))
+	if name == "" || base == "" {
+		return ""
+	}
+	if region == "" {
+		return name + "." + base
+	}
+	return name + "." + region + "." + base
 }
 
 // HostnameSubstitutionConfig controls Flux postBuild.substituteFrom rendering.

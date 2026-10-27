@@ -14,6 +14,7 @@ import (
 	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/tofu"
+	"gopkg.in/yaml.v3"
 )
 
 // SetupOptions contains options for cluster setup
@@ -26,6 +27,11 @@ type SetupOptions struct {
 	Prune            *bool
 	AdoptGenerated   bool
 	GitopsAuthMethod string // "ssh" or "token"; when set, overrides BaseRepo URL scheme
+	// SyncBaseDomain adopts the settings-file cluster_defaults.base_domain
+	// into the cluster config (rewriting the derived cluster_fqdn) before
+	// generating. It is the explicit remediation for a pinned cluster whose
+	// settings domain changed; without it, a pinned domain is never touched.
+	SyncBaseDomain bool
 }
 
 // SetupResult contains the result of cluster setup
@@ -35,6 +41,15 @@ type SetupResult struct {
 	ValidationPassed bool
 	Promotion        *gitops.PromoteResult
 	Warnings         []string
+	// BaseDomainDrift is the settings-vs-cluster base_domain divergence
+	// report for this generation run (zero value = aligned).
+	BaseDomainDrift BaseDomainDrift
+	// BaseDomainSynced is true when --sync-base-domain rewrote the cluster
+	// config on disk during this run.
+	BaseDomainSynced bool
+	// BaseDomainSyncedFrom/To describe the applied rewrite.
+	BaseDomainSyncedFrom string
+	BaseDomainSyncedTo   string
 }
 
 type overlayFileEncryptor interface {
@@ -95,6 +110,12 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 	if opts.Organization != "" {
 		configIdentifier = opts.Organization + "/" + opts.ClusterName
 	}
+
+	// The on-disk values are the drift baseline: load-time hydration rewrites
+	// the in-memory config when the settings file owns base_domain, so the
+	// pre-load values must be captured before Load to tell "assets were
+	// generated with X" from "settings now say Y".
+	persistedBaseDomain, persistedFQDN, persistedStamp := persistedClusterIdentity(s, configIdentifier)
 
 	var cfg v2.Config
 	if s.configurationMgr != nil {
@@ -169,6 +190,81 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 		result.ValidationPassed = true
 	}
 
+	// Settings-vs-cluster base_domain divergence. The loader already applied
+	// provenance hydration (managed fields follow the settings file); this is
+	// the report and the explicit remediation path for pinned clusters.
+	settingsBaseDomain := ""
+	if cm, err := config.NewConfigManager(""); err == nil {
+		if cliConfig := cm.GetConfig(); cliConfig != nil {
+			settingsBaseDomain = strings.ToLower(strings.TrimSpace(cliConfig.ClusterDefaults.BaseDomain))
+		}
+	}
+	if settingsBaseDomain == "" {
+		settingsBaseDomain = v2.ReadSettingsBaseDomain()
+	}
+
+	// A managed field propagated by load-time hydration must land on disk at
+	// the same moment the assets that render it are generated; otherwise the
+	// on-disk config disagrees with the GitOps tree. Persist through a
+	// detached copy: the in-memory cfg carries the run-only GitOps auth
+	// override, which must never leak into the cluster config file.
+	persistConfig := func() error {
+		if s.configurationMgr == nil {
+			return fmt.Errorf("persisting the cluster config requires a configuration manager")
+		}
+		persisted := cfg
+		persisted.OpenCenter.GitOps.ResolvedAuthMethod = ""
+		// Stamp the rendered domain: the assets written by this run carry
+		// this value, and the stamp is the drift baseline for the next run.
+		persisted.OpenCenter.Cluster.LastGeneratedBaseDomain = strings.ToLower(
+			strings.TrimSpace(cfg.OpenCenter.Cluster.BaseDomain))
+		if err := s.configurationMgr.Save(ctx, &persisted); err != nil {
+			return err
+		}
+		s.configurationMgr.InvalidateCluster(ctx, configIdentifier)
+		return nil
+	}
+
+	// Detect against the persisted config, not the hydrated in-memory one:
+	// the loader propagates a managed field before this point, so the file
+	// still holds what the last successful generation rendered with. The
+	// report then reads "assets were generated with X, settings now say Y".
+	persisted := cfg
+	if persistedBaseDomain != "" {
+		persisted.OpenCenter.Cluster.BaseDomain = persistedBaseDomain
+		persisted.OpenCenter.Cluster.ClusterFQDN = persistedFQDN
+	}
+	persisted.OpenCenter.Cluster.LastGeneratedBaseDomain = persistedStamp
+	result.BaseDomainDrift = DetectBaseDomainDrift(&persisted, settingsBaseDomain)
+	result.BaseDomainDrift.RenderedBaseDomain = strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Cluster.BaseDomain))
+
+	// A managed field propagated by load-time hydration must land on disk at
+	// the same moment the assets that render it are generated; otherwise the
+	// on-disk config disagrees with the GitOps tree.
+	if result.BaseDomainDrift.Class == BaseDomainFollowsSettings && !opts.DryRun {
+		if err := persistConfig(); err != nil {
+			return nil, fmt.Errorf("persisting settings-propagated base_domain: %w", err)
+		}
+	}
+
+	if opts.SyncBaseDomain {
+		if settingsBaseDomain == "" {
+			return nil, fmt.Errorf("--sync-base-domain requires cluster_defaults.base_domain to be set in the CLI settings file")
+		}
+		from := cfg.OpenCenter.Cluster.BaseDomain
+		changed := v2.SyncBaseDomainFromSettings(&cfg, settingsBaseDomain)
+		if changed && !opts.DryRun {
+			if err := persistConfig(); err != nil {
+				return nil, fmt.Errorf("saving synced base_domain: %w", err)
+			}
+			result.BaseDomainSynced = true
+			result.BaseDomainSyncedFrom = from
+			result.BaseDomainSyncedTo = cfg.OpenCenter.Cluster.BaseDomain
+		}
+	} else if warning := result.BaseDomainDrift.Warning(); warning != "" {
+		result.Warnings = append(result.Warnings, warning)
+	}
+
 	// Generate GitOps manifests from the same staged tree for dry-run and apply.
 	promotion, manifestCount, err := s.generateGitOpsManifestsWithPromotion(ctx, cfg, clusterPaths, opts.DryRun, !opts.SkipValidation, gitops.PromoteOptions{
 		Prune:          opts.Prune,
@@ -182,6 +278,45 @@ func (s *SetupService) Setup(ctx context.Context, opts SetupOptions) (*SetupResu
 	result.Warnings = append(result.Warnings, formatDryRunPromotion(promotion)...)
 
 	return result, nil
+}
+
+// persistedClusterIdentity reads base_domain, cluster_fqdn, and
+// last_generated_base_domain straight from the cluster config file, bypassing
+// the manager cache (which holds the already-hydrated value). Returns empty
+// strings when the file is unreadable.
+func persistedClusterIdentity(s *SetupService, configIdentifier string) (baseDomain, fqdn, stamp string) {
+	if s == nil || s.pathResolver == nil {
+		return "", "", ""
+	}
+	clusterName := configIdentifier
+	organization := ""
+	if idx := strings.Index(configIdentifier, "/"); idx >= 0 {
+		organization = configIdentifier[:idx]
+		clusterName = configIdentifier[idx+1:]
+	}
+	clusterPaths, err := s.pathResolver.Resolve(context.Background(), clusterName, organization)
+	if err != nil {
+		return "", "", ""
+	}
+	data, err := os.ReadFile(clusterPaths.ConfigPath)
+	if err != nil {
+		return "", "", ""
+	}
+	var probe struct {
+		OpenCenter struct {
+			Cluster struct {
+				BaseDomain              string `yaml:"base_domain"`
+				ClusterFQDN             string `yaml:"cluster_fqdn"`
+				LastGeneratedBaseDomain string `yaml:"last_generated_base_domain"`
+			} `yaml:"cluster"`
+		} `yaml:"opencenter"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return "", "", ""
+	}
+	return strings.TrimSpace(probe.OpenCenter.Cluster.BaseDomain),
+		strings.TrimSpace(probe.OpenCenter.Cluster.ClusterFQDN),
+		strings.TrimSpace(probe.OpenCenter.Cluster.LastGeneratedBaseDomain)
 }
 
 func promotionChangeCount(result *gitops.PromoteResult) int {
