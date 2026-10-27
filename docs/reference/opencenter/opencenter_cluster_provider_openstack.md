@@ -20,10 +20,17 @@ networks, subnets, and availability zones read-only, then plans or applies the
 cluster's OpenStack config values from them: image IDs, internal/external
 network and subnet IDs, availability zone, and optionally application credentials and TLS settings.
 
-This command does not deploy the cluster or create remote resources; it only
-writes the cluster's own configuration file. Use 'cluster deploy' for that.
-With --create-internal-network it switches internal networking to
-OpenTofu-managed mode instead of selecting an existing network.
+If the profile has no application credential ID and secret, one is created
+through Keystone, saved back into clouds.yaml (0600, atomically), and written
+into the cluster configuration, so the cluster is bound with a usable identity
+in one step. --create-application-credential forces a fresh credential even
+when the profile already has one.
+
+This command does not deploy the cluster or create remote resources beyond the
+application credential above; it only writes the cluster's own configuration
+file. Use 'cluster deploy' for that. With --create-internal-network it switches
+internal networking to OpenTofu-managed mode instead of selecting an existing
+network.
 
 ### Options
 

@@ -33,11 +33,17 @@ don't already exist, unless --no-keygen is specified.
 With --os-cloud, initialization is followed immediately by the OpenStack
 provider binding: the same discovery-and-apply pass as
 'cluster provider openstack apply', run against the freshly created cluster
-configuration. --os-cloud implies --type openstack. Provider selector flags
-(--clouds-yaml, --image-name, --windows-image-name, --network-id,
---external-network-id, --subnet-id, --availability-zone,
---create-internal-network, --replace, --import-auth, --import-tls) are only
-valid together with --os-cloud and are forwarded to the provider apply pass.
+configuration. --os-cloud implies --type openstack. If the selected profile
+has no application credential ID and secret, one is created through Keystone,
+saved back into clouds.yaml, and written into the cluster configuration, so
+the cluster is ready without a manual credential step. Internal networking
+defaults to OpenTofu-managed (--create-internal-network is the default; pass
+--create-internal-network=false to select an existing network). Provider
+selector flags (--clouds-yaml, --image-name, --windows-image-name,
+--network-id, --external-network-id, --subnet-id, --availability-zone,
+--create-internal-network, --replace, --import-auth, --import-tls,
+--create-application-credential) are only valid together with --os-cloud and
+are forwarded to the provider apply pass.
 
 ```
 opencenter cluster init [name] [flags]
@@ -70,9 +76,9 @@ opencenter cluster init [name] [flags]
   # Overwrite existing config
   opencenter cluster init my-cluster --force
 
-  # Initialize and bind to an OpenStack cloud in one step
-  opencenter cluster init my-cluster --org production --os-cloud prod-profile \
-    --create-internal-network --import-auth --yes
+  # Initialize and bind to an OpenStack cloud in one step (Tofu-managed
+  # internal network and an auto-minted application credential included)
+  opencenter cluster init my-cluster --org production --os-cloud prod-profile --yes
 ```
 
 ### Options

@@ -788,6 +788,142 @@ func TestApplyPersistencePersistsPropagatedRegion(t *testing.T) {
 	}
 }
 
+// TestPlanPropagatesLinuxImageToBastionAndPools pins the end-to-end image
+// contract of 'cluster init --os-cloud': the single resolved Linux image must
+// land in every consumer that stores its own copy — the provider block, the
+// bastion, and every enabled Linux worker pool — and must be persisted by
+// apply, so no instance ever boots from the empty/placeholder image baked at
+// init time.
+func TestPlanPropagatesLinuxImageToBastionAndPools(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cluster.yaml")
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Provider = "openstack"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = true
+	cfg.OpenCenter.Infrastructure.Bastion.Image = ""
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+		{Name: "gpu-workers", Count: 2, Flavor: "gpu-flavor", Image: ""},
+		{Name: "disabled-pool", Count: 0, Flavor: "worker", Image: ""},
+	}
+	originalBytes, err := v2.MarshalPublicConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, originalBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		AuthURL:          "https://identity.example/v3",
+		Region:           "IAD3",
+		ProjectID:        "project-1",
+		Images:           []cloudopenstack.Resource{{ID: "img-ubuntu", Name: "Ubuntu 24.04"}},
+		Networks:         []cloudopenstack.Resource{{ID: "net-1", Name: "cluster-net"}},
+		Subnets:          []cloudopenstack.Subnet{{Resource: cloudopenstack.Resource{ID: "subnet-1", Name: "cluster-subnet"}, NetworkID: "net-1"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "public-1", Name: "public"}},
+	}
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusPlanned {
+		t.Fatalf("status = %q, want planned: warnings=%v", result.Status, result.Warnings)
+	}
+	if prospective.OpenCenter.Infrastructure.Bastion.Image != "img-ubuntu" {
+		t.Fatalf("bastion image = %q, want img-ubuntu", prospective.OpenCenter.Infrastructure.Bastion.Image)
+	}
+	pools := prospective.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker
+	if pools[0].Image != "img-ubuntu" {
+		t.Fatalf("enabled pool image = %q, want img-ubuntu", pools[0].Image)
+	}
+	if pools[1].Image != "" {
+		t.Fatalf("disabled pool image = %q, want untouched", pools[1].Image)
+	}
+	// The caller's config must not be mutated by the propagation.
+	if cfg.OpenCenter.Infrastructure.Bastion.Image != "" {
+		t.Fatalf("plan mutated the caller's bastion image: %q", cfg.OpenCenter.Infrastructure.Bastion.Image)
+	}
+	if cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[0].Image != "" {
+		t.Fatal("plan mutated the caller's pool image")
+	}
+
+	fileSystem := fs.NewDefaultFileSystem(utilerrors.NewDefaultErrorHandlerWithoutMasking())
+	result, err = (ApplyPersistence{FileSystem: fileSystem, Validate: func(context.Context, *v2.Config) error { return nil }}).Apply(context.Background(), path, cfg, prospective, originalBytes, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := v2.DecodePublicConfig(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.OpenCenter.Infrastructure.Bastion.Image != "img-ubuntu" {
+		t.Fatalf("persisted bastion.image = %q, want img-ubuntu", reloaded.OpenCenter.Infrastructure.Bastion.Image)
+	}
+	if reloaded.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[0].Image != "img-ubuntu" {
+		t.Fatalf("persisted pool image = %q, want img-ubuntu", reloaded.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[0].Image)
+	}
+}
+
+// TestPlanPreservesDeliberateBastionAndPoolImagesWithoutReplace proves the
+// propagation only rewrites init-baked (empty/placeholder) follower images:
+// an image the operator set deliberately survives a rebind unless --replace.
+func TestPlanPreservesDeliberateBastionAndPoolImagesWithoutReplace(t *testing.T) {
+	cfg, err := v2.NewV2Default("prod", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Provider = "openstack"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
+	cfg.OpenCenter.Infrastructure.Bastion.Enabled = true
+	cfg.OpenCenter.Infrastructure.Bastion.Image = "my-custom-image"
+	cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = []v2.WorkerPoolConfig{
+		{Name: "gpu-workers", Count: 1, Flavor: "gpu-flavor", Image: "my-pool-image"},
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		Region:           "IAD3",
+		Images:           []cloudopenstack.Resource{{ID: "img-ubuntu", Name: "Ubuntu 24.04"}},
+		Networks:         []cloudopenstack.Resource{{ID: "net-1", Name: "cluster-net"}},
+		Subnets:          []cloudopenstack.Subnet{{Resource: cloudopenstack.Resource{ID: "subnet-1", Name: "cluster-subnet"}, NetworkID: "net-1"}},
+		ExternalNetworks: []cloudopenstack.Resource{{ID: "public-1", Name: "public"}},
+	}
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Bastion.Image; got != "my-custom-image" {
+		t.Fatalf("deliberate bastion image overwritten without --replace: %q", got)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[0].Image; got != "my-pool-image" {
+		t.Fatalf("deliberate pool image overwritten without --replace: %q", got)
+	}
+	warnings := strings.Join(result.Warnings, "\n")
+	if !strings.Contains(warnings, "opencenter.infrastructure.bastion.image is populated with \"my-custom-image\"") {
+		t.Fatalf("warnings do not name the protected bastion image:\n%s", warnings)
+	}
+
+	// With --replace the followers are repointed to the resolved image.
+	result, prospective, err = Plan(context.Background(), cfg, snapshot, Options{Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status == StatusBlocked {
+		t.Fatalf("replace plan blocked: %v", result.Warnings)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Bastion.Image; got != "img-ubuntu" {
+		t.Fatalf("bastion image with --replace = %q, want img-ubuntu", got)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[0].Image; got != "img-ubuntu" {
+		t.Fatalf("pool image with --replace = %q, want img-ubuntu", got)
+	}
+}
+
 func TestPlanExcludesExternalNetworksFromInternalSelection(t *testing.T) {
 	cfg, err := v2.NewV2Default("prod", "openstack")
 	if err != nil {

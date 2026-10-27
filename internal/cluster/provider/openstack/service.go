@@ -56,6 +56,14 @@ type AuthImport struct {
 	ApplicationCredentialSecret string
 }
 
+// EnsureProfileAuth is the seam through which the command layer obtains a
+// persistable application credential for a cloud profile, minting and
+// persisting one into clouds.yaml when the profile lacks an ID/secret pair.
+// Tests replace it to exercise the auto-import flow without a live Keystone.
+var EnsureProfileAuth = func(ctx context.Context, profile cloudopenstack.Profile, name string) (cloudopenstack.AppCredential, cloudopenstack.Profile, error) {
+	return cloudopenstack.EnsureApplicationCredential(ctx, profile, cloudopenstack.NewAppCredentialProvisioner(), name)
+}
+
 type Options struct {
 	ImageName             string
 	WindowsImageName      string
@@ -128,6 +136,7 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		result.Warnings = append(result.Warnings, fmt.Sprintf("no --image-name specified; defaulting to %q (%s) discovered in this project", DefaultLinuxImageName, resolveSelector(snapshot.Images, DefaultLinuxImageName).resource.ID))
 	}
 	prospective := cloneProviderConfig(cfg)
+	cloneBastionAndPools(prospective)
 	osCfg := prospective.OpenCenter.Infrastructure.Cloud.OpenStack
 	changes := make([]Change, 0)
 	blocked := false
@@ -288,12 +297,16 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		blocked = true
 		result.Warnings = append(result.Warnings, "no viable Linux image was discovered; specify --image-name or provide a profile with an image")
 	}
+	// resolvedLinuxImage is the Linux image this plan binds the cluster to;
+	// the bastion and Linux worker pool propagation below reads it.
+	var resolvedLinuxImage cloudopenstack.Resource
 	if selected, ok, ambiguous, err := chooseResource("image", osCfg.ImageID, opts.ImageName, snapshot.Images, opts.Replace); err != nil {
 		return result, cfg, err
 	} else if ambiguous {
 		ambiguousSelection(&result, "image", "--image-name", "opencenter.infrastructure.cloud.openstack.image_id", snapshot.Images)
 		blocked = true
 	} else if ok {
+		resolvedLinuxImage = selected
 		set("opencenter.infrastructure.cloud.openstack.image_id", &osCfg.ImageID, selected.ID, false)
 		set("opencenter.infrastructure.cloud.openstack.image_name", &osCfg.ImageName, selected.Name, false)
 	}
@@ -309,6 +322,44 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 			blocked = true
 		} else if ok {
 			set("opencenter.infrastructure.cloud.openstack.image_id_windows", &osCfg.ImageIDWindows, selected.ID, false)
+		}
+	}
+	// Propagate the resolved Linux image to every consumer that stores its
+	// own copy of it. The provider block (image_id) is only what OpenTofu
+	// renders for the control plane and main worker nodes; the bastion and
+	// each Linux worker pool carry independent image fields, and `cluster
+	// init` bakes provider-default (often project-scoped placeholder) image
+	// IDs into both long before any cloud is chosen. A cluster bound to a
+	// real cloud would otherwise boot bastion and pool nodes from a dead
+	// image ID belonging to another project.
+	//
+	// The propagation follows the region-follower rules above: a follower
+	// image that is empty or placeholder-shaped is a stale init guess and is
+	// corrected silently; an image the operator set deliberately survives
+	// unless --replace. Disabled pools are skipped — their baked image is
+	// inert, and rewriting it would be noise in every plan.
+	if resolvedLinuxImage.ID != "" {
+		propagateLinuxImage := func(path string, current *string) {
+			currentValue := strings.TrimSpace(*current)
+			if currentValue == resolvedLinuxImage.ID {
+				return
+			}
+			if !isDerived(currentValue) && !opts.Replace {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s is populated with %q; the resolved Linux image is %q; use --replace to repoint it", path, currentValue, resolvedLinuxImage.ID))
+				return
+			}
+			*current = resolvedLinuxImage.ID
+			changes = append(changes, Change{Path: path, Old: currentValue, New: resolvedLinuxImage.ID})
+		}
+		if prospective.OpenCenter.Infrastructure.Bastion.Enabled {
+			propagateLinuxImage("opencenter.infrastructure.bastion.image", &prospective.OpenCenter.Infrastructure.Bastion.Image)
+		}
+		for i := range prospective.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker {
+			pool := &prospective.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker[i]
+			if pool.Count <= 0 {
+				continue
+			}
+			propagateLinuxImage(fmt.Sprintf("opencenter.infrastructure.compute.additional_server_pools_worker[%d].image", i), &pool.Image)
 		}
 	}
 	if opts.CreateInternalNetwork {
@@ -595,6 +646,22 @@ func cloneProviderConfig(cfg *v2.Config) *v2.Config {
 		copyCfg.OpenCenter.Infrastructure.Cloud.OpenStack.Networking = &networking
 	}
 	return &copyCfg
+}
+
+// cloneBastionAndPools detaches the fields Plan rewrites OUTSIDE the
+// OpenStack provider block — infrastructure.bastion.image and each Linux
+// worker pool's image — from the caller's config. cloneProviderConfig only
+// deep-copies the provider block, so without this the writes below would
+// mutate the caller's (and, after apply, the on-disk baseline's) bastion
+// struct and pool slice in place. Bastion is a value struct reached through
+// the copied Infrastructure value, so copying the slice header of the pools
+// into a fresh backing array is what needs doing.
+func cloneBastionAndPools(cfg *v2.Config) {
+	if cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker != nil {
+		pools := make([]v2.WorkerPoolConfig, len(cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker))
+		copy(pools, cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker)
+		cfg.OpenCenter.Infrastructure.Compute.AdditionalServerPoolsWorker = pools
+	}
 }
 
 func ensureNetworking(cfg *v2.OpenStackCloudConfig) {

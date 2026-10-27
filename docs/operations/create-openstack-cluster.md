@@ -41,11 +41,13 @@ opencenter cluster provider openstack apply my-org/demo --os-cloud PROFILE
 blueprint and then runs the apply pass against it (selector flags such as
 `--create-internal-network` and `--import-auth` are accepted and forwarded).
 
-The plan is read-only. Selectors include image, internal/external network,
-subnet, and availability zone; each accepts a resource name or ID (`--image-name`,
-`--windows-image-name`, `--network-id`, `--subnet-id`, `--external-network-id`,
-`--availability-zone`) and persists the resolved ID. `--create-internal-network`
-chooses the OpenTofu-managed internal-network mode and must be passed to both operations.
+The plan is read-only. Internal networking is OpenTofu-managed by default:
+`--create-internal-network` is on unless you pass `--create-internal-network=false`,
+which opts into selecting an existing network. Selectors include image,
+internal/external network, subnet, and availability zone; each accepts a
+resource name or ID (`--image-name`, `--windows-image-name`, `--network-id`,
+`--subnet-id`, `--external-network-id`, `--availability-zone`) and persists the
+resolved ID. The mode flag must be passed identically to plan and apply.
 The profile's region (`region_name`, or `OS_REGION_NAME` when the profile omits
 it) is authoritative: plan and apply repoint `infrastructure.cloud.openstack.region`,
 `meta.region`, and the Barbican region to it, correcting the region baked by
@@ -53,6 +55,16 @@ it) is authoritative: plan and apply repoint `infrastructure.cloud.openstack.reg
 `--replace`. `--replace` allows replacement of populated values; `--import-auth`
 and `--import-tls` import selected profile settings. Apply prompts in text mode;
 global `--yes` is available for non-interactive use.
+
+Two values propagate beyond the provider block. The resolved Linux image is
+written to every consumer of it — `infrastructure.bastion.image` (when the
+bastion is enabled) and each enabled Linux worker pool — unless the follower
+holds a deliberately-set image, which `--replace` repoints. An application
+credential is minted and imported automatically when the profile has no
+ID/secret pair: the pair is created through Keystone, persisted back into
+`clouds.yaml` (atomically, mode 0600), and stored in the cluster config.
+`--create-application-credential` forces a fresh credential (rotation) even
+when the profile already has one.
 
 ## Validate, render, and deploy
 

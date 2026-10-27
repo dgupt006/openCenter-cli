@@ -66,6 +66,35 @@ func TestClusterInitOpenStackBindingFlagValidation(t *testing.T) {
 		}
 	})
 
+	// --create-internal-network is the default binding mode: an --os-cloud
+	// run without the flag must still plan the OpenTofu-managed network, and
+	// only an explicit =false opts back into existing-network selection.
+	t.Run("create-internal-network defaults on", func(t *testing.T) {
+		cmd := newClusterInitCmd()
+		if err := cmd.Flags().Parse([]string{"--os-cloud", "prod"}); err != nil {
+			t.Fatal(err)
+		}
+		flags, err := parseInitProviderBindingFlags(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !flags.createInternalNetwork {
+			t.Fatalf("create-internal-network must default on: %+v", *flags)
+		}
+
+		cmd = newClusterInitCmd()
+		if err := cmd.Flags().Parse([]string{"--os-cloud", "prod", "--create-internal-network=false"}); err != nil {
+			t.Fatal(err)
+		}
+		flags, err = parseInitProviderBindingFlags(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if flags.createInternalNetwork {
+			t.Fatalf("--create-internal-network=false must opt out: %+v", *flags)
+		}
+	})
+
 	t.Run("selector flag without os-cloud is rejected", func(t *testing.T) {
 		cmd := newClusterInitCmd()
 		if err := cmd.Flags().Parse([]string{"--create-internal-network"}); err != nil {
@@ -99,8 +128,11 @@ func TestClusterInitOpenStackBindingFlagValidation(t *testing.T) {
 
 // TestClusterInitOpenStackBindingPreflightWritesNothing proves an unusable
 // cloud profile fails 'cluster init --os-cloud' before any cluster file is
-// written: neither a missing clouds.yaml nor a name-only application
-// credential with --import-auth may leave a half-created cluster behind.
+// written: a missing clouds.yaml, or an unknown profile, may not leave a
+// half-created cluster behind. A profile WITHOUT a persistable application
+// credential is the opposite case and is covered here too: preflight must
+// accept it (the apply pass mints the credential), and must not touch
+// clouds.yaml before the apply seam runs.
 func TestClusterInitOpenStackBindingPreflightWritesNothing(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -116,11 +148,11 @@ func TestClusterInitOpenStackBindingPreflightWritesNothing(t *testing.T) {
 			wantMessage: "read clouds.yaml",
 		},
 		{
-			name:        "name-only application credential with --import-auth",
+			name:        "unknown profile",
 			cloudsFile:  "clouds.yaml",
-			cloudsBody:  "clouds:\n  prod:\n    region_name: IAD3\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n      application_credential_name: only-name\n      application_credential_secret: s\n",
-			extraArgs:   []string{"--import-auth"},
-			wantMessage: "--import-auth requires an application credential ID and secret",
+			cloudsBody:  "clouds:\n  other:\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n",
+			extraArgs:   nil,
+			wantMessage: `cloud profile "prod" not found`,
 		},
 	}
 	for _, tt := range tests {
@@ -164,6 +196,49 @@ func TestClusterInitOpenStackBindingPreflightWritesNothing(t *testing.T) {
 				t.Fatalf("expected no cluster config after preflight failure, stat err = %v", statErr)
 			}
 		})
+	}
+}
+
+// TestClusterInitOpenStackBindingPreflightAcceptsCredentiallessProfile proves
+// the preflight does not gate on a missing application credential: a
+// username/password profile passes preflight, init runs, and the apply seam —
+// not the preflight — owns credential minting. clouds.yaml stays untouched
+// before the seam.
+func TestClusterInitOpenStackBindingPreflightAcceptsCredentiallessProfile(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+	cloudsPath := filepath.Join(dir, "clouds.yaml")
+	body := "clouds:\n  prod:\n    region_name: IAD3\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n      username: u\n      password: p\n      project_name: proj\n"
+	if err := os.WriteFile(cloudsPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := runInitProviderOpenStackApply
+	seamCalled := false
+	runInitProviderOpenStackApply = func(*cobra.Command, string, bool, string, providerOpenStackFlags) error {
+		seamCalled = true
+		return nil
+	}
+	t.Cleanup(func() { runInitProviderOpenStackApply = original })
+
+	cmd := newClusterInitCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"bind-me", "--org", "acme", "--no-keygen",
+		"--os-cloud", "prod", "--clouds-yaml", cloudsPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v\nstderr: %s", err, stderr.String())
+	}
+	if !seamCalled {
+		t.Fatal("provider apply pass must run for a credentialless profile")
+	}
+	data, err := os.ReadFile(cloudsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != body {
+		t.Fatalf("preflight modified clouds.yaml before the apply pass:\n%s", data)
 	}
 }
 

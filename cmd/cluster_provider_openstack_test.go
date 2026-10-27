@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	cloudopenstack "github.com/opencenter-cloud/opencenter-cli/internal/cloud/openstack"
 	provideropenstack "github.com/opencenter-cloud/opencenter-cli/internal/cluster/provider/openstack"
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
+	testhelpers "github.com/opencenter-cloud/opencenter-cli/internal/testing"
 
 	"github.com/spf13/cobra"
 )
@@ -29,7 +32,7 @@ func TestClusterProviderOpenStackCommandHierarchy(t *testing.T) {
 		if err != nil || operationCmd == nil {
 			t.Fatalf("cluster provider openstack %s command not registered: command=%v err=%v", operation, operationCmd, err)
 		}
-		for _, flag := range []string{"os-cloud", "clouds-yaml", "image-name", "windows-image-name", "network-id", "external-network-id", "subnet-id", "availability-zone", "replace", "import-auth", "import-tls"} {
+		for _, flag := range []string{"os-cloud", "clouds-yaml", "image-name", "windows-image-name", "network-id", "external-network-id", "subnet-id", "availability-zone", "replace", "import-auth", "import-tls", "create-application-credential"} {
 			if operationCmd.Flags().Lookup(flag) == nil {
 				t.Fatalf("%s missing --%s", operation, flag)
 			}
@@ -127,7 +130,9 @@ func TestClusterProviderOpenStackCreateInternalNetworkFlagIsShared(t *testing.T)
 			t.Fatalf("find %s: command=%v err=%v", operation, operationCmd, err)
 		}
 		flag := operationCmd.Flags().Lookup("create-internal-network")
-		if flag == nil || flag.DefValue != "false" {
+		// The flag defaults ON: OpenTofu-managed internal networking is the
+		// recommended mode, and existing-network selection is the opt-out.
+		if flag == nil || flag.DefValue != "true" {
 			t.Fatalf("%s missing shared --create-internal-network flag: %#v", operation, flag)
 		}
 	}
@@ -147,5 +152,112 @@ func TestWriteProviderOpenStackOutputIncludesInternalNetworkMode(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Internal network mode: tofu-managed") {
 		t.Fatalf("text output = %q", stdout.String())
+	}
+}
+
+// saveOpenStackConfigForCommandTest writes a minimal openstack-provider
+// cluster config so runClusterProviderOpenStack can plan against it.
+func saveOpenStackConfigForCommandTest(t *testing.T, dir, clusterName, organization string) {
+	t.Helper()
+	resolver, clusterPaths := createClusterDirectoriesForTest(t, dir, clusterName, organization)
+	cfgPtr, err := v2.NewV2Default(clusterName, "openstack")
+	if err != nil {
+		t.Fatalf("create native v2 openstack config: %v", err)
+	}
+	cfg := *cfgPtr
+	cfg.OpenCenter.Meta.Name = clusterName
+	cfg.OpenCenter.Meta.Organization = organization
+	cfg.OpenCenter.Infrastructure.Provider = "openstack"
+	cfg.OpenCenter.GitOps.Repository.LocalDir = clusterPaths.GitOpsDir
+	testhelpers.SaveConfigWithPathResolver(t, cfg, resolver)
+}
+
+// TestProviderOpenStackEnsuresCredentialBeforeDiscovery pins the auth half of
+// the --os-cloud contract: a profile without an application credential pair
+// gets one minted (through the EnsureProfileAuth seam) BEFORE any remote
+// call, so a bare 'cluster init --os-cloud' must not leave the readiness gate
+// complaining about missing application_credential_id/secret.
+func TestProviderOpenStackEnsuresCredentialBeforeDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+	saveOpenStackConfigForCommandTest(t, dir, "prod", "acme")
+	cloudsPath := filepath.Join(dir, "clouds.yaml")
+	body := "clouds:\n  prod:\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n      username: u\n      password: p\n"
+	if err := os.WriteFile(cloudsPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := provideropenstack.EnsureProfileAuth
+	ensureCalls := 0
+	provideropenstack.EnsureProfileAuth = func(_ context.Context, profile cloudopenstack.Profile, name string) (cloudopenstack.AppCredential, cloudopenstack.Profile, error) {
+		ensureCalls++
+		if name == "" {
+			return cloudopenstack.AppCredential{}, profile, errors.New("default credential name not passed")
+		}
+		profile.AppCredID = "minted-id"
+		profile.AppCredSecret = "minted-secret"
+		return cloudopenstack.AppCredential{ID: profile.AppCredID, Secret: profile.AppCredSecret}, profile, nil
+	}
+	t.Cleanup(func() { provideropenstack.EnsureProfileAuth = original })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	err := runClusterProviderOpenStack(cmd, "plan", false, "acme/prod", providerOpenStackFlags{
+		cloudName: "prod", cloudsYAML: cloudsPath,
+	})
+	// Discovery fails against the invalid auth_url; what matters is that the
+	// credential step ran first and did not block the flow.
+	if ensureCalls != 1 {
+		t.Fatalf("EnsureProfileAuth calls = %d, want 1 (err=%v)", ensureCalls, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "discover OpenStack provider inventory") {
+		t.Fatalf("error = %v, want discovery to be attempted after minting", err)
+	}
+	// The plan pass itself must never rewrite clouds.yaml.
+	data, readErr := os.ReadFile(cloudsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != body {
+		t.Fatalf("plan modified clouds.yaml:\n%s", data)
+	}
+}
+
+// TestProviderOpenStackMintsOnCreateApplicationCredentialEvenWithPair proves
+// --create-application-credential forces rotation: a profile that already has
+// a pair still goes through the minting seam, and without the flag an
+// existing pair must not trigger minting.
+func TestProviderOpenStackMintsOnCreateApplicationCredentialEvenWithPair(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+	saveOpenStackConfigForCommandTest(t, dir, "prod", "acme")
+	cloudsPath := filepath.Join(dir, "clouds.yaml")
+	if err := os.WriteFile(cloudsPath, []byte("clouds:\n  prod:\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n      application_credential_id: old-id\n      application_credential_secret: old-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := provideropenstack.EnsureProfileAuth
+	ensureCalls := 0
+	provideropenstack.EnsureProfileAuth = func(_ context.Context, profile cloudopenstack.Profile, _ string) (cloudopenstack.AppCredential, cloudopenstack.Profile, error) {
+		ensureCalls++
+		return cloudopenstack.AppCredential{ID: "fresh", Secret: "fresh"}, profile, nil
+	}
+	t.Cleanup(func() { provideropenstack.EnsureProfileAuth = original })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	err := runClusterProviderOpenStack(cmd, "plan", false, "acme/prod", providerOpenStackFlags{
+		cloudName: "prod", cloudsYAML: cloudsPath, createApplicationCredential: true,
+	})
+	if ensureCalls != 1 {
+		t.Fatalf("EnsureProfileAuth calls = %d, want 1 (err=%v)", ensureCalls, err)
+	}
+
+	ensureCalls = 0
+	err = runClusterProviderOpenStack(cmd, "plan", false, "acme/prod", providerOpenStackFlags{
+		cloudName: "prod", cloudsYAML: cloudsPath,
+	})
+	if ensureCalls != 0 {
+		t.Fatalf("EnsureProfileAuth calls = %d, want 0 without the flag (err=%v)", ensureCalls, err)
 	}
 }

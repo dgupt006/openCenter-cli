@@ -61,11 +61,17 @@ don't already exist, unless --no-keygen is specified.
 With --os-cloud, initialization is followed immediately by the OpenStack
 provider binding: the same discovery-and-apply pass as
 'cluster provider openstack apply', run against the freshly created cluster
-configuration. --os-cloud implies --type openstack. Provider selector flags
-(--clouds-yaml, --image-name, --windows-image-name, --network-id,
---external-network-id, --subnet-id, --availability-zone,
---create-internal-network, --replace, --import-auth, --import-tls) are only
-valid together with --os-cloud and are forwarded to the provider apply pass.`,
+configuration. --os-cloud implies --type openstack. If the selected profile
+has no application credential ID and secret, one is created through Keystone,
+saved back into clouds.yaml, and written into the cluster configuration, so
+the cluster is ready without a manual credential step. Internal networking
+defaults to OpenTofu-managed (--create-internal-network is the default; pass
+--create-internal-network=false to select an existing network). Provider
+selector flags (--clouds-yaml, --image-name, --windows-image-name,
+--network-id, --external-network-id, --subnet-id, --availability-zone,
+--create-internal-network, --replace, --import-auth, --import-tls,
+--create-application-credential) are only valid together with --os-cloud and
+are forwarded to the provider apply pass.`,
 		Example: `  # Initialize with defaults
   opencenter cluster init my-cluster
 
@@ -90,9 +96,9 @@ valid together with --os-cloud and are forwarded to the provider apply pass.`,
   # Overwrite existing config
   opencenter cluster init my-cluster --force
 
-  # Initialize and bind to an OpenStack cloud in one step
-  opencenter cluster init my-cluster --org production --os-cloud prod-profile \
-    --create-internal-network --import-auth --yes`,
+  # Initialize and bind to an OpenStack cloud in one step (Tofu-managed
+  # internal network and an auto-minted application credential included)
+  opencenter cluster init my-cluster --org production --os-cloud prod-profile --yes`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runClusterInit,
 	}
@@ -112,7 +118,7 @@ valid together with --os-cloud and are forwarded to the provider apply pass.`,
 	cmd.Flags().Bool(kindDisableDefaultCNIFlagName, false, "disable Kind's default CNI so cluster networking is managed by openCenter")
 	cmd.Flags().StringArray("server-pool", []string{}, "additional server pool configuration")
 	cmd.Flags().String("os-cloud", "", "after init, bind the cluster to this clouds.yaml profile (implies --type openstack)")
-	registerProviderOpenStackFlags(cmd, &providerOpenStackFlags{})
+	registerProviderOpenStackFlags(cmd, &providerOpenStackFlags{createInternalNetwork: true})
 	_ = cmd.Flags().MarkHidden("clouds-yaml")
 	_ = cmd.Flags().MarkHidden("image-name")
 	_ = cmd.Flags().MarkHidden("windows-image-name")
@@ -123,6 +129,7 @@ valid together with --os-cloud and are forwarded to the provider apply pass.`,
 	_ = cmd.Flags().MarkHidden("create-internal-network")
 	_ = cmd.Flags().MarkHidden("replace")
 	_ = cmd.Flags().MarkHidden("import-auth")
+	_ = cmd.Flags().MarkHidden("create-application-credential")
 	_ = cmd.Flags().MarkHidden("import-tls")
 
 	return cmd
@@ -148,9 +155,9 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Fail before writing anything if the requested cloud profile cannot be
-	// used: a missing/unreadable clouds.yaml, an unknown profile, or an
-	// --import-auth profile without a persistable credential pair must not
-	// leave a half-created cluster behind.
+	// used: a missing/unreadable clouds.yaml or an unknown profile must not
+	// leave a half-created cluster behind. A profile without an application
+	// credential is fine — the apply pass mints one.
 	if flags != nil {
 		if err := preflightInitProviderBinding(flags); err != nil {
 			return err
@@ -175,18 +182,18 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 
 // preflightInitProviderBinding validates everything runClusterProviderOpenStack
 // checks before its first remote call, so 'cluster init --os-cloud' fails with
-// no cluster files written when the profile is unusable.
+// no cluster files written when the profile is unusable: a missing/unreadable
+// clouds.yaml or an unknown profile. A profile without a persistable
+// application credential is NOT a preflight failure — the apply pass mints one
+// through Keystone and persists it back to clouds.yaml — so the preflight
+// deliberately performs no credential check and no credential write.
 func preflightInitProviderBinding(flags *providerOpenStackFlags) error {
 	cloudsPath := strings.TrimSpace(flags.cloudsYAML)
 	if cloudsPath == "" {
 		cloudsPath = cloudopenstack.DefaultCloudsYAMLPath()
 	}
-	profile, err := cloudopenstack.LoadProfile(cloudsPath, flags.cloudName)
-	if err != nil {
+	if _, err := cloudopenstack.LoadProfile(cloudsPath, flags.cloudName); err != nil {
 		return err
-	}
-	if flags.importAuth && (strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "") {
-		return NewExitError(2, "--import-auth requires an application credential ID and secret; name-only application credentials cannot be persisted", nil)
 	}
 	return nil
 }
@@ -312,6 +319,7 @@ var providerOpenStackSelectorFlagNames = []string{
 	"clouds-yaml", "image-name", "windows-image-name", "network-id",
 	"external-network-id", "subnet-id", "availability-zone",
 	"create-internal-network", "replace", "import-auth", "import-tls",
+	"create-application-credential",
 }
 
 // parseInitProviderBindingFlags reads --os-cloud and the hidden provider
@@ -350,6 +358,7 @@ func parseInitProviderBindingFlags(cmd *cobra.Command) (*providerOpenStackFlags,
 	flags.replace = getBool("replace")
 	flags.importAuth = getBool("import-auth")
 	flags.importTLS = getBool("import-tls")
+	flags.createApplicationCredential = getBool("create-application-credential")
 	return flags, nil
 }
 

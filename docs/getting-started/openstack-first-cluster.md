@@ -26,12 +26,25 @@ To create the configuration and bind it to a cloud in one step, pass
 `--os-cloud` (it implies `--type openstack`). Initialization is followed
 immediately by the same discovery-and-apply pass as
 `cluster provider openstack apply`, including its confirmation prompt
-(`--yes` skips it):
+(`--yes` skips it). Internal networking is OpenTofu-managed by default, so
+no network flags are needed:
 
 ```bash
-opencenter cluster init demo --org my-org --os-cloud my-profile \
-  --create-internal-network --import-auth --yes
+opencenter cluster init demo --org my-org --os-cloud my-profile --yes
 ```
+
+The one-step flow needs no pre-created application credential. If the
+clouds.yaml profile has no credential ID and secret (the usual case for a
+username/password profile), openCenter creates one through Keystone, saves it
+back into `clouds.yaml` (atomically, mode 0600), and writes it into the
+cluster config — the values readiness, OpenTofu, and the rendered services
+authenticate with. `--create-application-credential` forces a fresh credential
+even when the profile already has one.
+
+The single resolved Linux image (default: `Ubuntu 24.04` resolved against the
+project's Glance inventory) is propagated everywhere an image is stored: the
+provider block, `infrastructure.bastion.image`, and every enabled Linux worker
+pool. No instance boots from an init-baked placeholder.
 
 The generated v2 file lives at:
 
@@ -82,30 +95,37 @@ With no `--image-name`, plan resolves the name `Ubuntu 24.04` against the live
 project inventory and reports it as a warning. It is a name preference, not a
 baked-in image ID: if the project does not have that image, plan falls back to
 printing every candidate and blocks until you choose one. `--windows-image-name`
-is only required when the cluster actually runs Windows workers. If the generated
-infrastructure should own the internal network and subnet, use:
-
-```bash
-opencenter cluster provider openstack plan my-org/demo \
-  --os-cloud my-profile --create-internal-network
-```
+is only required when the cluster actually runs Windows workers. Internal
+networking defaults to OpenTofu-managed (`--create-internal-network` is on by
+default), so the plain `plan`/`apply` command above already uses it.
 
 In this mode OpenTofu creates a dedicated tenant network, subnet, router,
-and VRRP port for the cluster. Leave `network_id` and `subnet_id` empty. This
+and VRRP port for the cluster. `network_id` and `subnet_id` are cleared. This
 is the recommended mode when multiple clusters share the same project, because
 it avoids two clusters' routers competing on a shared subnet.
 
-That mode cannot be combined with `--network-id` or `--subnet-id`. If those
-fields are already populated, add `--replace` to clear them.
+To select an **existing** network instead, opt out explicitly and name the
+network:
+
+```bash
+opencenter cluster provider openstack plan my-org/demo \
+  --os-cloud my-profile --create-internal-network=false \
+  --network-id cluster-net --subnet-id cluster-subnet
+```
+
+The opt-out cannot be combined with `--network-id`/`--subnet-id` left unset
+for long — plan blocks until a network is selected — and if `network_id` or
+`subnet_id` are already populated in tofu-managed mode, add `--replace` to
+clear them.
 
 ### Choosing the right mode
 
 | Mode | When to use |
 |------|-------------|
-| existing `--network-id` / `--subnet-id` | The tenant has a dedicated, single-cluster network managed outside OpenTofu |
-| `--create-internal-network` | Multiple clusters in the same project, or you want full OpenTofu ownership of networking |
+| `--create-internal-network` (**default**) | Multiple clusters in the same project, or you want full OpenTofu ownership of networking |
+| `--create-internal-network=false` + `--network-id` / `--subnet-id` | The tenant has a dedicated, single-cluster network managed outside OpenTofu |
 
-Using an existing shared subnet without `--create-internal-network` will cause
+Using an existing shared subnet with the opt-out will cause
 OpenTofu to create a second router interface on that subnet, which fails with
 `IpAddressAlreadyAllocated` if another router is already attached.
 
@@ -114,25 +134,27 @@ OpenTofu to create a second router interface on that subnet, which fails with
 Apply writes the planned selections to the cluster configuration file:
 
 ```bash
-# Using an existing network
+# Default: OpenTofu manages the internal network
 opencenter cluster provider openstack apply my-org/demo \
-  --os-cloud my-profile --image-name "Ubuntu 24.04" --network-id cluster-net \
-  --external-network-id PUBLICNET --subnet-id cluster-subnet
-
-# Letting OpenTofu manage the internal network
-opencenter cluster provider openstack apply my-org/demo \
-  --os-cloud my-profile --create-internal-network --replace \
+  --os-cloud my-profile --replace \
   --image-name "Ubuntu 24.04" --windows-image-name "Windows Server 2022"
+
+# Opt-out: bind to an existing network
+opencenter cluster provider openstack apply my-org/demo \
+  --os-cloud my-profile --create-internal-network=false \
+  --image-name "Ubuntu 24.04" --network-id cluster-net \
+  --external-network-id PUBLICNET --subnet-id cluster-subnet
 ```
 
-`--import-auth` copies the application credential ID and secret from the
-clouds.yaml profile into the cluster config so they never appear in plain
-text on the command line. Always prefer it over pasting credential values
-manually:
+`--import-auth` writes the application credential ID and secret into the
+cluster config so they never appear in plain text on the command line. It is
+now the default whenever the profile has (or just received) a persistable
+pair; passing it explicitly stays harmless. Always prefer it over pasting
+credential values manually:
 
 ```bash
 opencenter cluster provider openstack apply my-org/demo \
-  --os-cloud my-profile --import-auth --yes
+  --os-cloud my-profile --yes
 ```
 
 `--replace` permits replacing already-populated selections. `--yes` is

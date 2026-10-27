@@ -28,7 +28,7 @@ Most commands return an error from their `RunE`, and the root command maps it to
 
 ### Examples of code `2` usage sites
 
-`cmd/cluster_provider_openstack.go` and `cmd/cluster_service_storage.go` both return `NewExitError(2, ...)` for: missing `--os-cloud`, invalid cluster identifier, decode/config-load failures, provider mismatch (command requires `provider: openstack` but the cluster is configured for a different provider), conflicting flag combinations (e.g. `--create-internal-network` with `--network-id`/`--subnet-id`), `--import-auth` without a full application credential, a blocked plan, and a structured apply invoked without `--yes`.
+`cmd/cluster_provider_openstack.go` and `cmd/cluster_service_storage.go` both return `NewExitError(2, ...)` for: missing `--os-cloud`, invalid cluster identifier, decode/config-load failures, provider mismatch (command requires `provider: openstack` but the cluster is configured for a different provider), conflicting flag combinations (e.g. `--create-internal-network` with `--network-id`/`--subnet-id`), a blocked plan, and a structured apply invoked without `--yes`. For the provider command, a profile that lacks an application credential no longer exits 2: the credential is minted through Keystone and persisted to clouds.yaml, and a failure of that mint surfaces as a regular (non-exit-2) error.
 
 ## `opencenter secrets validate` -- a separate exit-code contract
 

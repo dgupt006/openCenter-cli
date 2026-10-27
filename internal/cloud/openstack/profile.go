@@ -39,6 +39,11 @@ type Profile struct {
 	Key           string
 	Insecure      bool
 	Verify        *bool
+	// SourcePath is the clouds.yaml the profile was loaded from. It is the
+	// only writable handle the profile carries, used by
+	// EnsureApplicationCredential to persist a minted credential back to the
+	// same file the operator selected with --os-cloud.
+	SourcePath string
 }
 
 type providerCloudsFile struct {
@@ -104,7 +109,7 @@ func LoadProfile(path, name string) (Profile, error) {
 		return Profile{}, fmt.Errorf("cloud profile %q has no auth.auth_url", name)
 	}
 	return Profile{
-		Name: name, AuthURL: strings.TrimSpace(selected.Auth.AuthURL), Username: selected.Auth.Username,
+		Name: name, SourcePath: path, AuthURL: strings.TrimSpace(selected.Auth.AuthURL), Username: selected.Auth.Username,
 		UserID: selected.Auth.UserID, Password: selected.Auth.Password, ProjectID: selected.Auth.ProjectID,
 		ProjectName: selected.Auth.ProjectName, Region: profileRegionName(selected.RegionName), S3Endpoint: selected.S3Endpoint, Interface: selected.Interface,
 		DomainName: selected.Auth.DomainName, UserDomain: selected.Auth.UserDomainName,

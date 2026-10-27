@@ -20,18 +20,19 @@ import (
 )
 
 type providerOpenStackFlags struct {
-	cloudName             string
-	cloudsYAML            string
-	imageName             string
-	windowsImageName      string
-	networkID             string
-	externalNetworkID     string
-	subnetID              string
-	availabilityZone      string
-	createInternalNetwork bool
-	replace               bool
-	importAuth            bool
-	importTLS             bool
+	cloudName                   string
+	cloudsYAML                  string
+	imageName                   string
+	windowsImageName            string
+	networkID                   string
+	externalNetworkID           string
+	subnetID                    string
+	availabilityZone            string
+	createInternalNetwork       bool
+	replace                     bool
+	importAuth                  bool
+	importTLS                   bool
+	createApplicationCredential bool
 }
 
 // registerProviderOpenStackFlags registers the provider selector flags on cmd,
@@ -45,10 +46,11 @@ func registerProviderOpenStackFlags(cmd *cobra.Command, flags *providerOpenStack
 	cmd.Flags().StringVar(&flags.externalNetworkID, "external-network-id", "", "external network name or ID")
 	cmd.Flags().StringVar(&flags.subnetID, "subnet-id", "", "internal subnet name or ID")
 	cmd.Flags().StringVar(&flags.availabilityZone, "availability-zone", "", "availability zone name or ID")
-	cmd.Flags().BoolVar(&flags.createInternalNetwork, "create-internal-network", false, "let OpenTofu create and manage the internal network and subnet")
+	cmd.Flags().BoolVar(&flags.createInternalNetwork, "create-internal-network", true, "let OpenTofu create and manage the internal network and subnet (default; pass --create-internal-network=false to select an existing network instead)")
 	cmd.Flags().BoolVar(&flags.replace, "replace", false, "allow replacing populated provider selections")
 	cmd.Flags().BoolVar(&flags.importAuth, "import-auth", false, "write application credential fields from the selected profile")
 	cmd.Flags().BoolVar(&flags.importTLS, "import-tls", false, "persist selected profile TLS settings")
+	cmd.Flags().BoolVar(&flags.createApplicationCredential, "create-application-credential", false, "mint an application credential for the profile when it has none, persist it to clouds.yaml, and import it")
 }
 
 func newClusterProviderOpenStackCmd() *cobra.Command {
@@ -61,10 +63,17 @@ networks, subnets, and availability zones read-only, then plans or applies the
 cluster's OpenStack config values from them: image IDs, internal/external
 network and subnet IDs, availability zone, and optionally application credentials and TLS settings.
 
-This command does not deploy the cluster or create remote resources; it only
-writes the cluster's own configuration file. Use 'cluster deploy' for that.
-With --create-internal-network it switches internal networking to
-OpenTofu-managed mode instead of selecting an existing network.`,
+If the profile has no application credential ID and secret, one is created
+through Keystone, saved back into clouds.yaml (0600, atomically), and written
+into the cluster configuration, so the cluster is bound with a usable identity
+in one step. --create-application-credential forces a fresh credential even
+when the profile already has one.
+
+This command does not deploy the cluster or create remote resources beyond the
+application credential above; it only writes the cluster's own configuration
+file. Use 'cluster deploy' for that. With --create-internal-network it switches
+internal networking to OpenTofu-managed mode instead of selecting an existing
+network.`,
 		Args: cobra.NoArgs,
 	}
 	cmd.AddCommand(newClusterProviderOpenStackOperationCmd("plan", false))
@@ -82,8 +91,9 @@ func newClusterProviderOpenStackOperationCmd(operation string, mutating bool) *c
 Reads the profile named by --os-cloud from clouds.yaml (override its location with
 --clouds-yaml or OS_CLIENT_CONFIG_FILE), discovers live images, networks, subnets, and
 availability zones read-only, computes the changes, then writes them to the cluster config after an
-interactive confirmation prompt in text mode (use --yes to skip it). No remote resources are created
-or modified; use 'cluster deploy' for that.
+interactive confirmation prompt in text mode (use --yes to skip it). The only remote
+resource it may create is an application credential (see below); use 'cluster
+deploy' for everything else.
 
 Selector flags (--image-name, --windows-image-name, --network-id, --subnet-id,
 --external-network-id, --availability-zone) accept a resource name or ID; a name
@@ -93,11 +103,24 @@ project inventory and reported as a warning; if the project does not have it, th
 candidate list is printed instead. --windows-image-name is only required when the
 cluster runs Windows workers.
 
+The resolved Linux image propagates to every consumer of it: the provider
+block (image_id), infrastructure.bastion.image when the bastion is enabled,
+and each enabled Linux worker pool. Followers still holding an init-baked
+(empty or placeholder) image are repointed silently; an image set deliberately
+is preserved unless --replace.
+
 The region discovered from the selected profile (clouds.yaml region_name, or
 OS_REGION_NAME when the profile omits it) is authoritative: it repoints the
 provider block, opencenter.meta.region, and the Barbican secret backend, so
 plan and apply bind the whole cluster to the chosen cloud. A meta.region that
 was set deliberately (not the init default) blocks the plan until --replace.
+
+An application credential is minted and imported automatically when the
+profile has no ID/secret pair: the pair is created through Keystone, written
+back into clouds.yaml (atomically, 0600), and stored in the cluster config,
+which is what readiness, OpenTofu, and the rendered services authenticate
+with. --create-application-credential forces a fresh credential (rotation)
+even when the profile already has one.
 
 Plan first with 'plan' and pass identical flags so the same change set is applied.`
 	} else {
@@ -108,7 +131,8 @@ Reads the profile named by --os-cloud from clouds.yaml (override its location wi
 --clouds-yaml or OS_CLIENT_CONFIG_FILE), discovers live images, networks, subnets, and
 availability zones read-only, and prints the changes without writing anything: image IDs,
 internal/external network and subnet IDs, availability zone, plus application credential and TLS
-settings when requested. No remote resources are created or modified.
+settings when requested. The only remote resource it may create is an
+application credential for a profile that lacks one (see below).
 
 Selector flags (--image-name, --windows-image-name, --network-id, --subnet-id,
 --external-network-id, --availability-zone) accept a resource name or ID; a name
@@ -118,11 +142,23 @@ project inventory and reported as a warning; if the project does not have it, th
 candidate list is printed instead. --windows-image-name is only required when the
 cluster runs Windows workers.
 
+The resolved Linux image propagates to every consumer of it: the provider
+block (image_id), infrastructure.bastion.image when the bastion is enabled,
+and each enabled Linux worker pool. Followers still holding an init-baked
+(empty or placeholder) image are repointed silently; an image set deliberately
+is preserved unless --replace.
+
 The region discovered from the selected profile (clouds.yaml region_name, or
 OS_REGION_NAME when the profile omits it) is authoritative: it repoints the
 provider block, opencenter.meta.region, and the Barbican secret backend, so
 plan and apply bind the whole cluster to the chosen cloud. A meta.region that
 was set deliberately (not the init default) blocks the plan until --replace.
+
+An application credential is minted and imported automatically when the
+profile has no ID/secret pair: the pair is created through Keystone, written
+back into clouds.yaml (atomically, 0600), and stored in the cluster config.
+--create-application-credential forces a fresh credential (rotation) even when
+the profile already has one.
 
 Use 'apply' with identical flags to persist the same change set.`
 	}
@@ -184,17 +220,34 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	if err != nil {
 		return err
 	}
-	if flags.importAuth && (strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "") {
-		return NewExitError(2, "--import-auth requires an application credential ID and secret; name-only application credentials cannot be persisted", nil)
+	// A profile without a persistable application credential (no ID/secret
+	// pair — the common clouds.yaml shape is username/password, or a
+	// name-only credential whose secret cannot be re-derived) cannot give the
+	// cluster its own identity. Mint one through Keystone and persist it back
+	// into clouds.yaml so every later run reuses it, then import it: the
+	// cluster's readiness gate requires
+	// infrastructure.cloud.openstack.application_credential_id/secret, and
+	// OpenTofu, CCM and the rendered services all authenticate through that
+	// pair. A profile that already carries a pair is untouched.
+	//
+	// --create-application-credential forces a fresh credential even when the
+	// profile has one (rotation); --import-auth keeps its documented meaning
+	// of writing the pair into the cluster config, which is now the default
+	// whenever a persistable pair exists.
+	var authNote string
+	if flags.createApplicationCredential || strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "" {
+		created, updated, err := provideropenstack.EnsureProfileAuth(cmd.Context(), profile, cloudopenstack.DefaultApplicationCredentialName)
+		if err != nil {
+			return fmt.Errorf("ensure OpenStack application credential for profile %q: %w", flags.cloudName, err)
+		}
+		profile = updated
+		authNote = fmt.Sprintf("created application credential %q (ID %s) for profile %q and persisted it to %s", cloudopenstack.DefaultApplicationCredentialName, created.ID, flags.cloudName, profile.SourcePath)
 	}
 	snapshot, err := cloudopenstack.NewProfileDiscovery(profile).DiscoverWithOptions(cmd.Context(), cloudopenstack.DiscoveryOptions{SkipInternalNetworkAndSubnet: flags.createInternalNetwork})
 	if err != nil {
 		return fmt.Errorf("discover OpenStack provider inventory: %w", err)
 	}
-	var authImport *provideropenstack.AuthImport
-	if flags.importAuth {
-		authImport = &provideropenstack.AuthImport{ApplicationCredentialID: profile.AppCredID, ApplicationCredentialSecret: profile.AppCredSecret}
-	}
+	authImport := &provideropenstack.AuthImport{ApplicationCredentialID: profile.AppCredID, ApplicationCredentialSecret: profile.AppCredSecret}
 	result, prospective, err := provideropenstack.Plan(cmd.Context(), cfg, snapshot, provideropenstack.Options{
 		ImageName: flags.imageName, WindowsImageName: flags.windowsImageName, NetworkID: flags.networkID,
 		ExternalNetworkID: flags.externalNetworkID, SubnetID: flags.subnetID, AvailabilityZone: flags.availabilityZone,
@@ -205,6 +258,9 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	}
 	result.Operation = "cluster.provider.openstack." + operation
 	result.CloudProfile = flags.cloudName
+	if authNote != "" {
+		result.Warnings = append(result.Warnings, authNote)
+	}
 	result.Warnings = append(result.Warnings, snapshot.Warnings...)
 	result.Warnings = uniqueSortedStrings(result.Warnings)
 
