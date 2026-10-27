@@ -49,7 +49,7 @@ opencenter settings ide                          # generate the schema plus edit
 
 ### `opencenter.cluster` (`ClusterConfig`)
 
-`cluster_name` (DNS-1123), `base_domain` (FQDN), `cluster_fqdn` (FQDN), `admin_email`, and `kubernetes`:
+`cluster_name` (DNS-1123), `base_domain` (FQDN), `cluster_fqdn` (FQDN, optional: derived from `cluster_name` + `meta.region` + `base_domain` when empty), `admin_email`, and `kubernetes`. Optional provenance fields: `managed.base_domain` (`default` = the CLI settings file owns the value and changes propagate at load; absent/`pinned` = the cluster owns it) and `last_generated_base_domain` (stamped by `cluster generate`; see [Default Values](default-values.md#base_domain-provenance-settingsyaml)).
 
 | `kubernetes.*` field | Notes |
 | --- | --- |

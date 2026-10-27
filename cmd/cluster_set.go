@@ -62,6 +62,21 @@ Fields use native v2 dot notation, for example:
 				return fmt.Errorf("error setting config field: %w", err)
 			}
 
+			// Provenance: an explicit cluster-side edit of base_domain hands
+			// ownership to the cluster. Pinning here keeps the settings file
+			// from re-propagating over the user's choice at the next load,
+			// and the derived cluster_fqdn is recomputed so the identity
+			// fields cannot disagree on disk.
+			for _, assignment := range configAssignments {
+				if assignment.Path == "opencenter.cluster.base_domain" {
+					cfg.OpenCenter.Cluster.Managed.PinBaseDomain()
+					if derived := cfg.OpenCenter.Cluster.DeriveClusterFQDN(cfg.OpenCenter.Meta.Region); derived != "" {
+						cfg.OpenCenter.Cluster.ClusterFQDN = derived
+					}
+					break
+				}
+			}
+
 			strict, _ := cmd.Flags().GetBool("strict")
 			if strict {
 				app, err := GetApp(cmd.Context())

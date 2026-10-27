@@ -92,7 +92,14 @@ Flux manifests, and application overlays based on the cluster configuration.
 
 Use --render-only to render templates without running the full repository setup flow.
 Use --gitops-auth to select the GitOps authentication method for the base repository
-sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from settings.`,
+sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from settings.
+
+base_domain provenance: a cluster whose opencenter.cluster.managed.base_domain is
+"default" follows cluster_defaults.base_domain from settings automatically at every
+load. A pinned (or hand-edited) domain is never rewritten; generate warns when the
+settings domain changed since the last successful generation. Use --sync-base-domain
+to adopt the settings domain into a pinned cluster config (rewrites the derived
+cluster_fqdn).`,
 		Example: `  # Generate assets for the active cluster
   opencenter cluster generate
 
@@ -107,7 +114,10 @@ sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from set
 
   # Generate with explicit GitOps auth method
   opencenter cluster generate my-cluster --gitops-auth=token
-  opencenter cluster generate my-cluster --gitops-auth=ssh`,
+  opencenter cluster generate my-cluster --gitops-auth=ssh
+
+  # Adopt a changed cluster_defaults.base_domain into the cluster config
+  opencenter cluster generate my-cluster --sync-base-domain`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if renderOnly {
@@ -123,6 +133,7 @@ sources (ssh or token). Defaults to cluster_defaults.gitops_auth_method from set
 	cmd.Flags().Bool("skip-validation", false, "skip configuration validation before generation")
 	cmd.Flags().BoolVar(&renderOnly, "render-only", false, "render templates without running repository setup")
 	cmd.Flags().String("gitops-auth", "", "GitOps authentication method for base repo sources (ssh, token); defaults to cluster_defaults.gitops_auth_method")
+	cmd.Flags().Bool("sync-base-domain", false, "adopt cluster_defaults.base_domain from settings into the cluster config (rewrites the derived cluster_fqdn) before generating")
 
 	return cmd
 }
@@ -168,6 +179,7 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 	adoptGenerated, _ := cmd.Flags().GetBool("adopt-generated")
 	dryRun := getGlobalOptions(cmd).DryRun
 	skipValidation, _ := cmd.Flags().GetBool("skip-validation")
+	syncBaseDomain, _ := cmd.Flags().GetBool("sync-base-domain")
 
 	opts := cluster.SetupOptions{
 		ClusterName:      actualClusterName,
@@ -178,6 +190,7 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 		Prune:            &prune,
 		AdoptGenerated:   adoptGenerated,
 		GitopsAuthMethod: gitopsAuth,
+		SyncBaseDomain:   syncBaseDomain,
 	}
 
 	if !dryRun {
@@ -205,6 +218,10 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "GitOps path:       %s\n", result.GitOpsPath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Manifests created: %d\n", result.ManifestsCreated)
+	if result.BaseDomainSynced {
+		fmt.Fprintf(cmd.OutOrStdout(), "Base domain synced:  %s -> %s (cluster config updated)\n",
+			result.BaseDomainSyncedFrom, result.BaseDomainSyncedTo)
+	}
 
 	// Report warnings (non-fatal)
 	if len(result.Warnings) > 0 {
@@ -215,6 +232,12 @@ func runClusterGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	if !dryRun {
+		// Stamp the rendered base_domain so the next generate can tell a
+		// settings change from a deliberate cluster-side edit. Non-fatal: a
+		// stamp failure only degrades drift classification.
+		if stampErr := config.StampGeneratedBaseDomain(name, result.BaseDomainDrift.RenderedBaseDomain); stampErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to stamp generated base domain: %v\n", stampErr)
+		}
 		if err := config.UpdateStatus(name, v2.StageSetup, v2.StatusSuccess); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to update cluster status: %v\n", err)
 		}

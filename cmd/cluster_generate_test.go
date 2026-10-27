@@ -59,7 +59,7 @@ func TestClusterGenerateCommandStructure(t *testing.T) {
 	}
 
 	// Verify flags exist
-	flags := []string{"force", "skip-validation", "render-only", "prune", "adopt-generated"}
+	flags := []string{"force", "skip-validation", "render-only", "prune", "adopt-generated", "sync-base-domain"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected flag %q to be registered", name)
