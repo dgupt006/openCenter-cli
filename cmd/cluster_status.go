@@ -171,7 +171,21 @@ and suggest using 'opencenter cluster use' to set one.`,
 			fmt.Fprintf(cmd.OutOrStdout(), "  Environment:  %s\n", cfg.OpenCenter.Meta.Env)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Region:       %s\n", cfg.OpenCenter.Meta.Region)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Stage:        %s\n", displayLifecycleValue(cfg.OpenCenter.Meta.Stage))
-			fmt.Fprintf(cmd.OutOrStdout(), "  Status:       %s\n", cfg.OpenCenter.Meta.Status)
+			// Readiness is collected before the header so the headline Status
+			// reflects the live cluster. cfg.OpenCenter.Meta.Status records how
+			// far the deploy pipeline got, which is a different question from
+			// whether the cluster can run workloads: a cluster whose CCM could
+			// never authenticate reported "success" with 0/10 HelmReleases Ready.
+			var readiness *gitopsReadiness
+			if refresh && strings.EqualFold(cfg.OpenCenter.Infrastructure.Provider, "openstack") &&
+				resolvedClusterPaths != nil && pathExists(resolvedClusterPaths.KubeconfigPath) {
+				readiness = collectGitOpsReadiness(ctx, resolvedClusterPaths.KubeconfigPath)
+			}
+			reportedStatus := cfg.OpenCenter.Meta.Status
+			if readiness != nil && !readiness.Ready() {
+				reportedStatus = "not-ready"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  Status:       %s\n", reportedStatus)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Organization: %s\n", cfg.OpenCenter.Meta.Organization)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Provider:     %s\n", cfg.OpenCenter.Infrastructure.Provider)
 
@@ -271,9 +285,17 @@ and suggest using 'opencenter cluster use' to set one.`,
 					fmt.Fprintf(cmd.OutOrStdout(), "  Provider Check:    %s\n", providerError)
 				}
 			}
+
+			if readiness != nil {
+				renderGitOpsReadinessText(cmd.OutOrStdout(), readiness)
+			}
+
 			stage := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Meta.Stage))
-			status := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Meta.Status))
+			status := strings.ToLower(strings.TrimSpace(reportedStatus))
 			nextSteps := nextStepsForCluster(clusterName, stage, status)
+			if readiness != nil && !readiness.Ready() {
+				nextSteps = readiness.NextSteps(clusterName)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "\nNext Steps:\n")
 			for _, step := range nextSteps {
 				fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", step)
@@ -309,6 +331,7 @@ type clusterStatusOutput struct {
 	Paths             map[string]any    `json:"paths,omitempty" yaml:"paths,omitempty"`
 	ProviderStatus    map[string]any    `json:"provider_status,omitempty" yaml:"provider_status,omitempty"`
 	Inventory         *clusterInventory `json:"inventory,omitempty" yaml:"inventory,omitempty"`
+	GitOps            map[string]any    `json:"gitops,omitempty" yaml:"gitops,omitempty"`
 	NextSteps         []string          `json:"next_steps,omitempty" yaml:"next_steps,omitempty"`
 }
 
@@ -401,6 +424,14 @@ func buildClusterStatusOutput(ctx context.Context, clusterName, activeCluster st
 			"api_ready":            apiReady,
 			"api_endpoint":         endpoint,
 			"provider_check":       providerError,
+		}
+		if refresh && kubeconfigReady {
+			readiness := collectGitOpsReadiness(ctx, resolvedClusterPaths.KubeconfigPath)
+			output.GitOps = readiness.Summary()
+			if !readiness.Ready() {
+				output.Status = "not-ready"
+				output.NextSteps = readiness.NextSteps(clusterName)
+			}
 		}
 	}
 	return output

@@ -21,6 +21,9 @@ import (
 // OpenStack. It checks for the presence of the `openstack` CLI tool and
 // verifies that the authentication URL is configured.
 //
+// This check is deliberately offline: it never contacts Keystone. Deploy
+// time must use ValidateOpenStackCredentials, which authenticates for real.
+//
 // Inputs:
 //   - authURL: The OpenStack authentication URL.
 //
