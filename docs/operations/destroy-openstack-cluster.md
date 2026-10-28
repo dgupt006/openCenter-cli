@@ -1,9 +1,9 @@
 ---
-last_updated: "2026-10-26"
+last_updated: "2026-10-28"
 id: destroy-openstack-cluster
 title: Destroy an OpenStack cluster
 sidebar_label: Destroy an OpenStack cluster
-description: How to safely tear down an OpenStack cluster and clean up orphaned CSI Cinder volumes to avoid quota exhaustion.
+description: How to safely tear down an OpenStack cluster, remove cluster-owned Octavia load balancers, and clean up orphaned CSI Cinder volumes to avoid quota exhaustion.
 doc_type: how-to
 audience: "platform engineers"
 tags: [operations, openstack, destroy, storage]
@@ -52,9 +52,17 @@ What happens step by step:
 1. **capture-csi-volumes** — `kubectl get pv -o json` enumerates PersistentVolumes
    backed by `cinder.csi.openstack.org` and records their Cinder volume IDs. This runs
    while the cluster API is still reachable, before any infrastructure is torn down.
-2. **opentofu-init** — initialises the OpenTofu working directory.
-3. **opentofu-destroy** — tears down compute, network, and storage infrastructure.
-4. **cleanup-csi-volumes** — deletes the captured Cinder volume IDs via the Cinder API.
+2. **cleanup-openstack-networking** — deletes Octavia load balancers created by the
+   cloud controller manager on the cluster's network before OpenTofu runs. CCM-managed
+   load balancers keep Neutron ports attached, which can make router-interface and
+   network deletion hang during teardown. Only load balancers whose name starts with
+   `k8s-<cluster>-` **and** whose VIP sits on the configured cluster network are
+   deleted (cascade, waiting for each deletion to complete). If `network_id` is not
+   configured the step refuses to run rather than guess a delete scope. Failures are
+   reported as warnings and never block the destroy.
+3. **opentofu-init** — initialises the OpenTofu working directory.
+4. **opentofu-destroy** — tears down compute, network, and storage infrastructure.
+5. **cleanup-csi-volumes** — deletes the captured Cinder volume IDs via the Cinder API.
    Only volumes in `available` state are deleted; `in-use` or `reserved` volumes are
    skipped (they belong to a live cluster and are never touched).
 
@@ -142,3 +150,7 @@ sidecar, so no phantom directory is left behind.
   delete remaining volumes.
 - **In report-only mode (default):** failures are logged as warnings and do not affect
   the destroy result.
+- The Octavia cleanup step deletes only load balancers that match **both** the
+  `k8s-<cluster>-` name prefix and the configured cluster network (`network_id`).
+  Load balancers belonging to other clusters or networks are never touched, and the
+  step refuses to run at all when `network_id` is not configured.
