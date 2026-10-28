@@ -51,6 +51,11 @@ type InitOptions struct {
 	ServerPools           []string
 	FlagOverrides         []string
 	KindDisableDefaultCNI *bool
+	// DryRun performs every read, validation and path-resolution step and
+	// reports what would be created, but writes nothing: no directories, no
+	// config file, no SOPS/SSH keys, no git repository, and no remote
+	// application credential. The global --dry-run flag maps here.
+	DryRun bool
 }
 
 // InitResult contains the result of cluster initialization
@@ -185,7 +190,22 @@ func (s *InitService) Initialize(ctx context.Context, opts InitOptions) (*InitRe
 		}
 	}
 
-	// Create directory structure
+	// Create directory structure. A dry run stops here: everything above is
+	// read-only and already proved the request is valid, and the remaining
+	// steps are the ones that leave state behind.
+	if opts.DryRun {
+		dryResult := &InitResult{
+			ConfigPath:     clusterPaths.ConfigPath,
+			ClusterPaths:   clusterPaths,
+			Config:         cfg,
+			ConfigMap:      configMap,
+			KeysGenerated:  !opts.NoKeyGen,
+			GitInitialized: !opts.NoGitInit,
+		}
+		dryResult.Message = s.buildDryRunMessage(clusterPaths, opts.Organization, cfg.OpenCenter.GitOps.Repository.LocalDir, opts)
+		return dryResult, nil
+	}
+
 	if err := s.createDirectories(ctx, clusterPaths, opts.Organization); err != nil {
 		return nil, fmt.Errorf("creating directories: %w", err)
 	}
@@ -730,45 +750,70 @@ func (s *InitService) buildResultMessage(clusterPaths *paths.ClusterPaths, organ
 		fmt.Fprintf(&msg, "SOPS key location: %s\n", clusterPaths.SOPSKeyPath)
 	}
 
-	// Surface which cluster_defaults were used from config.yaml
-	if cm, err := config.NewConfigManager(""); err == nil {
-		cd := cm.GetConfig().ClusterDefaults
-		var defaults []string
-		if cd.Provider != "" {
-			defaults = append(defaults, fmt.Sprintf("  provider:            %s", cd.Provider))
-		}
-		if cd.Region != "" && !opts.RegionExplicit {
-			defaults = append(defaults, fmt.Sprintf("  region:              %s", cd.Region))
-		}
-		if cd.Environment != "" {
-			defaults = append(defaults, fmt.Sprintf("  environment:         %s", cd.Environment))
-		}
-		if len(cd.SSHAuthorizedKeys) > 0 {
-			defaults = append(defaults, fmt.Sprintf("  ssh_authorized_keys: %d key(s)", len(cd.SSHAuthorizedKeys)))
-		}
-		if cd.BaseDomain != "" {
-			defaults = append(defaults, fmt.Sprintf("  base_domain:         %s", cd.BaseDomain))
-		}
-		if cd.AdminEmail != "" {
-			defaults = append(defaults, fmt.Sprintf("  admin_email:         %s", cd.AdminEmail))
-		}
-		if cd.KubernetesVersion != "" {
-			defaults = append(defaults, fmt.Sprintf("  kubernetes_version:  %s", cd.KubernetesVersion))
-		}
-		if cd.CNI != "" {
-			defaults = append(defaults, fmt.Sprintf("  cni:                 %s", cd.CNI))
-		}
-		if cd.SSHUser != "" {
-			defaults = append(defaults, fmt.Sprintf("  ssh_user:            %s", cd.SSHUser))
-		}
-		if len(defaults) > 0 {
-			msg.WriteString("\nUsing cluster_defaults from config.yaml:\n")
-			for _, d := range defaults {
-				msg.WriteString(d + "\n")
-			}
-		}
-	}
+	msg.WriteString(clusterDefaultsBlock(opts))
 
+	return msg.String()
+}
+
+// clusterDefaultsBlock renders the cluster_defaults that config.yaml supplied,
+// so a user can see which values came from the CLI config rather than from a
+// flag. Shared by the real and dry-run messages so the two cannot drift.
+func clusterDefaultsBlock(opts InitOptions) string {
+	cm, err := config.NewConfigManager("")
+	if err != nil {
+		return ""
+	}
+	cd := cm.GetConfig().ClusterDefaults
+	var defaults []string
+	if cd.Provider != "" {
+		defaults = append(defaults, fmt.Sprintf("  provider:            %s", cd.Provider))
+	}
+	if cd.Region != "" && !opts.RegionExplicit {
+		defaults = append(defaults, fmt.Sprintf("  region:              %s", cd.Region))
+	}
+	if cd.Environment != "" {
+		defaults = append(defaults, fmt.Sprintf("  environment:         %s", cd.Environment))
+	}
+	if len(cd.SSHAuthorizedKeys) > 0 {
+		defaults = append(defaults, fmt.Sprintf("  ssh_authorized_keys: %d key(s)", len(cd.SSHAuthorizedKeys)))
+	}
+	if cd.BaseDomain != "" {
+		defaults = append(defaults, fmt.Sprintf("  base_domain:         %s", cd.BaseDomain))
+	}
+	if cd.AdminEmail != "" {
+		defaults = append(defaults, fmt.Sprintf("  admin_email:         %s", cd.AdminEmail))
+	}
+	if cd.KubernetesVersion != "" {
+		defaults = append(defaults, fmt.Sprintf("  kubernetes_version:  %s", cd.KubernetesVersion))
+	}
+	if cd.CNI != "" {
+		defaults = append(defaults, fmt.Sprintf("  cni:                 %s", cd.CNI))
+	}
+	if cd.SSHUser != "" {
+		defaults = append(defaults, fmt.Sprintf("  ssh_user:            %s", cd.SSHUser))
+	}
+	if len(defaults) == 0 {
+		return ""
+	}
+	return "\nUsing cluster_defaults from config.yaml:\n" + strings.Join(defaults, "\n") + "\n"
+}
+
+// buildDryRunMessage reports what 'cluster init' would create without creating
+// it. Every path is named, because the point of the preview is to see where the
+// real run would write.
+func (s *InitService) buildDryRunMessage(clusterPaths *paths.ClusterPaths, organization, gitDir string, opts InitOptions) string {
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "[dry-run] Would create cluster configuration in organization '%s' at '%s'\n", organization, clusterPaths.ConfigPath)
+	fmt.Fprintf(&msg, "[dry-run] GitOps repository root: %s\n", gitDir)
+	if !opts.NoKeyGen {
+		fmt.Fprintf(&msg, "[dry-run] Would generate SOPS age key: %s\n", clusterPaths.SOPSKeyPath)
+		fmt.Fprintf(&msg, "[dry-run] Would generate SSH key pair: %s\n", clusterPaths.SSHKeyPath)
+	}
+	if !opts.NoGitInit {
+		fmt.Fprintf(&msg, "[dry-run] Would initialize a git repository in the cluster directory\n")
+	}
+	msg.WriteString(clusterDefaultsBlock(opts))
+	fmt.Fprintf(&msg, "\n[dry-run] Nothing was written.\n")
 	return msg.String()
 }
 

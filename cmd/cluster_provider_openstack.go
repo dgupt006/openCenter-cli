@@ -180,23 +180,35 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	if strings.TrimSpace(flags.cloudName) == "" {
 		return NewExitError(2, "--os-cloud is required", nil)
 	}
-	clusterPaths, err := resolveProviderClusterPaths(cmd.Context(), identifier)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "invalid") {
-			return NewExitError(2, "invalid cluster identifier", err)
+	// 'cluster init --os-cloud --dry-run' has the config in hand already and has
+	// deliberately not written it, so resolving it from disk would fail. The
+	// in-memory config lets the init path preview the binding without creating
+	// the cluster it is describing.
+	var (
+		cfg        = inMemoryProviderConfig
+		configPath string
+		rawData    []byte
+	)
+	if cfg == nil {
+		clusterPaths, err := resolveProviderClusterPaths(cmd.Context(), identifier)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "invalid") {
+				return NewExitError(2, "invalid cluster identifier", err)
+			}
+			return v2.NewConfigNotFoundError(identifier, fmt.Errorf("resolve cluster configuration: %w", err))
 		}
-		return v2.NewConfigNotFoundError(identifier, fmt.Errorf("resolve cluster configuration: %w", err))
-	}
-	rawData, err := os.ReadFile(clusterPaths.ConfigPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return v2.NewConfigNotFoundError(identifier, err)
+		rawData, err = os.ReadFile(clusterPaths.ConfigPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return v2.NewConfigNotFoundError(identifier, err)
+			}
+			return fmt.Errorf("read cluster configuration: %w", err)
 		}
-		return fmt.Errorf("read cluster configuration: %w", err)
-	}
-	cfg, err := v2.DecodePublicConfig(rawData)
-	if err != nil {
-		return NewExitError(2, "decode cluster configuration", err)
+		cfg, err = v2.DecodePublicConfig(rawData)
+		if err != nil {
+			return NewExitError(2, "decode cluster configuration", err)
+		}
+		configPath = clusterPaths.ConfigPath
 	}
 	if strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Infrastructure.Provider)) != "openstack" {
 		return NewExitError(2, fmt.Sprintf("cluster provider is %q; OpenStack provider operation requires provider openstack", cfg.OpenCenter.Infrastructure.Provider), nil)
@@ -234,8 +246,19 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 	// profile has one (rotation); --import-auth keeps its documented meaning
 	// of writing the pair into the cluster config, which is now the default
 	// whenever a persistable pair exists.
+	//
+	// A global --dry-run never mints one: creating an application credential is
+	// a real remote Keystone write that persists a secret into clouds.yaml, and
+	// a preview must leave no trace anywhere.
+	//
+	// 'plan' without --dry-run does still mint. That is deliberate and predates
+	// this gate: a username/password profile has no persistable pair, so without
+	// a credential discovery cannot authenticate at all and plan has nothing to
+	// report. Minting is the documented behaviour of the plan/apply pair and is
+	// covered by TestProviderOpenStackEnsuresCredentialBeforeDiscovery; what plan
+	// must never do is rewrite clouds.yaml, which that test asserts separately.
 	var authNote string
-	if flags.createApplicationCredential || strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "" {
+	if !getGlobalOptions(cmd).DryRun && (flags.createApplicationCredential || strings.TrimSpace(profile.AppCredID) == "" || strings.TrimSpace(profile.AppCredSecret) == "") {
 		created, updated, err := provideropenstack.EnsureProfileAuth(cmd.Context(), profile, cloudopenstack.DefaultApplicationCredentialName)
 		if err != nil {
 			return fmt.Errorf("ensure OpenStack application credential for profile %q: %w", flags.cloudName, err)
@@ -293,7 +316,7 @@ func runClusterProviderOpenStack(cmd *cobra.Command, operation string, mutating 
 			result.Warnings = append(result.Warnings, "apply declined; configuration was not changed")
 			return writeProviderOpenStackOutput(cmd, getGlobalOptions(cmd).Output, result)
 		}
-		result, err = (provideropenstack.ApplyPersistence{FileSystem: fileSystem, Validate: validate}).Apply(cmd.Context(), clusterPaths.ConfigPath, cfg, prospective, rawData, result)
+		result, err = (provideropenstack.ApplyPersistence{FileSystem: fileSystem, Validate: validate}).Apply(cmd.Context(), configPath, cfg, prospective, rawData, result)
 		if err != nil {
 			return err
 		}

@@ -261,3 +261,46 @@ func TestProviderOpenStackMintsOnCreateApplicationCredentialEvenWithPair(t *test
 		t.Fatalf("EnsureProfileAuth calls = %d, want 0 without the flag (err=%v)", ensureCalls, err)
 	}
 }
+
+// --dry-run must leave no trace anywhere, including remote state. Minting an
+// application credential is a real Keystone write that persists a secret into
+// clouds.yaml, so a preview may not do it - unlike a plain 'plan', which mints
+// deliberately so discovery can authenticate a username/password profile.
+func TestProviderOpenStackDryRunDoesNotMintCredential(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+	saveOpenStackConfigForCommandTest(t, dir, "prod", "acme")
+	cloudsPath := filepath.Join(dir, "clouds.yaml")
+	body := "clouds:\n  prod:\n    auth:\n      auth_url: https://keystone.invalid.local/v3\n      username: u\n      password: p\n"
+	if err := os.WriteFile(cloudsPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := provideropenstack.EnsureProfileAuth
+	ensureCalls := 0
+	provideropenstack.EnsureProfileAuth = func(_ context.Context, profile cloudopenstack.Profile, _ string) (cloudopenstack.AppCredential, cloudopenstack.Profile, error) {
+		ensureCalls++
+		profile.AppCredID = "minted-id"
+		profile.AppCredSecret = "minted-secret"
+		return cloudopenstack.AppCredential{ID: profile.AppCredID, Secret: profile.AppCredSecret}, profile, nil
+	}
+	t.Cleanup(func() { provideropenstack.EnsureProfileAuth = original })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.WithValue(context.Background(), globalOptionsContextKey{}, GlobalOptions{DryRun: true, Output: OutputText}))
+	// Discovery fails against the invalid auth_url; what matters is that the
+	// credential seam was never reached.
+	_ = runClusterProviderOpenStack(cmd, "plan", false, "acme/prod", providerOpenStackFlags{
+		cloudName: "prod", cloudsYAML: cloudsPath,
+	})
+	if ensureCalls != 0 {
+		t.Fatalf("EnsureProfileAuth calls = %d under --dry-run, want 0", ensureCalls)
+	}
+	data, err := os.ReadFile(cloudsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != body {
+		t.Fatalf("--dry-run modified clouds.yaml:\n%s", data)
+	}
+}

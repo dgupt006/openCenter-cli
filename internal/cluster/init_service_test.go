@@ -228,6 +228,95 @@ func TestInitService_Initialize(t *testing.T) {
 	}
 }
 
+// --dry-run must be a true preview. It previously wrote the config, created the
+// directory tree, generated SOPS/SSH keys and initialised a git repo, so a
+// preview of a cluster could not be undone and left a half-created cluster that
+// the next real init then refused to overwrite.
+func TestInitServiceDryRunWritesNothing(t *testing.T) {
+	tmpDir := t.TempDir()
+	initService := NewInitService(
+		paths.NewPathResolver(tmpDir),
+		setupValidationEngine(t),
+		mustConfigManager(t),
+	)
+
+	result, err := initService.Initialize(context.Background(), InitOptions{
+		ClusterName:  "dry-cluster",
+		Organization: "dry-org",
+		Provider:     "openstack",
+		DryRun:       true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run init failed: %v", err)
+	}
+	// The preview still has to describe the cluster it would create.
+	if result.Config == nil {
+		t.Fatal("dry-run returned nil config; the provider binding needs it")
+	}
+	if result.ConfigPath == "" {
+		t.Error("dry-run returned empty config path")
+	}
+	if !strings.Contains(result.Message, "[dry-run]") {
+		t.Errorf("dry-run message is not labelled: %q", result.Message)
+	}
+
+	// Nothing at all may exist on disk.
+	matches, err := filepath.Glob(filepath.Join(tmpDir, "*", "*", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written []string
+	for _, root := range []string{"blueprints", "secrets", "gitops"} {
+		dir := filepath.Join(tmpDir, root)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			written = append(written, dir)
+		}
+	}
+	if len(written) > 0 {
+		t.Errorf("dry-run created state: %v (also matched %v)", written, matches)
+	}
+	if _, err := os.Stat(result.ConfigPath); !os.IsNotExist(err) {
+		t.Errorf("dry-run wrote the config file at %s", result.ConfigPath)
+	}
+}
+
+// The real run must still write, so the dry-run gate cannot be a blanket
+// early-return that silently disables init.
+func TestInitServiceRealRunWritesConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	initService := NewInitService(
+		paths.NewPathResolver(tmpDir),
+		setupValidationEngine(t),
+		mustConfigManager(t),
+	)
+
+	result, err := initService.Initialize(context.Background(), InitOptions{
+		ClusterName:  "real-cluster",
+		Organization: "real-org",
+		Provider:     "openstack",
+		NoKeyGen:     true,
+		NoGitInit:    true,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if _, err := os.Stat(result.ConfigPath); err != nil {
+		t.Fatalf("real init did not write %s: %v", result.ConfigPath, err)
+	}
+	if strings.Contains(result.Message, "[dry-run]") {
+		t.Errorf("real run reported a dry-run: %q", result.Message)
+	}
+}
+
+func mustConfigManager(t *testing.T) *config.ConfigManager {
+	t.Helper()
+	cm, err := config.NewConfigManager("")
+	if err != nil {
+		t.Fatalf("config manager: %v", err)
+	}
+	return cm
+}
+
 func TestInitService_validateClusterName(t *testing.T) {
 	// Create temporary directory for test
 	tmpDir := t.TempDir()

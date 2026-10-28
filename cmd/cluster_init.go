@@ -23,6 +23,7 @@ import (
 	cloudopenstack "github.com/opencenter-cloud/opencenter-cli/internal/cloud/openstack"
 	"github.com/opencenter-cloud/opencenter-cli/internal/cluster"
 	"github.com/opencenter-cloud/opencenter-cli/internal/config"
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/di"
 	"github.com/spf13/cobra"
@@ -164,7 +165,10 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Execute initialization
+	// Execute initialization. --dry-run is honoured by the service: it resolves
+	// and validates everything, then writes no directories, no config, no keys,
+	// no git repo, and mints no application credential.
+	opts.DryRun = getGlobalOptions(cmd).DryRun
 	result, err := initService.Initialize(ctx, opts)
 	if err != nil {
 		return err
@@ -173,9 +177,19 @@ func runClusterInit(cmd *cobra.Command, args []string) error {
 	// Display results
 	fmt.Fprint(cmd.OutOrStdout(), result.Message)
 
-	// Post-init OpenStack provider binding (--os-cloud)
+	// Post-init OpenStack provider binding (--os-cloud). Under --dry-run this
+	// runs the plan pass, not apply: apply would mint a real application
+	// credential through Keystone, persist it into clouds.yaml, and patch the
+	// cluster config - none of which a preview may do. The plan still performs
+	// its read-only discovery, so the preview shows exactly the provider values
+	// (auth_url, region, NTP, flavors, images, networks) the real run would set.
 	if flags == nil {
 		return nil
+	}
+	if opts.DryRun {
+		return withInMemoryProviderConfig(result.Config, func() error {
+			return runInitProviderOpenStackApply(cmd, "plan", false, opts.Organization+"/"+opts.ClusterName, *flags)
+		})
 	}
 	return runInitProviderOpenStackApply(cmd, "apply", true, opts.Organization+"/"+opts.ClusterName, *flags)
 }
@@ -202,6 +216,22 @@ func preflightInitProviderBinding(flags *providerOpenStackFlags) error {
 // --os-cloud' invokes the provider apply pass; tests replace it to assert the
 // binding without a live cloud.
 var runInitProviderOpenStackApply = runClusterProviderOpenStack
+
+// inMemoryProviderConfig carries the freshly built cluster configuration into
+// the provider binding when the caller has it in memory and has not written it
+// to disk - 'cluster init --os-cloud --dry-run'. It is set only for the duration
+// of that call and cleared immediately after, so a normal provider operation
+// always reads real state.
+var inMemoryProviderConfig *v2.Config
+
+// withInMemoryProviderConfig runs fn with cfg published to the provider
+// binding, restoring the previous value afterwards.
+func withInMemoryProviderConfig(cfg *v2.Config, fn func() error) error {
+	previous := inMemoryProviderConfig
+	inMemoryProviderConfig = cfg
+	defer func() { inMemoryProviderConfig = previous }()
+	return fn()
+}
 
 // setupContainer initializes the DI container with all required services
 func setupContainer(container di.Container) error {
