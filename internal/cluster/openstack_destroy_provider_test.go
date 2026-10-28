@@ -82,6 +82,20 @@ type fakeCinderForDestroy struct {
 	deleted []string
 }
 
+type fakeNetworkCleanupForDestroy struct {
+	calls       int
+	clusterName string
+	networkID   string
+	err         error
+}
+
+func (f *fakeNetworkCleanupForDestroy) CleanupClusterLoadBalancers(_ context.Context, clusterName, networkID string) error {
+	f.calls++
+	f.clusterName = clusterName
+	f.networkID = networkID
+	return f.err
+}
+
 func (f *fakeCinderForDestroy) GetStatus(_ context.Context, id string) (string, int, error) {
 	if v, ok := f.volumes[id]; ok {
 		return v.status, v.size, nil
@@ -101,6 +115,9 @@ func newTestOpenStackDestroyProvider(runner lifecycleCommandRunner, output *byte
 	p := newOpenStackDestroyProvider(runner, output).(*openstackDestroyProvider)
 	p.cinderFactory = func(_ *credentials.OpenStackCredentials) (cinderVolumeService, error) {
 		return &fakeCinderForDestroy{}, nil
+	}
+	p.networkCleanupFactory = func(_ *credentials.OpenStackCredentials) (openStackNetworkCleanupService, error) {
+		return &fakeNetworkCleanupForDestroy{}, nil
 	}
 	return p
 }
@@ -133,8 +150,7 @@ func makeOpenStackCfg(t *testing.T) *v2.Config {
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestOpenStackDestroyProvider_BuildSteps verifies the 4-step OpenStack
-// pipeline: capture-csi-volumes → opentofu-init → opentofu-destroy → cleanup-csi-volumes.
+// TestOpenStackDestroyProvider_BuildSteps verifies the OpenStack pipeline.
 func TestOpenStackDestroyProvider_BuildSteps(t *testing.T) {
 	cfg := makeOpenStackCfg(t)
 
@@ -146,11 +162,11 @@ func TestOpenStackDestroyProvider_BuildSteps(t *testing.T) {
 		t.Fatalf("BuildSteps failed: %v", err)
 	}
 
-	if len(steps) != 4 {
-		t.Fatalf("expected 4 steps, got %d", len(steps))
+	if len(steps) != 5 {
+		t.Fatalf("expected 5 steps, got %d", len(steps))
 	}
 
-	wantIDs := []string{"capture-csi-volumes", "opentofu-init", "opentofu-destroy", "cleanup-csi-volumes"}
+	wantIDs := []string{"capture-csi-volumes", "cleanup-openstack-networking", "opentofu-init", "opentofu-destroy", "cleanup-csi-volumes"}
 	for i, want := range wantIDs {
 		if steps[i].ID != want {
 			t.Errorf("step[%d].ID = %q, want %q", i, steps[i].ID, want)
@@ -197,9 +213,9 @@ func TestOpenStackDestroyProvider_BuildSteps_NoAutoApprove(t *testing.T) {
 		t.Fatalf("BuildSteps failed: %v", err)
 	}
 
-	// Destroy step is now at index 2 (after capture and init).
+	// Destroy step is now at index 3 (after capture, networking cleanup, and init).
 	ctx := context.Background()
-	if err := steps[2].Run(ctx); err != nil {
+	if err := steps[3].Run(ctx); err != nil {
 		t.Fatalf("destroy step failed: %v", err)
 	}
 
@@ -296,9 +312,9 @@ func TestOpenStackDestroyProvider_BuildSteps_CustomTofuPath(t *testing.T) {
 		t.Fatalf("BuildSteps failed: %v", err)
 	}
 
-	// Init step is now at index 1 (after capture-csi-volumes).
+	// Init step is now at index 2 (after capture and networking cleanup).
 	ctx := context.Background()
-	if err := steps[1].Run(ctx); err != nil {
+	if err := steps[2].Run(ctx); err != nil {
 		t.Fatalf("init step failed: %v", err)
 	}
 
@@ -319,14 +335,14 @@ func TestOpenStackDestroyProvider_StepStructure_WithDeleteVolumes(t *testing.T) 
 		t.Fatalf("BuildSteps failed: %v", err)
 	}
 
-	if len(steps) != 4 {
-		t.Fatalf("expected 4 steps with DeleteVolumes=true, got %d", len(steps))
+	if len(steps) != 5 {
+		t.Fatalf("expected 5 steps with DeleteVolumes=true, got %d", len(steps))
 	}
 	if steps[0].ID != "capture-csi-volumes" {
 		t.Errorf("step[0].ID = %q, want 'capture-csi-volumes'", steps[0].ID)
 	}
-	if steps[3].ID != "cleanup-csi-volumes" {
-		t.Errorf("step[3].ID = %q, want 'cleanup-csi-volumes'", steps[3].ID)
+	if steps[4].ID != "cleanup-csi-volumes" {
+		t.Errorf("step[4].ID = %q, want 'cleanup-csi-volumes'", steps[4].ID)
 	}
 }
 
@@ -342,14 +358,14 @@ func TestOpenStackDestroyProvider_StepStructure_WithoutDeleteVolumes(t *testing.
 		t.Fatalf("BuildSteps failed: %v", err)
 	}
 
-	if len(steps) != 4 {
-		t.Fatalf("expected 4 steps with DeleteVolumes=false, got %d", len(steps))
+	if len(steps) != 5 {
+		t.Fatalf("expected 5 steps with DeleteVolumes=false, got %d", len(steps))
 	}
 	if steps[0].ID != "capture-csi-volumes" {
 		t.Errorf("step[0].ID = %q, want 'capture-csi-volumes'", steps[0].ID)
 	}
-	if steps[3].ID != "cleanup-csi-volumes" {
-		t.Errorf("step[3].ID = %q, want 'cleanup-csi-volumes'", steps[3].ID)
+	if steps[4].ID != "cleanup-csi-volumes" {
+		t.Errorf("step[4].ID = %q, want 'cleanup-csi-volumes'", steps[4].ID)
 	}
 }
 
@@ -393,8 +409,8 @@ func TestOpenStackDestroyProvider_CSISteps_FullFlow(t *testing.T) {
 	if err := steps[0].Run(ctx); err != nil {
 		t.Fatalf("capture step: %v", err)
 	}
-	// Run cleanup step (index 3) — skip init/destroy which would need a real tofu
-	if err := steps[3].Run(ctx); err != nil {
+	// Run cleanup step (index 4) — skip init/destroy which would need a real tofu
+	if err := steps[4].Run(ctx); err != nil {
 		t.Fatalf("cleanup step: %v", err)
 	}
 

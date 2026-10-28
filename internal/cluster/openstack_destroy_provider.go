@@ -31,13 +31,17 @@ type openstackDestroyProvider struct {
 	// cinderFactory creates the Cinder service client. Override in tests to
 	// avoid live OpenStack calls.
 	cinderFactory func(*credentials.OpenStackCredentials) (cinderVolumeService, error)
+	// networkCleanupFactory creates the pre-destroy Octavia cleanup service.
+	// Override in tests to avoid live OpenStack calls.
+	networkCleanupFactory func(*credentials.OpenStackCredentials) (openStackNetworkCleanupService, error)
 }
 
 func newOpenStackDestroyProvider(runner lifecycleCommandRunner, output io.Writer) lifecycleDestroyProvider {
 	return &openstackDestroyProvider{
-		runner:        runner,
-		output:        output,
-		cinderFactory: newGophercloudCinderService,
+		runner:                runner,
+		output:                output,
+		cinderFactory:         newGophercloudCinderService,
+		networkCleanupFactory: newGophercloudOpenStackNetworkCleanupService,
 	}
 }
 
@@ -126,6 +130,27 @@ func (p *openstackDestroyProvider) BuildSteps(cfg *v2.Config, opts *DestroyInfra
 				}
 				capturedHandles = handles
 				p.logf("Captured %d CSI-provisioned Cinder volume handle(s).\n", len(handles))
+				return nil
+			},
+		})
+		networkID := ""
+		if openstackCfg := cfg.OpenCenter.Infrastructure.Cloud.OpenStack; openstackCfg != nil {
+			networkID = strings.TrimSpace(openstackCfg.NetworkID)
+			if networkID == "" && openstackCfg.Networking != nil {
+				networkID = strings.TrimSpace(openstackCfg.Networking.NetworkID)
+			}
+		}
+		steps = append(steps, destroyStep{
+			ID:          "cleanup-openstack-networking",
+			Description: "Remove cluster-owned Octavia load balancers before OpenTofu destroy",
+			Run: func(ctx context.Context) error {
+				svc, err := p.networkCleanupFactory(creds)
+				if err != nil {
+					return fmt.Errorf("create OpenStack networking cleanup client: %w", err)
+				}
+				if err := svc.CleanupClusterLoadBalancers(ctx, cfg.ClusterName(), networkID); err != nil {
+					return fmt.Errorf("clean up cluster networking: %w", err)
+				}
 				return nil
 			},
 		})
