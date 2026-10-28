@@ -161,11 +161,28 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 	// placeholder marker; the region is the exception — init copies a real
 	// region name (the CLI default, else InitDefaultRegion) straight into the
 	// provider block, so the init default is the second replaceable shape.
-	// Every other populated value is an explicit choice and needs --replace.
+	//
+	// auth_url is the third shape, and the dangerous one. init derives it from
+	// the same region guess, so it bakes a REAL, fully-formed keystone endpoint
+	// for a region that may have nothing to do with the cloud the cluster is
+	// later bound to. Neither rule above catches it: it contains no placeholder
+	// marker and is not equal to a bare region name. Treated as an operator
+	// choice, it survives the binding while the region moves - producing the
+	// auth_url/region split that makes every in-cluster consumer (CCM cloud.conf,
+	// cinder CSI) authenticate in the wrong region and reject the credential.
+	// So an auth_url that is exactly what init would have generated for the init
+	// default region is a guess, and is replaceable.
 	initDefaultRegion := strings.TrimSpace(v2.InitDefaultRegion)
+	initDefaultAuthURL := ""
+	if initDefaultRegion != "" {
+		initDefaultAuthURL = v2.KeystoneAuthURL(initDefaultRegion)
+	}
 	isDerived := func(value string) bool {
 		value = strings.TrimSpace(value)
-		return isPlaceholder(value) || strings.EqualFold(value, initDefaultRegion)
+		if isPlaceholder(value) || strings.EqualFold(value, initDefaultRegion) {
+			return true
+		}
+		return initDefaultAuthURL != "" && value == initDefaultAuthURL
 	}
 	setDerived := func(path string, current *string, desired string) {
 		currentValue := strings.TrimSpace(*current)
@@ -233,6 +250,122 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 		}
 	}
 
+	// setRegionListFollowers repoints a region-derived field that holds a LIST,
+	// which the scalar follower loop above cannot express. The same
+	// all-or-nothing rule applies: a value that is neither the discovered
+	// region's default nor a placeholder was chosen by the operator, so it
+	// blocks instead of being overwritten.
+	setRegionListFollowers := func(path, regionName string, current *[]string, desired []string) {
+		if len(desired) == 0 {
+			return
+		}
+		currentValues := *current
+		same := len(currentValues) == len(desired)
+		if same {
+			for i := range desired {
+				if strings.TrimSpace(currentValues[i]) != desired[i] {
+					same = false
+					break
+				}
+			}
+		}
+		if same {
+			return
+		}
+		// A list is derived when every entry is a placeholder or when it is
+		// exactly what init would have baked for the region init guessed.
+		initGuess := v2.DefaultNTPServers(prospective.OpenCenter.Infrastructure.Provider, initDefaultRegion)
+		matchesInitGuess := len(currentValues) == len(initGuess)
+		if matchesInitGuess {
+			for i := range initGuess {
+				if strings.TrimSpace(currentValues[i]) != initGuess[i] {
+					matchesInitGuess = false
+					break
+				}
+			}
+		}
+		if !matchesInitGuess && len(currentValues) > 0 && !opts.Replace {
+			blocked = true
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s is populated with %s; the discovered cloud region %q uses %s; use --replace to repoint it", path, strings.Join(currentValues, ","), regionName, strings.Join(desired, ",")))
+			return
+		}
+		*current = append([]string(nil), desired...)
+		changes = append(changes, Change{Path: path, Old: strings.Join(currentValues, ","), New: strings.Join(desired, ",")})
+	}
+
+	// setFlavorsFromRegion applies the registry flavors for the discovered
+	// region to the three node roles, then checks every flavor that will be
+	// used - registry default or operator choice - against the flavors Nova
+	// actually offers in that region.
+	//
+	// The registry is the weak link: its flavor table was copied verbatim into
+	// all four regions from one dev-tools import, so it asserted a gp.5.* family
+	// that no Rackspace region offers. kit-kat (IAD3) was hand-corrected to the
+	// real gp.0.* family and deployed; clusters left on the registry default die
+	// in `tofu apply` with Nova's "Unable to find flavor with name gp.5.4.8" -
+	// after provisioning has begun. Discovery already lists the region's real
+	// flavors, so the binding has the truth in hand and must use it: a flavor the
+	// cloud does not have blocks the plan and names the available ones, instead
+	// of shipping a config that cannot boot.
+	setFlavorsFromRegion := func(desiredRegion string) {
+		flavors := v2.DefaultFlavorsForRegion(prospective.OpenCenter.Infrastructure.Provider, desiredRegion)
+		initFlavors := v2.DefaultFlavorsForRegion(prospective.OpenCenter.Infrastructure.Provider, initDefaultRegion)
+		compute := &prospective.OpenCenter.Infrastructure.Compute
+		roles := []struct {
+			path    string
+			key     string
+			current *string
+		}{
+			{"opencenter.infrastructure.compute.flavor_bastion", "bastion", &compute.FlavorBastion},
+			{"opencenter.infrastructure.compute.flavor_master", "master", &compute.FlavorMaster},
+			{"opencenter.infrastructure.compute.flavor_worker", "worker", &compute.FlavorWorker},
+		}
+		for _, role := range roles {
+			desired, ok := flavors[role.key]
+			if !ok {
+				continue
+			}
+			currentValue := strings.TrimSpace(*role.current)
+			if currentValue == desired {
+				continue
+			}
+			// Replaceable when empty, a placeholder, or exactly what init baked
+			// for its guessed region.
+			replaceable := isPlaceholder(currentValue) || currentValue == "" || currentValue == initFlavors[role.key]
+			if !replaceable && !opts.Replace {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s is populated with %q; the discovered cloud region %q prescribes %q; use --replace to change it", role.path, currentValue, desiredRegion, desired))
+				continue
+			}
+			*role.current = desired
+			changes = append(changes, Change{Path: role.path, Old: currentValue, New: desired})
+		}
+
+		// Validate against live Nova inventory when it was read. Availability is
+		// not guaranteed - the compute service may be unreachable or the
+		// credential may lack the flavor-list policy - and an unavailable list
+		// must not block a binding that would otherwise succeed, so the check is
+		// skipped with a warning rather than failing closed.
+		if len(snapshot.Flavors) == 0 {
+			return
+		}
+		available := make(map[string]string, len(snapshot.Flavors))
+		for _, flavor := range snapshot.Flavors {
+			available[flavor.Name] = flavor.ID
+			available[flavor.ID] = flavor.ID
+		}
+		for _, role := range roles {
+			value := strings.TrimSpace(*role.current)
+			if value == "" || isPlaceholder(value) {
+				continue
+			}
+			if _, ok := available[value]; ok {
+				continue
+			}
+			blocked = true
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s=%q does not exist in the discovered cloud region %q; available flavors: %s", role.path, value, desiredRegion, strings.Join(flavorNames(snapshot.Flavors), ", ")))
+		}
+	}
+
 	// The region is the load-bearing value the profile carries: OpenTofu
 	// renders the Swift/S3 service regions and the GitOps provider block from
 	// cloud.openstack.region, and describe/use/reporting read meta.region.
@@ -243,6 +376,16 @@ func Plan(ctx context.Context, cfg *v2.Config, snapshot *cloudopenstack.Discover
 	setDerived("opencenter.infrastructure.cloud.openstack.auth_url", &osCfg.AuthURL, snapshot.AuthURL)
 	setDerived("opencenter.infrastructure.cloud.openstack.region", &osCfg.Region, snapshot.Region)
 	setRegionFollowers(snapshot.Region)
+	// NTP hosts and instance flavors are region-derived too: init baked them
+	// from its own region guess, so binding to a profile in another region has
+	// to repoint them or the cluster boots against the wrong cloud's
+	// infrastructure.
+	if snapshot.Region != "" {
+		setRegionListFollowers("opencenter.infrastructure.networking.ntp_servers", snapshot.Region,
+			&prospective.OpenCenter.Infrastructure.Networking.NTPServers,
+			v2.DefaultNTPServers(prospective.OpenCenter.Infrastructure.Provider, snapshot.Region))
+		setFlavorsFromRegion(snapshot.Region)
+	}
 	setDerived("opencenter.infrastructure.cloud.openstack.project_id", &osCfg.ProjectID, snapshot.ProjectID)
 	setDerived("opencenter.infrastructure.cloud.openstack.project_name", &osCfg.ProjectName, snapshot.ProjectName)
 	setDerived("opencenter.infrastructure.cloud.openstack.tenant_name", &osCfg.TenantName, snapshot.ProjectName)
@@ -668,6 +811,18 @@ func ensureNetworking(cfg *v2.OpenStackCloudConfig) {
 	if cfg.Networking == nil {
 		cfg.Networking = &v2.OpenStackNetworkingConfig{}
 	}
+}
+
+// flavorNames returns the discovered flavor names, sorted, for error text.
+func flavorNames(flavors []cloudopenstack.Resource) []string {
+	names := make([]string, 0, len(flavors))
+	for _, flavor := range flavors {
+		if name := strings.TrimSpace(flavor.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func isPlaceholder(value string) bool {

@@ -18,12 +18,16 @@ import (
 
 type openstackBootstrapProvider struct {
 	runner lifecycleCommandRunner
+	// validateCredentials authenticates the cluster's OpenStack credentials at
+	// preflight. It is a field so tests can substitute a stub; nil means the
+	// real Keystone check.
+	validateCredentials func(context.Context, *credentials.OpenStackCredentials) error
 }
 
 const calicoStateResource = "module.calico.local_file.calico_values"
 
 func newOpenStackBootstrapProvider(runner lifecycleCommandRunner) lifecycleBootstrapProvider {
-	return &openstackBootstrapProvider{runner: runner}
+	return &openstackBootstrapProvider{runner: runner, validateCredentials: ValidateOpenStackLive}
 }
 
 func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *paths.ClusterPaths, opts *BootstrapOptions) ([]bootstrapStep, error) {
@@ -284,6 +288,10 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 			return nil, fmt.Errorf("building flux bootstrap step: %w", err)
 		}
 		steps = append(steps, fluxStep)
+		// The CCM is installed by Flux, so its effect can only be observed
+		// after bootstrap. This gate is what turns "cluster is up" into
+		// "cluster can actually run workloads".
+		steps = append(steps, p.buildWaitForCCMStep(opts.KubeconfigPath))
 		steps = append(steps, newSopsAgeSecretStep(clusterPaths.SOPSKeyPath, opts.KubeconfigPath, p.runner))
 		// No opencenter-base credential Secret is created: the shared
 		// openCenter-gitops-base repository is public, so its GitRepository
@@ -445,7 +453,18 @@ func extractOpenStackBootstrapCredentials(cfg *v2.Config) (*credentials.OpenStac
 	return creds, nil
 }
 
-func validateOpenStackBootstrap(creds *credentials.OpenStackCredentials) error {
+// validateOpenStackBootstrap performs the offline credential shape checks and
+// then authenticates against Keystone for real.
+//
+// The live check is what makes this worth the network call. auth_url is
+// rendered verbatim into the in-cluster OpenStack CCM cloudConfig and the
+// cinder CSI cloud.conf, so a credential that belongs to a different region
+// than auth_url serves leaves the cluster permanently broken even though
+// OpenTofu — which authenticates through OS_* environment variables —
+// provisions it successfully. The observed failure was 24 hours of a cluster
+// whose CCM could never authenticate, so the cloud-provider-uninitialized
+// taint was never removed and nothing could schedule.
+func (p *openstackBootstrapProvider) validateOpenStackBootstrap(creds *credentials.OpenStackCredentials) error {
 	if creds == nil || creds.IsEmpty() {
 		return fmt.Errorf("openstack credentials are incomplete; set auth_url and application credentials or username/password before bootstrap")
 	}
@@ -461,6 +480,37 @@ func validateOpenStackBootstrap(creds *credentials.OpenStackCredentials) error {
 		}
 	}
 
+	validate := p.validateCredentials
+	if validate == nil {
+		validate = ValidateOpenStackLive
+	}
+	return validate(context.Background(), creds)
+}
+
+// ValidateOpenStackLive authenticates the cluster's OpenStack credentials and
+// asserts that the configured region is served by the configured auth_url. It
+// is exported so validate and deploy share one implementation.
+func ValidateOpenStackLive(ctx context.Context, creds *credentials.OpenStackCredentials) error {
+	if creds == nil {
+		return nil
+	}
+	_, err := openstackprovider.ValidateOpenStackCredentials(ctx, openstackprovider.CredentialCheckOptions{
+		AuthURL:                     creds.AuthURL,
+		Region:                      creds.Region,
+		ApplicationCredentialID:     creds.ApplicationCredentialID,
+		ApplicationCredentialSecret: creds.ApplicationCredentialSecret,
+		Domain:                      creds.Domain,
+		TenantName:                  creds.TenantName,
+		ProjectName:                 creds.ProjectName,
+		ProjectDomainName:           creds.ProjectDomainName,
+		UserDomainName:              creds.UserDomainName,
+		Insecure:                    creds.Insecure,
+		Username:                    creds.Username,
+		Password:                    creds.Password,
+	})
+	if err != nil {
+		return fmt.Errorf("openstack credential preflight: %w", err)
+	}
 	return nil
 }
 
@@ -665,7 +715,7 @@ func (p *openstackBootstrapProvider) buildPreflightStep(cfg *v2.Config, provider
 			if _, err := os.Stat(clusterDir); err != nil {
 				return fmt.Errorf("cluster infrastructure directory not found in GitOps repository: %s", clusterDir)
 			}
-			if err := validateProviderBootstrap(cfg, provider); err != nil {
+			if err := p.validateProviderBootstrap(cfg, provider); err != nil {
 				return err
 			}
 			return p.checkBastionSSH(ctx, cfg)
@@ -674,14 +724,14 @@ func (p *openstackBootstrapProvider) buildPreflightStep(cfg *v2.Config, provider
 }
 
 // validateProviderBootstrap performs provider-specific preflight validation.
-func validateProviderBootstrap(cfg *v2.Config, provider string) error {
+func (p *openstackBootstrapProvider) validateProviderBootstrap(cfg *v2.Config, provider string) error {
 	switch provider {
 	case "openstack":
 		creds, err := extractOpenStackBootstrapCredentials(cfg)
 		if err != nil {
 			return err
 		}
-		return validateOpenStackBootstrap(creds)
+		return p.validateOpenStackBootstrap(creds)
 	case "vmware", "vsphere":
 		secret := extractVSphereBootstrapCredentials(cfg)
 		if isEmptyOrPlaceholder(secret.VCenterHost) || isEmptyOrPlaceholder(secret.Username) || isEmptyOrPlaceholder(secret.Password) {

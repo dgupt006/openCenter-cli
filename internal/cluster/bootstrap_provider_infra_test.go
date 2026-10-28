@@ -11,7 +11,16 @@ import (
 
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
+	"github.com/opencenter-cloud/opencenter-cli/internal/credentials"
 )
+
+// stubCredentialValidation replaces the live Keystone preflight in unit tests.
+// Test configs use placeholder credentials and hosts that must never be
+// contacted; the real behaviour is covered by TestValidateOpenStackCredentials
+// in internal/cloud/openstack, which runs against an httptest keystone.
+func stubCredentialValidation(context.Context, *credentials.OpenStackCredentials) error {
+	return nil
+}
 
 type recordedLifecycleCommand struct {
 	dir  string
@@ -150,7 +159,10 @@ users:
 		},
 	}
 
-	provider := &openstackBootstrapProvider{runner: fakeRunner}
+	// The fake config carries a placeholder keystone host, so the live
+	// credential check is stubbed; its real behaviour is covered by
+	// TestValidateOpenStackCredentials in internal/cloud/openstack.
+	provider := &openstackBootstrapProvider{runner: fakeRunner, validateCredentials: stubCredentialValidation}
 	steps, err := provider.BuildSteps(&cfg, nil, &BootstrapOptions{KubeconfigPath: targetKubeconfig})
 	if err != nil {
 		t.Fatalf("BuildSteps() error = %v", err)
@@ -248,6 +260,18 @@ func TestOpenStackBootstrapCreatesFluxBeforeSOPSSecret(t *testing.T) {
 	}
 	if index("openstack-flux-bootstrap") >= index(sopsAgeSecretStepID) {
 		t.Fatalf("Flux bootstrap must run before SOPS secret reconciliation, got %v", ids)
+	}
+	// The CCM is installed by Flux, so the readiness gate can only observe it
+	// after bootstrap; and it must precede the secret steps so a cluster that
+	// cannot schedule never reports a successful deploy.
+	if index(waitForCCMStepID) < 0 {
+		t.Fatalf("expected the %s step, got %v", waitForCCMStepID, ids)
+	}
+	if index("openstack-flux-bootstrap") >= index(waitForCCMStepID) {
+		t.Fatalf("%s must run after Flux bootstrap, got %v", waitForCCMStepID, ids)
+	}
+	if index(waitForCCMStepID) >= index(sopsAgeSecretStepID) {
+		t.Fatalf("%s must run before SOPS secret reconciliation, got %v", waitForCCMStepID, ids)
 	}
 }
 

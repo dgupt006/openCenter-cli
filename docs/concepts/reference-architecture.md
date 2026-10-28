@@ -128,7 +128,7 @@ Key characteristics:
 * Optional Designate DNS integration (`infrastructure.networking.use_designate`)
 * `infrastructure.compute.worker_group_affinity` and `infrastructure.compute.cp_server_group_affinity` default to `["soft-anti-affinity"]`
 * Boot-from-volume: `infrastructure.storage.worker_volume_size`/`master_volume_size` default to 40 GB each, with `worker_volume_destination_type: "volume"` and `worker_volume_source_type: "image"`
-* Region-specific defaults (image IDs, flavors, DNS/NTP servers) are looked up from a provider-defaults registry (`internal/config/defaults/openstack.go`); for example the SJC3 and DFW3 regions both default to flavors `gp.5.2.4` (bastion), `gp.5.4.8` (master), and `gp.5.4.16` (worker)
+* Region-specific defaults (image IDs, flavors, DNS/NTP servers) are looked up from a provider-defaults registry (`internal/config/defaults/openstack.go`); for example the SJC3 and DFW3 regions both default to flavors `gp.0.2.4` (bastion), `gp.0.4.8` (master), and `gp.0.4.16` (worker)
 * Windows worker pools are supported (`flavor_worker_windows`, `image_id_windows`, `additional_server_pools_worker_windows`), with OpenStack-specific readiness checks requiring `image_id_windows` or a per-pool image
 
 **Evidence:** `internal/config/v2/infrastructure.go`, `internal/config/v2/defaults.go`, `internal/config/defaults/openstack.go`, `internal/config/v2/deployment_validator.go`, `internal/config/v2/readiness.go`
@@ -511,10 +511,10 @@ openCenter uses provider "flavors" (instance types), configured under `opencente
 
 | Role | Default flavor | Implied sizing |
 | --- | --- | --- |
-| Bastion | `gp.5.2.4` | 2 vCPU / 4 GB (naming convention) |
-| Control plane | `gp.5.4.8` | 4 vCPU / 8 GB |
-| Worker | `gp.5.4.16` | 4 vCPU / 16 GB |
-| Windows worker | `gp.5.4.16` | 4 vCPU / 16 GB |
+| Bastion | `gp.0.2.4` | 2 vCPU / 4 GB (naming convention) |
+| Control plane | `gp.0.4.8` | 4 vCPU / 8 GB |
+| Worker | `gp.0.4.16` | 4 vCPU / 16 GB |
+| Windows worker | `gp.0.4.16` | 4 vCPU / 16 GB |
 
 Boot volume size defaults to 40 GB for both control plane and worker nodes (`infrastructure.storage.master_volume_size`/`worker_volume_size`); there is no separate bastion volume-size field. VMware and bare metal have no numeric vCPU/RAM defaults in this repository — their flavor/image fields are free strings supplied by the operator (VMware defaults to placeholder names like `vmware-master`/`vmware-worker`; bare metal has no default bastion flavor since `bastion.enabled` defaults to `false`).
 

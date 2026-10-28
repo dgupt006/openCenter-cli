@@ -378,6 +378,77 @@ func TestPlanPreservesUppercaseDFW3Region(t *testing.T) {
 	}
 }
 
+// init derives auth_url from its own region guess, so it bakes a real,
+// fully-formed keystone endpoint for a region the cluster may never use. When
+// the binding moved the region to IAD3 but left that endpoint pointing at DFW3,
+// kit-kat provisioned in IAD3 while its CCM cloud.conf and cinder CSI
+// cloud.conf authenticated against DFW3 - keystone rejected the IAD3-issued
+// application credential with 404 "Could not find Application Credential", the
+// CCM never initialized a node, the cloud-provider taint was never removed, and
+// every add-on stayed Pending while deploy reported success. An endpoint that is
+// exactly what init would generate for its default region is a guess, not an
+// operator decision, so the binding must repoint it.
+func TestPlanReplacesInitDerivedAuthURL(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	osCfg := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+	if osCfg.AuthURL != v2.KeystoneAuthURL("DFW3") {
+		t.Fatalf("precondition: init auth_url = %q, want the DFW3 keystone", osCfg.AuthURL)
+	}
+
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{
+		Region:  "IAD3",
+		AuthURL: v2.KeystoneAuthURL("IAD3"),
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := prospective.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL
+	if got != v2.KeystoneAuthURL("IAD3") {
+		t.Fatalf("auth_url = %q, want the discovered region's endpoint", got)
+	}
+	// The whole point: region and endpoint must agree in the planned config.
+	if !strings.Contains(got, strings.ToLower(prospective.OpenCenter.Infrastructure.Cloud.OpenStack.Region)) {
+		t.Errorf("planned auth_url %q disagrees with planned region %q", got, prospective.OpenCenter.Infrastructure.Cloud.OpenStack.Region)
+	}
+	reported := false
+	for _, change := range result.Changes {
+		if change.Path == "opencenter.infrastructure.cloud.openstack.auth_url" {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("plan did not report the auth_url rewrite: %#v", result.Changes)
+	}
+}
+
+// An endpoint the operator pointed somewhere else - a private keystone, a
+// different vendor - is a decision, and the binding must not silently rewrite it
+// just because it disagrees with the discovered region.
+func TestPlanPreservesOperatorChosenAuthURL(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL = "https://keystone.corp.private.net:5000/v3/"
+
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{
+		Region:  "IAD3",
+		AuthURL: v2.KeystoneAuthURL("IAD3"),
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL; !strings.Contains(got, "corp.private.net") {
+		t.Fatalf("operator auth_url was overwritten with %q", got)
+	}
+	if result.Status == StatusApplied {
+		t.Errorf("plan reported %s while an operator endpoint was left in place", result.Status)
+	}
+}
+
 // TestPlanPropagatesDiscoveredRegionToClusterFields covers the init→plan→apply
 // contract: `cluster init` bakes meta.region from the CLI default long before
 // any cloud is chosen, so binding the cluster to an IAD3 cloud must repoint
@@ -419,6 +490,205 @@ func TestPlanPropagatesDiscoveredRegionToClusterFields(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("changes do not report the meta.region rewrite: %#v", result.Changes)
+	}
+	// NTP hosts are region-specific (time.<region>.rackspace.com). init baked
+	// the DFW3 pair; binding to IAD3 must repoint them, or every node
+	// time-syncs against a host in the wrong region.
+	wantNTP := v2.DefaultNTPServers("openstack", "IAD3")
+	gotNTP := prospective.OpenCenter.Infrastructure.Networking.NTPServers
+	if strings.Join(gotNTP, ",") != strings.Join(wantNTP, ",") {
+		t.Fatalf("ntp_servers = %v, want the discovered region's %v", gotNTP, wantNTP)
+	}
+	if !strings.Contains(strings.Join(gotNTP, ","), "iad3") {
+		t.Errorf("ntp_servers %v still points at the init-guessed region", gotNTP)
+	}
+	// Flavors are region-derived compute defaults. They happen to be identical
+	// across the currently registered regions, so assert the field is populated
+	// with the discovered region's value rather than a literal.
+	wantFlavors := v2.DefaultFlavorsForRegion("openstack", "IAD3")
+	compute := prospective.OpenCenter.Infrastructure.Compute
+	for role, current := range map[string]string{
+		"master": compute.FlavorMaster,
+		"worker": compute.FlavorWorker,
+	} {
+		if current != wantFlavors[role] {
+			t.Errorf("compute flavor %q = %q, want %q", role, current, wantFlavors[role])
+		}
+	}
+	// The original config must be untouched by a plan.
+	if !strings.Contains(strings.Join(cfg.OpenCenter.Infrastructure.Networking.NTPServers, ","), "dfw3") {
+		t.Errorf("Plan mutated the original ntp_servers to %v", cfg.OpenCenter.Infrastructure.Networking.NTPServers)
+	}
+}
+
+// Operator-managed time sources are a deliberate choice: a cluster on an
+// isolated network, or one subject to a compliance clock policy, points NTP at
+// its own servers. The binding must block and name --replace rather than
+// silently reverting to the public Rackspace hosts, which would leave the nodes
+// unable to reach any time source.
+func TestPlanBlocksOperatorChosenNTPServers(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Networking.NTPServers = []string{"chrony.corp.internal"}
+
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked {
+		t.Fatalf("status = %s, want blocked", result.Status)
+	}
+	got := prospective.OpenCenter.Infrastructure.Networking.NTPServers
+	if len(got) != 1 || got[0] != "chrony.corp.internal" {
+		t.Fatalf("operator ntp_servers were replaced with %v", got)
+	}
+	warned := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "ntp_servers") && strings.Contains(warning, "IAD3") && strings.Contains(warning, "--replace") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected an ntp_servers warning naming the region and --replace, got %v", result.Warnings)
+	}
+}
+
+// An empty flavor is not an operator choice: init leaves it empty for a region
+// the provider registry does not know, and a cluster rendered with no flavor
+// has no bootable instance type. The binding must fill it.
+func TestPlanFillsEmptyFlavorsFromDiscoveredRegion(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Compute.FlavorMaster = ""
+	cfg.OpenCenter.Infrastructure.Compute.FlavorWorker = ""
+	cfg.OpenCenter.Infrastructure.Compute.FlavorBastion = ""
+
+	_, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := v2.DefaultFlavorsForRegion("openstack", "IAD3")
+	compute := prospective.OpenCenter.Infrastructure.Compute
+	for role, current := range map[string]string{
+		"bastion": compute.FlavorBastion,
+		"master":  compute.FlavorMaster,
+		"worker":  compute.FlavorWorker,
+	} {
+		if current != want[role] {
+			t.Errorf("empty %q flavor = %q, want the region default %q", role, current, want[role])
+		}
+	}
+}
+
+// A flavor the operator chose is protected the same way a region is: the
+// binding warns and leaves it alone rather than silently reverting a decision.
+func TestPlanPreservesOperatorChosenFlavor(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpenCenter.Infrastructure.Compute.FlavorWorker = "some.custom.flavor"
+
+	result, prospective, err := Plan(context.Background(), cfg, &cloudopenstack.DiscoverySnapshot{Region: "IAD3"}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prospective.OpenCenter.Infrastructure.Compute.FlavorWorker; got != "some.custom.flavor" {
+		t.Fatalf("operator flavor was overwritten with %q", got)
+	}
+	warned := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "flavor_worker") && strings.Contains(warning, "--replace") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a --replace warning for flavor_worker, got %v", result.Warnings)
+	}
+}
+
+// The provider-defaults registry asserted a gp.5.* family that no Rackspace
+// region actually offers; a cluster left on that default died in `tofu apply`
+// with Nova's "Unable to find flavor with name gp.5.4.8" after provisioning had
+// already begun. Discovery lists the region's real flavors, so the plan must use
+// them: a flavor the cloud does not have blocks the plan and names the ones it
+// does offer.
+func TestPlanBlocksFlavorMissingFromCloud(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An operator-chosen flavor the cloud does not offer. No region default
+	// competes with it, so it survives into the validation pass - which is the
+	// case that must be caught: the config renders, OpenTofu starts, and Nova
+	// rejects the boot.
+	cfg.OpenCenter.Infrastructure.Compute.FlavorBastion = "m1.large"
+
+	// Live IAD3 inventory: the gp.0.* family only.
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		Region: "IAD3",
+		Flavors: []cloudopenstack.Resource{
+			{ID: "1", Name: "gp.0.2.4"},
+			{ID: "2", Name: "gp.0.4.8"},
+			{ID: "3", Name: "gp.0.4.16"},
+		},
+	}
+
+	result, _, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusBlocked {
+		t.Fatalf("status = %s, want blocked for a flavor the cloud does not offer", result.Status)
+	}
+	var message string
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "does not exist in the discovered cloud region") {
+			message = warning
+		}
+	}
+	if message == "" {
+		t.Fatalf("no missing-flavor warning in %v", result.Warnings)
+	}
+	// The warning has to be actionable: name the bad value and the real ones.
+	for _, want := range []string{"m1.large", "IAD3", "gp.0.4.16"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("warning %q does not mention %q", message, want)
+		}
+	}
+}
+
+// A flavor the cloud does offer must pass, and an unavailable flavor inventory
+// must not block: the compute service can be unreachable or the credential may
+// lack the flavor-list policy, and that must not fail a binding that would work.
+func TestPlanAcceptsFlavorsPresentInCloud(t *testing.T) {
+	cfg, err := v2.NewV2Default("fritos", "openstack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &cloudopenstack.DiscoverySnapshot{
+		Region: "IAD3",
+		Flavors: []cloudopenstack.Resource{
+			{ID: "1", Name: "gp.0.2.4"},
+			{ID: "2", Name: "gp.0.4.8"},
+			{ID: "3", Name: "gp.0.4.16"},
+		},
+	}
+	result, prospective, err := Plan(context.Background(), cfg, snapshot, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "does not exist in the discovered cloud region") {
+			t.Errorf("valid flavor rejected: %s", warning)
+		}
+	}
+	if got := prospective.OpenCenter.Infrastructure.Compute.FlavorWorker; got != "gp.0.4.16" {
+		t.Errorf("flavor_worker = %q, want the region default gp.0.4.16", got)
 	}
 }
 
@@ -627,12 +897,14 @@ func TestPlanPreservesPopulatedClusterValuesDuringCreateInternalNetworkImport(t 
 		t.Fatalf("preserved values unexpectedly produced selections: %#v", result)
 	}
 	// The region fields are the exception to "preserved": the discovered
-	// region is authoritative and repoints the provider block, meta.region,
-	// and the Barbican backend even without --replace (meta.region was the
-	// init default here). Everything else must stay untouched.
+	// region is authoritative and repoints the provider block, meta.region, the
+	// Barbican backend, and the region-specific NTP hosts, even without
+	// --replace (meta.region and the NTP pair were the init defaults here).
+	// Everything else must stay untouched.
 	regionPaths := map[string]bool{
 		"opencenter.infrastructure.cloud.openstack.availability_zones": true,
 		"opencenter.infrastructure.cloud.openstack.region":             true,
+		"opencenter.infrastructure.networking.ntp_servers":             true,
 		"opencenter.meta.region":                                       true,
 		"opencenter.secrets.barbican.region":                           true,
 	}

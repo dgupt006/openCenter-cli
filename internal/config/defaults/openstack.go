@@ -103,10 +103,10 @@ func newOpenStackIAD3Defaults() ProviderDefaults {
 		dnsNameservers: []string{"8.8.8.8", "8.8.4.4"},
 		storageClass:   "csi-cinder-sc-delete",
 		flavors: FlavorDefaults{
-			Bastion:       "gp.5.2.4",
-			Master:        "gp.5.4.8",
-			Worker:        "gp.5.4.16",
-			WorkerWindows: "gp.5.4.16",
+			Bastion:       "gp.0.2.4",
+			Master:        "gp.0.4.8",
+			Worker:        "gp.0.4.16",
+			WorkerWindows: "gp.0.4.16",
 		},
 	}
 }

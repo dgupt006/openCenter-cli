@@ -1140,7 +1140,7 @@ func TestValidateProviderBootstrap_VMwareRequiresCredentials(t *testing.T) {
 	// No vSphere secrets set
 	cfg.Secrets.ServiceSecrets = nil
 
-	err := validateProviderBootstrap(&cfg, "vmware")
+	err := (&openstackBootstrapProvider{}).validateProviderBootstrap(&cfg, "vmware")
 	if err == nil {
 		t.Fatal("expected error for missing vmware credentials")
 	}
@@ -1156,7 +1156,7 @@ func TestValidateProviderBootstrap_BaremetalNoCredentials(t *testing.T) {
 	}
 	cfg.OpenCenter.Infrastructure.SSH.User = "ubuntu"
 
-	err := validateProviderBootstrap(&cfg, "baremetal")
+	err := (&openstackBootstrapProvider{}).validateProviderBootstrap(&cfg, "baremetal")
 	if err != nil {
 		t.Fatalf("validateProviderBootstrap(baremetal) unexpected error: %v", err)
 	}
