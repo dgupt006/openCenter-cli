@@ -157,14 +157,40 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 			continue
 		}
 		fullPath := filepath.Join(overlayPath, filepath.FromSlash(artifact.Path))
+		record := previousPaths[artifact.Path]
 		if _, exists := previousPaths[artifact.Path]; !exists {
 			if info, err := os.Lstat(fullPath); err == nil {
 				if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
 					result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("existing unowned or unsafe secret artifact")})
 					continue
 				}
-				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("existing unowned secret artifact; refusing to adopt")})
-				continue
+				// A cert-manager credential Secret the generator rendered from
+				// its plaintext template sits at exactly the path this sync
+				// plans to own: the planner derives the filename from the same
+				// credential set the renderer iterates. The credential is
+				// already exposed in the working tree (and often staged), so
+				// refusing to adopt it leaves the leak in place with no way to
+				// fix it. --force adopts the path: the plaintext is snapshotted
+				// for rollback and the rewrite leaves a SOPS-encrypted file.
+				// Without --force the refusal stands, and a generic per-service
+				// secret.yaml is never adoptable either way.
+				if opts.Force && secretartifacts.IsCertManagerCredentialFilename(filepath.Base(artifact.Path)) {
+					m.logger.Warn("Adopting unowned credential artifact",
+						"service", artifact.TargetService, "path", fullPath)
+					adoptData, readErr := os.ReadFile(fullPath)
+					if readErr != nil {
+						result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: readErr})
+						continue
+					}
+					record = secretartifacts.OwnershipArtifact{
+						Path:   artifact.Path,
+						Owners: artifact.OwnerNames(),
+						Hash:   secretartifacts.HashBytes(adoptData),
+					}
+				} else {
+					result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("existing unowned secret artifact; refusing to adopt")})
+					continue
+				}
 			} else if err != nil && !os.IsNotExist(err) {
 				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
 				continue
@@ -187,7 +213,7 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 				break
 			}
 		}
-		outcome, err := m.syncServiceManifestOutcome(ctx, serviceName, artifact.Payload, fullPath, ageKey, cfg, opts.DryRun, opts.Force, previousPaths[artifact.Path])
+		outcome, err := m.syncServiceManifestOutcome(ctx, serviceName, artifact.Payload, fullPath, ageKey, cfg, opts.DryRun, opts.Force, record)
 		if err != nil {
 			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
 			continue
