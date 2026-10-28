@@ -5,9 +5,13 @@ locals {
   # Prefix to add to Openstack resource names
   naming_prefix                           = "${local.cluster_name}-"
 {{- if ne (.OpenCenter.Infrastructure.Provider | default "openstack") "baremetal" }}
-  openstack_auth_url                      = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL | default "https://keystone.api.sjc3.rackspacecloud.com/v3/" }}"
+  # auth_url and region have no template fallback on purpose. A default here
+  # would silently provision one region while the rendered in-cluster CCM and
+  # CSI consume a different one; cluster validate and the deploy preflight are
+  # the places that reject a missing value, and both authenticate for real.
+  openstack_auth_url                      = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL }}"
   openstack_insecure                      = {{ .OpenCenter.Infrastructure.Cloud.OpenStack.Insecure | default false }}
-  openstack_region                        = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Region | default "SJC3" }}"
+  openstack_region                        = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Region }}"
   availability_zone                       = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.AvailabilityZone | default "az1" }}"
   openstack_user_name                     = ""
   openstack_user_password                 = ""
@@ -15,7 +19,7 @@ locals {
   application_credential_secret           = var.os_application_credential_secret
   openstack_project_domain_name           = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.ProjectDomainName | default "rackspace_cloud_domain" }}"
   openstack_user_domain_name              = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.UserDomainName | default "rackspace_cloud_domain" }}"
-  openstack_tenant_name                   = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.TenantName | default "f2823901-4194-40c7-9dc4-d56d2105e81a" }}"
+  openstack_tenant_name                   = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.TenantName }}"
   floatingip_pool                         = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Networking.FloatingIPPool | default "PUBLICNET" }}"
   router_external_network_id              = "{{ .OpenCenter.Infrastructure.Cloud.OpenStack.Networking.RouterExternalNetworkID | default "" }}"
   # VLAN settings

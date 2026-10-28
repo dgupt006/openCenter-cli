@@ -161,7 +161,8 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			// the sources aggregate gate is ready: DNS isn't available until CCM removes
 			// the cloud-provider-uninitialized taint, and sources needs DNS to fetch repos.
 			BasePath: "applications/base/services/openstack-ccm", ExtraDependencies: []string{"openstack-ccm-override"}, OverrideDependsOn: []string{"openstack-ccm-namespace"}, SkipSourcesDependency: true,
-			OverrideValuesRenderer: templateRenderer(openstackCCMTemplate),
+			OverrideValuesRenderer:           templateRenderer(openstackCCMTemplate),
+			BaseKustomizationPatchesRenderer: openstackCCMBaseKustomizationPatchesRenderer,
 		},
 		{
 			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true, NamespaceStage: true,

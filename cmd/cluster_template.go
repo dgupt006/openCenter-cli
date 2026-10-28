@@ -249,12 +249,20 @@ func generateMinimalTemplate(provider string) v2.Config {
 	return cfg
 }
 
-// populateOpenStackConfig adds OpenStack-specific configuration
+// populateOpenStackConfig adds OpenStack-specific configuration.
+//
+// auth_url is derived from the configured region rather than hardcoded. The
+// base template region is SJC3, so a fixed DFW3 host produced a config whose
+// region and keystone endpoint disagreed — the same mismatch that later shows
+// up in the rendered in-cluster CCM and CSI cloud configs, where a credential
+// issued in one region is rejected by another region's keystone. Defaults are
+// derived the same way in internal/config/v2/defaults.go.
 func populateOpenStackConfig(cfg *v2.Config) {
 	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack == nil {
 		cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &v2.OpenStackCloudConfig{}
 	}
-	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL = "https://keystone.api.dfw3.rackspacecloud.com/v3/"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL = v2.KeystoneAuthURL(cfg.OpenCenter.Meta.Region)
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Region = cfg.OpenCenter.Meta.Region
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.Domain = "Default"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "app-credential-id"
 	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "app-credential-secret"

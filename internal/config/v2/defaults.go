@@ -564,11 +564,21 @@ func RenderFullTemplateYAMLFromConfig(cfg *Config) ([]byte, error) {
 	return append([]byte(header), ensureDocumentStart(data)...), nil
 }
 
+// KeystoneAuthURL returns the identity endpoint for a Rackspace OpenStack
+// region. Single source of truth: the endpoint is derived from the region in
+// three places (config defaults, the cluster template, and the provider
+// binding's stale-value detection), and when those formulas drifted, a
+// template shipped a DFW3 keystone beside an SJC3 region - the split that makes
+// every in-cluster consumer authenticate in the wrong region.
+func KeystoneAuthURL(region string) string {
+	return fmt.Sprintf("https://keystone.api.%s.rackspacecloud.com/v3/", strings.ToLower(strings.TrimSpace(region)))
+}
+
 func applyProviderCloudDefaults(cfg *Config, availabilityZone string) {
 	switch canonicalInfrastructureProvider(cfg.OpenCenter.Infrastructure.Provider) {
 	case "openstack":
 		cfg.OpenCenter.Infrastructure.Cloud.OpenStack = &OpenStackCloudConfig{
-			AuthURL:                     fmt.Sprintf("https://keystone.api.%s.rackspacecloud.com/v3/", strings.ToLower(cfg.OpenCenter.Meta.Region)),
+			AuthURL:                     KeystoneAuthURL(cfg.OpenCenter.Meta.Region),
 			Region:                      cfg.OpenCenter.Meta.Region,
 			ProjectID:                   defaultOpenStackProjectID,
 			ProjectName:                 defaultOpenStackProjectName,
@@ -1053,6 +1063,41 @@ func defaultNTPServers(provider, region string) []string {
 		fmt.Sprintf("time.%s.example.com", strings.ToLower(region)),
 		fmt.Sprintf("time2.%s.example.com", strings.ToLower(region)),
 	}
+}
+
+// DefaultNTPServers returns the NTP servers the provider registry prescribes
+// for a region. Exported for the OpenStack provider binding: `cluster init`
+// bakes region-specific NTP hosts (time.<region>.rackspace.com) long before any
+// cloud is chosen, so binding the cluster to a profile in another region has to
+// repoint them. Nodes time-sync against these hosts, and a cross-region host is
+// resolvable but wrong - clock skew surfaces later as Kerberos/TLS failures that
+// point nowhere near the config.
+func DefaultNTPServers(provider, region string) []string {
+	return defaultNTPServers(provider, region)
+}
+
+// DefaultFlavorsForRegion returns the bastion/control-plane/worker flavors the
+// provider registry prescribes for a region, keyed by role. Roles the provider
+// has no default for are omitted. Exported for the OpenStack provider binding
+// for the same reason as DefaultNTPServers.
+func DefaultFlavorsForRegion(provider, region string) map[string]string {
+	flavors := map[string]string{}
+	providerDefaults, err := lookupProviderDefaults(provider, region)
+	if err != nil {
+		return flavors
+	}
+	defaults := providerDefaults.GetDefaultFlavors()
+	for role, value := range map[string]string{
+		"bastion":        defaults.Bastion,
+		"master":         defaults.Master,
+		"worker":         defaults.Worker,
+		"worker-windows": defaults.WorkerWindows,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			flavors[role] = value
+		}
+	}
+	return flavors
 }
 
 func defaultStorageClass(provider, region string) string {

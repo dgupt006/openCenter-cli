@@ -441,3 +441,33 @@ func TestOpenTofuComments(t *testing.T) {
 		}
 	}
 }
+
+// A template whose region and keystone endpoint disagree is the root cause of
+// a cluster that provisions in one region while its rendered in-cluster CCM
+// and CSI authenticate against another — the credential is then rejected with
+// 404 and nothing inside the cluster can initialize. auth_url must always be
+// derived from the configured region.
+func TestTemplateOpenStackAuthURLMatchesRegion(t *testing.T) {
+	for _, region := range []string{"IAD3", "DFW3", "SJC3", "iad3"} {
+		cfg := templateBaseConfig("openstack")
+		cfg.OpenCenter.Meta.Region = region
+		populateOpenStackConfig(&cfg)
+
+		openstack := cfg.OpenCenter.Infrastructure.Cloud.OpenStack
+		want := "https://keystone.api." + strings.ToLower(region) + ".rackspacecloud.com/v3/"
+		if openstack.AuthURL != want {
+			t.Errorf("region %q produced auth_url %q, want %q", region, openstack.AuthURL, want)
+		}
+		if openstack.Region != region {
+			t.Errorf("region %q produced cloud region %q", region, openstack.Region)
+		}
+	}
+
+	// The shipped template must be internally consistent, not just derivable.
+	shipped := generateCompleteTemplate("openstack")
+	shippedAuth := shipped.OpenCenter.Infrastructure.Cloud.OpenStack.AuthURL
+	if !strings.Contains(shippedAuth, strings.ToLower(shipped.OpenCenter.Meta.Region)) {
+		t.Errorf("template region %q does not appear in auth_url %q",
+			shipped.OpenCenter.Meta.Region, shippedAuth)
+	}
+}
