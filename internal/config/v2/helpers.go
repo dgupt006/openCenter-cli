@@ -2,6 +2,7 @@ package v2
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/opencenter-cloud/opencenter-cli/internal/config/services"
@@ -39,46 +40,159 @@ func (c Config) GetAWSCredentials(serviceAccessKey, serviceSecretKey string) (ac
 	return c.Secrets.Global.AWS.Infrastructure.AccessKey, c.Secrets.Global.AWS.Infrastructure.SecretAccessKey
 }
 
-// GetAWSApplicationCredentials resolves application credentials with fallback to infrastructure credentials.
+// GetAWSApplicationCredentials resolves application credentials with fallback to
+// infrastructure credentials. The init placeholder counts as unset: a fresh
+// cluster ships CHANGEME in the application block, and treating it as a real
+// key made every consumer that trusts this getter (cert-manager Route53
+// resolution included) believe a credential existed.
 func (c Config) GetAWSApplicationCredentials() (accessKey, secretKey string) {
-	if c.Secrets.Global.AWS.Application.AccessKey != "" && c.Secrets.Global.AWS.Application.SecretAccessKey != "" {
-		return c.Secrets.Global.AWS.Application.AccessKey, c.Secrets.Global.AWS.Application.SecretAccessKey
+	accessKey, secretKey = c.Secrets.Global.AWS.Application.AccessKey, c.Secrets.Global.AWS.Application.SecretAccessKey
+	if isMissingSecret(accessKey) || isMissingSecret(secretKey) {
+		return c.Secrets.Global.AWS.Infrastructure.AccessKey, c.Secrets.Global.AWS.Infrastructure.SecretAccessKey
 	}
-
-	return c.Secrets.Global.AWS.Infrastructure.AccessKey, c.Secrets.Global.AWS.Infrastructure.SecretAccessKey
+	return accessKey, secretKey
 }
 
-// GetCertManagerAWSCredentials resolves cert-manager Route53 credentials.
-// Deprecated: Use EnabledCertManagerAWSCredentials() for multi-credential support.
-func (c Config) GetCertManagerAWSCredentials() (accessKey, secretKey string) {
-	if c.Secrets.CertManager.AWSAccessKey != "" && c.Secrets.CertManager.AWSSecretAccessKey != "" {
-		return c.Secrets.CertManager.AWSAccessKey, c.Secrets.CertManager.AWSSecretAccessKey
+// certManagerCredentialName is the credential name derived from a DNS provider
+// for the single-credential flow: `dns_provider: cloudflare` renders the
+// ClusterIssuer named after the DNS zone plus the provider, so the provider
+// name is the fallback credential name. A hand-written credential that already
+// carries the provider's name keeps its own name instead of being shadowed by a
+// duplicate.
+func certManagerCredentialName(provider string, names []string) string {
+	for _, name := range names {
+		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(provider)) {
+			return name
+		}
 	}
-	return "", ""
+	return strings.TrimSpace(provider)
 }
 
-// EnabledCertManagerAWSCredentials returns all enabled AWS credentials for cert-manager,
-// keyed by their configured name.
-func (c Config) EnabledCertManagerAWSCredentials() map[string]CertManagerAWSCredential {
+// sortedCredentialNames returns credential names in the deterministic order the
+// renderer and the default issuer use: lexicographic, first name wins.
+func sortedCredentialNames[V any](credentials map[string]V) []string {
+	names := make([]string, 0, len(credentials))
+	for name := range credentials {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ResolvedCertManagerAWSCredentials returns the Route53 credentials cert-manager
+// renders, keyed by credential name. Enabled entries of
+// secrets.cert_manager.aws pass through verbatim; when none is enabled and
+// services.cert-manager.dns_provider is route53, the legacy flat
+// secrets.cert_manager.aws_access_key/aws_secret_access_key pair -- or the AWS
+// application credentials -- are surfaced as a single enabled credential named
+// after the provider. Without that derivation, setting dns_provider alone
+// rendered no ClusterIssuer at all.
+func (c Config) ResolvedCertManagerAWSCredentials() map[string]CertManagerAWSCredential {
 	result := make(map[string]CertManagerAWSCredential)
+	enabled := make([]string, 0, len(c.Secrets.CertManager.AWS))
 	for name, cred := range c.Secrets.CertManager.AWS {
 		if cred.Enabled {
 			result[name] = cred
+			enabled = append(enabled, name)
 		}
+	}
+	if len(result) > 0 || c.ResolvedDNSProvider() != "route53" {
+		return result
+	}
+
+	accessKey, secretKey := c.certManagerRoute53Keys()
+	if accessKey == "" || secretKey == "" {
+		return result
+	}
+	result[certManagerCredentialName("route53", enabled)] = CertManagerAWSCredential{
+		Enabled:            true,
+		AWSAccessKey:       accessKey,
+		AWSSecretAccessKey: secretKey,
+		Region:             c.certManagerRoute53Region(),
 	}
 	return result
 }
 
-// EnabledCertManagerCloudflareCredentials returns all enabled Cloudflare credentials for cert-manager,
-// keyed by their configured name.
-func (c Config) EnabledCertManagerCloudflareCredentials() map[string]CertManagerCloudflareCredential {
+// ResolvedCertManagerCloudflareCredentials returns the Cloudflare credentials
+// cert-manager renders, keyed by credential name. Enabled entries of
+// secrets.cert_manager.cloudflare pass through verbatim; when none is enabled
+// and services.cert-manager.dns_provider is cloudflare, the legacy flat
+// secrets.cert_manager.cloudflare_api_token is surfaced as a single enabled
+// credential named after the provider. Without that derivation, setting
+// dns_provider alone rendered no ClusterIssuer at all.
+func (c Config) ResolvedCertManagerCloudflareCredentials() map[string]CertManagerCloudflareCredential {
 	result := make(map[string]CertManagerCloudflareCredential)
+	enabled := make([]string, 0, len(c.Secrets.CertManager.Cloudflare))
 	for name, cred := range c.Secrets.CertManager.Cloudflare {
 		if cred.Enabled {
 			result[name] = cred
+			enabled = append(enabled, name)
 		}
 	}
+	if len(result) > 0 || c.ResolvedDNSProvider() != "cloudflare" {
+		return result
+	}
+
+	token := strings.TrimSpace(c.Secrets.CertManager.CloudflareAPIToken)
+	if isMissingSecret(token) {
+		return result
+	}
+	result[certManagerCredentialName("cloudflare", enabled)] = CertManagerCloudflareCredential{
+		Enabled:  true,
+		APIToken: token,
+	}
 	return result
+}
+
+// ResolvedDNSProvider returns the lower-cased cert-manager DNS provider. An
+// explicit value always wins; an empty one falls back to the provider the
+// registry auto-selects for the infrastructure, because that is the provider
+// the renderers and readiness treat as in force. Returns "" when cert-manager
+// is absent or disabled.
+func (c Config) ResolvedDNSProvider() string {
+	certManager, ok := c.OpenCenter.Services["cert-manager"].(*services.CertManagerConfig)
+	if !ok || certManager == nil || !certManager.Enabled {
+		return ""
+	}
+	if provider := strings.ToLower(strings.TrimSpace(certManager.DNSProvider)); provider != "" {
+		return provider
+	}
+	return strings.ToLower(string(services.AutoSelectDNSProvider(c.Provider(), c.ClusterName(), c.designateEnabled())))
+}
+
+// designateEnabled reports whether the cluster uses OpenStack Designate, the
+// signal the registry needs to choose between designate and cloudflare.
+func (c Config) designateEnabled() bool {
+	if openstack := c.OpenCenter.Infrastructure.Cloud.OpenStack; openstack != nil && openstack.UseDesignate {
+		return true
+	}
+	return c.OpenCenter.Infrastructure.Networking.UseDesignate
+}
+
+// certManagerRoute53Keys resolves the Route53 key pair: the legacy flat
+// cert-manager secrets first, then the AWS application credentials.
+func (c Config) certManagerRoute53Keys() (accessKey, secretKey string) {
+	flatAccess := strings.TrimSpace(c.Secrets.CertManager.AWSAccessKey)
+	flatSecret := strings.TrimSpace(c.Secrets.CertManager.AWSSecretAccessKey)
+	if !isMissingSecret(flatAccess) && !isMissingSecret(flatSecret) {
+		return flatAccess, flatSecret
+	}
+	accessKey, secretKey = c.GetAWSApplicationCredentials()
+	return strings.TrimSpace(accessKey), strings.TrimSpace(secretKey)
+}
+
+// certManagerRoute53Region resolves the Route53 region: the cert-manager
+// service region, then the AWS application region, then the cluster region.
+func (c Config) certManagerRoute53Region() string {
+	if certManager, ok := c.OpenCenter.Services["cert-manager"].(*services.CertManagerConfig); ok && certManager != nil {
+		if region := strings.TrimSpace(certManager.Region); region != "" {
+			return region
+		}
+	}
+	if region := strings.TrimSpace(c.Secrets.Global.AWS.Application.Region); region != "" {
+		return region
+	}
+	return strings.TrimSpace(c.OpenCenter.Meta.Region)
 }
 
 // GetLokiS3Credentials resolves Loki S3 credentials.
@@ -255,29 +369,6 @@ func (c Config) GetTempoSwiftApplicationCredentialSecret() string {
 // GetS3BackendCredentials resolves backend S3 credentials using infrastructure credentials.
 func (c Config) GetS3BackendCredentials() (accessKey, secretKey string) {
 	return c.GetAWSCredentials("", "")
-}
-
-// GetCertManagerAWSAccessKey returns the cert-manager AWS access key for templates.
-// Deprecated: Use EnabledCertManagerAWSCredentials() for multi-credential support.
-func (c Config) GetCertManagerAWSAccessKey() string {
-	accessKey, _ := c.GetCertManagerAWSCredentials()
-	return accessKey
-}
-
-// GetCertManagerAWSSecretKey returns the cert-manager AWS secret key for templates.
-// Deprecated: Use EnabledCertManagerAWSCredentials() for multi-credential support.
-func (c Config) GetCertManagerAWSSecretKey() string {
-	_, secretKey := c.GetCertManagerAWSCredentials()
-	return secretKey
-}
-
-// GetCertManagerCloudflareAPIToken returns the Cloudflare API token for cert-manager.
-// Deprecated: Use EnabledCertManagerCloudflareCredentials() for multi-credential support.
-func (c Config) GetCertManagerCloudflareAPIToken() string {
-	if strings.TrimSpace(c.Secrets.CertManager.CloudflareAPIToken) != "" {
-		return strings.TrimSpace(c.Secrets.CertManager.CloudflareAPIToken)
-	}
-	return ""
 }
 
 // GetLokiS3AccessKey returns the Loki S3 access key for templates.

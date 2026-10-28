@@ -102,7 +102,7 @@ Stability note (from `internal/config/v2/config.go`): the overlay-unit types ref
 
 Plaintext secret *values* referenced by services and infrastructure -- this is the section SOPS is expected to encrypt at rest. Notable fields: `sops_age_key_file`, `ssh_key` (`private`/`public`/`cypher`), `global` (cross-cutting AWS/OpenStack credentials), per-service secret blocks (`cert_manager`, `loki`, `mimir`, `keycloak`, `headlamp`, `weave_gitops`, `grafana`, `harbor`, `tempo`, `etcd_backup`, `velero`, `alert_proxy`, `vsphere_csi`), a catch-all `service_secrets` map, `sops` (SOPS encryption toggle + `age_key_file` + `encrypted_regex`), and `overlay_units` (the `secrets.overlay_units.customer_managed` block documented in [GitOps Configuration Reference](gitops-configuration.md)).
 
-`cert_manager` secrets support **named, multi-credential** configuration -- `aws` and `cloudflare` are each `map[string]<credential>`, so a cluster can hold several named AWS Route53 or Cloudflare credentials scoped to different DNS zones, in addition to legacy flat fields kept only for migration compatibility.
+`cert_manager` secrets support **named, multi-credential** configuration -- `aws` and `cloudflare` are each `map[string]<credential>`, so a cluster can hold several named AWS Route53 or Cloudflare credentials scoped to different DNS zones, in addition to legacy flat fields kept only for migration compatibility. `opencenter.services.cert-manager.dns_provider` selects the default issuer and, when no named credential is enabled, derives one credential named after the provider from the flat token or the AWS application credentials; see [cert-manager](services/cert-manager.md) for the resolution order.
 
 ## Cross-references
 

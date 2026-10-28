@@ -268,7 +268,24 @@ func setFieldPath(v reflect.Value, parts []string, value, path string) error {
 		}
 		entry := v.MapIndex(key)
 		if !entry.IsValid() {
-			return fmt.Errorf("field not found: '%s' in map while setting '%s'", parts[0], path)
+			// A missing intermediate key is created with the map's own element
+			// type, so `secrets.cert_manager.cloudflare.<name>.api_token`
+			// materialises a CertManagerCloudflareCredential and the leaf lands on
+			// its api_token field. Requiring the key to pre-exist made every
+			// named cert-manager credential unreachable from `cluster set`, which
+			// is why dns_provider: cloudflare rendered no ClusterIssuer.
+			if elemType := v.Type().Elem(); elemType.Kind() == reflect.Struct ||
+				elemType.Kind() == reflect.Ptr && elemType.Elem().Kind() == reflect.Struct {
+				entry = reflect.New(elemType).Elem()
+			} else {
+				return fmt.Errorf("field not found: '%s' in map while setting '%s'", parts[0], path)
+			}
+		}
+		if v.IsNil() {
+			if !v.CanSet() {
+				return fmt.Errorf("cannot initialize nil map while setting '%s'", path)
+			}
+			v.Set(reflect.MakeMap(v.Type()))
 		}
 		addressable := reflect.New(entry.Type()).Elem()
 		addressable.Set(entry)

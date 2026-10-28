@@ -750,6 +750,13 @@ func (r *readinessBuilder) validateVeleroSecrets(cfg *Config) {
 	r.requireSecret("secrets.velero.secret_access_key", cfg.Secrets.Velero.SecretAccessKey, "Velero S3 storage requires a secret access key.")
 }
 
+// validateCertManagerSecrets requires a usable credential for every credential
+// the renderer will emit. It reads the resolved credential sets (see
+// ResolvedCertManager*Credentials) instead of the flat legacy fields alone, so
+// `dns_provider: cloudflare` backed only by secrets.cert_manager.cloudflare
+// -- and the flat-field-only shape the customer overlays use -- both pass,
+// while a provider with no credential at all is reported against the path that
+// would fix it.
 func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 	if !serviceEnabled(cfg, "cert-manager") {
 		return
@@ -760,10 +767,33 @@ func (r *readinessBuilder) validateCertManagerSecrets(cfg *Config) {
 	}
 	switch strings.ToLower(strings.TrimSpace(certManager.DNSProvider)) {
 	case "route53":
-		r.requireSecret("secrets.cert_manager.aws_access_key", cfg.Secrets.CertManager.AWSAccessKey, "cert-manager Route53 DNS requires AWS access key.")
-		r.requireSecret("secrets.cert_manager.aws_secret_access_key", cfg.Secrets.CertManager.AWSSecretAccessKey, "cert-manager Route53 DNS requires AWS secret access key.")
+		credentials := cfg.ResolvedCertManagerAWSCredentials()
+		if len(credentials) == 0 {
+			r.addError(CategoryServices, "secrets.cert_manager.aws",
+				"cert-manager Route53 DNS requires an enabled credential.",
+				"Enable secrets.cert_manager.aws.<name> with aws_access_key/aws_secret_access_key, or set secrets.global.aws.application credentials.")
+		}
+		for _, name := range sortedCredentialNames(credentials) {
+			cred := credentials[name]
+			r.requireSecret(fmt.Sprintf("secrets.cert_manager.aws.%s.aws_access_key", name), cred.AWSAccessKey, "cert-manager Route53 DNS requires AWS access key.")
+			r.requireSecret(fmt.Sprintf("secrets.cert_manager.aws.%s.aws_secret_access_key", name), cred.AWSSecretAccessKey, "cert-manager Route53 DNS requires AWS secret access key.")
+			if strings.TrimSpace(cred.Region) == "" {
+				r.addError(CategoryServices, fmt.Sprintf("secrets.cert_manager.aws.%s.region", name),
+					"cert-manager Route53 DNS requires a region.",
+					"Set the credential region, services.cert-manager.region, or the cluster region.")
+			}
+		}
 	case "cloudflare":
-		r.requireSecret("secrets.cert_manager.cloudflare_api_token", cfg.Secrets.CertManager.CloudflareAPIToken, "cert-manager Cloudflare DNS requires API token.")
+		credentials := cfg.ResolvedCertManagerCloudflareCredentials()
+		if len(credentials) == 0 {
+			r.addError(CategoryServices, "secrets.cert_manager.cloudflare",
+				"cert-manager Cloudflare DNS requires an enabled credential.",
+				"Enable secrets.cert_manager.cloudflare.<name> with api_token.")
+		}
+		for _, name := range sortedCredentialNames(credentials) {
+			cred := credentials[name]
+			r.requireSecret(fmt.Sprintf("secrets.cert_manager.cloudflare.%s.api_token", name), cred.APIToken, "cert-manager Cloudflare DNS requires API token.")
+		}
 	}
 }
 

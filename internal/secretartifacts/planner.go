@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -175,6 +176,12 @@ func Plan(cfg *v2.Config) ([]Artifact, error) {
 		}
 		result = append(result, *artifact)
 	}
+	credentialArtifacts, err := certManagerCredentialArtifacts(cfg)
+	if err != nil {
+		return nil, err
+	}
+	result = append(result, credentialArtifacts...)
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
 	if err := ValidateTargets(cfg, result); err != nil {
 		return nil, err
 	}
@@ -376,6 +383,193 @@ func certManagerPayload(cfg *v2.Config) map[string]interface{} {
 		return nil
 	}
 	return payload
+}
+
+// CertManagerCredentialArtifactPath returns the overlay-relative path of the
+// SOPS-encrypted Secret holding one cert-manager DNS credential.
+//
+// The name is derived here, from the same resolved credential set the renderer
+// iterates, so the materialized Secret and the ClusterIssuer's
+// apiTokenSecretRef / accessKeyIDSecretRef can never disagree: a name computed
+// independently on either side is how a plaintext credential ended up committed
+// while sync encrypted only the legacy generic secret.yaml.
+//
+// provider must be "aws" or "cloudflare"; name is the credential map key, which
+// validateCertManagerCredentialName already constrains to a DNS-1123 label.
+func CertManagerCredentialArtifactPath(provider, name string) (string, error) {
+	filename, err := CertManagerCredentialFilename(provider, name)
+	if err != nil {
+		return "", err
+	}
+	return path.Join("services", "cert-manager", filename), nil
+}
+
+// CertManagerCredentialFilename returns the Secret filename for one
+// cert-manager DNS credential: opencenter-aws-credentials-secret-<name>.yaml or
+// opencenter-cloudflare-credentials-secret-<name>.yaml.
+//
+// The name is validated as a DNS-1123 label rather than assumed. The renderer
+// applies the same rule, but sync must not rely on the renderer having run: an
+// unvalidated name would flow straight into an overlay-relative path that the
+// ownership ledger later resolves for hashing and deletion.
+func CertManagerCredentialFilename(provider, name string) (string, error) {
+	prefix := certManagerCredentialPrefix(provider)
+	if prefix == "" {
+		return "", fmt.Errorf("unsupported cert-manager credential provider %q", provider)
+	}
+	if err := ValidateCertManagerCredentialName(name); err != nil {
+		return "", err
+	}
+	return prefix + strings.TrimSpace(name) + ".yaml", nil
+}
+
+// ValidateCertManagerCredentialName enforces the DNS-1123 label rule the
+// credential map keys must satisfy.
+//
+// A credential name is only ever safe to embed in a path once it is known to be
+// a label, and the ownership ledger later resolves that path to hash and to
+// delete. Exported so the renderer validates through this function instead of
+// keeping a second, drift-prone copy of the contract.
+func ValidateCertManagerCredentialName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("cert-manager credential name must not be empty")
+	}
+	if len(trimmed) > 63 {
+		return fmt.Errorf("cert-manager credential name %q exceeds the 63-character DNS-1123 label limit", trimmed)
+	}
+	if !certManagerCredentialNamePattern.MatchString(trimmed) {
+		return fmt.Errorf("cert-manager credential name %q must be a DNS-1123 label of lowercase letters, digits, and hyphens, starting and ending with a letter or digit", trimmed)
+	}
+	return nil
+}
+
+// certManagerCredentialNamePattern is the DNS-1123 label rule the credential
+// map keys must satisfy.
+var certManagerCredentialNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// certManagerCredentialProviders maps a DNS provider to the filename prefix of
+// the Secret holding its credential. It is the single source of truth: the
+// builder, the ownership-state admission test, and the renderer's own filename
+// choice all read it, so a sync-materialized Secret and the ClusterIssuer's
+// secretRef cannot drift apart.
+var certManagerCredentialProviders = []struct {
+	provider string
+	prefix   string
+}{
+	{provider: "aws", prefix: "opencenter-aws-credentials-secret-"},
+	{provider: "cloudflare", prefix: "opencenter-cloudflare-credentials-secret-"},
+}
+
+// certManagerCredentialPrefix returns the Secret filename prefix for a
+// provider, or "" when the provider has no credential Secret.
+func certManagerCredentialPrefix(provider string) string {
+	for _, entry := range certManagerCredentialProviders {
+		if strings.EqualFold(strings.TrimSpace(provider), entry.provider) {
+			return entry.prefix
+		}
+	}
+	return ""
+}
+
+// IsCertManagerCredentialFilename reports whether a basename is one this
+// planner would construct for a credential Secret. It is the ownership-state
+// admission test: the accepted set is derived from the same prefix list and
+// label pattern the builder uses, so the two cannot drift apart.
+func IsCertManagerCredentialFilename(base string) bool {
+	if !strings.HasSuffix(base, ".yaml") {
+		return false
+	}
+	stem := strings.TrimSuffix(base, ".yaml")
+	for _, entry := range certManagerCredentialProviders {
+		name := strings.TrimPrefix(stem, entry.prefix)
+		if name != stem && certManagerCredentialNamePattern.MatchString(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// certManagerCredentialArtifacts plans one Secret artifact per credential the
+// cert-manager renderer will emit an issuer for.
+//
+// cfg.ResolvedCertManagerAWSCredentials / ...CloudflareCredentials are the
+// single source of truth for which credentials are in force: enabled named map
+// entries verbatim, plus the dns_provider-derived credential when none is
+// enabled. Planning from that set is what makes `secrets sync` encrypt the
+// credentials `cluster configure` writes; Plan's fixed source table cannot
+// carry them because their targets are per-credential paths, not the one
+// services/<service>/secret.yaml route.
+//
+// A credential whose secret material is absent or still the init placeholder is
+// skipped, matching the renderer, which emits no issuer for it. Materializing
+// one anyway would write a Secret whose values readiness already reports as
+// missing, and sync would then prune it once the real value arrives.
+func certManagerCredentialArtifacts(cfg *v2.Config) ([]Artifact, error) {
+	if !isTargetServiceEnabled(cfg, "cert-manager") {
+		return nil, nil
+	}
+	type credential struct {
+		provider string
+		name     string
+		payload  map[string]interface{}
+	}
+	var credentials []credential
+	for _, name := range sortedCredentialNames(cfg.ResolvedCertManagerAWSCredentials()) {
+		cred := cfg.ResolvedCertManagerAWSCredentials()[name]
+		if isPlaceholderSecret(cred.AWSAccessKey) || isPlaceholderSecret(cred.AWSSecretAccessKey) {
+			// The renderer emits no issuer for a credential that is not fully
+			// filled in, so materializing a Secret for it would create an orphan.
+			continue
+		}
+		credentials = append(credentials, credential{provider: "aws", name: name, payload: map[string]interface{}{
+			"aws-access-key":        strings.TrimSpace(cred.AWSAccessKey),
+			"aws-secret-access-key": strings.TrimSpace(cred.AWSSecretAccessKey),
+		}})
+	}
+	for _, name := range sortedCredentialNames(cfg.ResolvedCertManagerCloudflareCredentials()) {
+		cred := cfg.ResolvedCertManagerCloudflareCredentials()[name]
+		if isPlaceholderSecret(cred.APIToken) {
+			continue
+		}
+		credentials = append(credentials, credential{provider: "cloudflare", name: name, payload: map[string]interface{}{
+			"api-token": strings.TrimSpace(cred.APIToken),
+		}})
+	}
+
+	artifacts := make([]Artifact, 0, len(credentials))
+	for _, entry := range credentials {
+		relPath, err := CertManagerCredentialArtifactPath(entry.provider, entry.name)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, Artifact{
+			LogicalService: entry.name,
+			TargetService:  "cert-manager",
+			Path:           relPath,
+			Payload:        entry.payload,
+			Owners:         []string{entry.name},
+			SourcePayloads: map[string]map[string]interface{}{entry.name: entry.payload},
+		})
+	}
+	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
+	return artifacts, nil
+}
+
+func sortedCredentialNames[V any](credentials map[string]V) []string {
+	names := make([]string, 0, len(credentials))
+	for name := range credentials {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// isPlaceholderSecret reports whether a credential value carries no real secret
+// material: empty, or the init placeholder.
+func isPlaceholderSecret(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed == "" || strings.EqualFold(trimmed, v2.PlaceholderSecret)
 }
 
 func normalizeServiceName(raw string) string {

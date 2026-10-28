@@ -192,10 +192,23 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 			result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: err})
 			continue
 		}
-		if !opts.DryRun {
+		if !opts.DryRun && outcome != syncUnchanged {
 			data, hashErr := os.ReadFile(fullPath)
 			if hashErr != nil {
 				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: hashErr})
+				continue
+			}
+			// Every artifact sync writes is credential material, so a file it
+			// just wrote must leave the process encrypted. Plaintext here means
+			// the SOPS call silently produced nothing (no recipient, a regex
+			// that matched no value, a swallowed binary error), and recording
+			// the hash would freeze the leak: later syncs compare hashes and
+			// would call the readable file unchanged forever.
+			if encrypted, encErr := m.isManifestEncrypted(fullPath); encErr != nil {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: encErr})
+				continue
+			} else if !encrypted {
+				result.Errors = append(result.Errors, SyncError{FilePath: fullPath, Service: artifact.TargetService, Error: fmt.Errorf("secret artifact is not SOPS-encrypted after sync; refusing to record a plaintext credential as synchronized")})
 				continue
 			}
 			record := secretartifacts.OwnershipArtifact{Path: artifact.Path, Owners: artifact.OwnerNames(), Hash: secretartifacts.HashBytes(data)}
@@ -1709,7 +1722,7 @@ func (m *DefaultSecretsManager) writeEncryptedManifest(
 	existingManifest map[string]interface{},
 ) (bool, error) {
 	// Generate new manifest
-	newManifest := m.generateSecretManifest(service, secrets, existingManifest)
+	newManifest := m.generateSecretManifest(service, secrets, existingManifest, manifestPath)
 
 	dir := filepath.Dir(manifestPath)
 	// Verify every existing ancestor and the final target before creating anything.
@@ -1807,11 +1820,14 @@ func (m *DefaultSecretsManager) loadExistingManifest(path string) (map[string]in
 }
 
 // generateSecretManifest generates a Kubernetes Secret manifest from secrets.
-// If existingManifest is provided, non-secret fields are preserved.
+// If existingManifest is provided, non-secret fields are preserved. manifestPath
+// is the file the manifest is destined for and participates in naming; see
+// secretManifestName.
 func (m *DefaultSecretsManager) generateSecretManifest(
 	service string,
 	secrets map[string]interface{},
 	existingManifest map[string]interface{},
+	manifestPath string,
 ) map[string]interface{} {
 	manifest := make(map[string]interface{})
 
@@ -1841,9 +1857,16 @@ func (m *DefaultSecretsManager) generateSecretManifest(
 			}
 		}
 	}
-	// Ensure name is set
+	// The name is the last thing standing between this file and the manifest
+	// that consumes it: a ClusterIssuer resolves a credential Secret by exact
+	// name, so a credential artifact must keep the name derived from its path.
+	// Falling back to opencenter-<service>-secret would produce a valid,
+	// encrypted, unusable Secret -- the file at
+	// services/cert-manager/opencenter-cloudflare-credentials-secret-<name>.yaml
+	// would hold a Secret called opencenter-cert-manager-secret, and the
+	// ClusterIssuer would silently never become Ready.
 	if metadata["name"] == nil {
-		metadata["name"] = m.generateSecretName(service)
+		metadata["name"] = secretManifestName(service, manifestPath)
 	}
 	// Final Helm values Secrets are consumed directly by the Harbor and Loki
 	// HelmReleases. Keep their namespace and Flux watch label on the generated
@@ -1882,20 +1905,26 @@ func finalValuesSecretNamespace(service string) (string, bool) {
 	}
 }
 
-// generateSecretName generates a Kubernetes Secret name from a service name.
-func (m *DefaultSecretsManager) generateSecretName(service string) string {
-	// Service-specific secret name overrides where the Helm chart expects
-	// a particular secret name that doesn't match the standard pattern.
-	overrides := map[string]string{
-		"grafana":     "grafana-admin-password",
-		"etcd-backup": "etcd-backup-secrets",
-		"velero":      "velero-cloud-credentials",
+// secretManifestName chooses the Kubernetes Secret name for a materialized
+// artifact. A cert-manager DNS-credential Secret is named after its own file,
+// because that is the name the ClusterIssuer's secretRefs were rendered with;
+// every other artifact keeps the service-derived name.
+func secretManifestName(service, manifestPath string) string {
+	if base := filepath.Base(manifestPath); secretartifacts.IsCertManagerCredentialFilename(base) {
+		return strings.TrimSuffix(base, ".yaml")
 	}
-	if name, ok := overrides[service]; ok {
-		return name
+	// Service-specific names where the Helm chart expects a Secret name that
+	// does not follow the standard pattern.
+	switch service {
+	case "grafana":
+		return "grafana-admin-password"
+	case "etcd-backup":
+		return "etcd-backup-secrets"
+	case "velero":
+		return "velero-cloud-credentials"
+	default:
+		return fmt.Sprintf("opencenter-%s-secret", service)
 	}
-	// Standard naming pattern: opencenter-<service>-secret
-	return fmt.Sprintf("opencenter-%s-secret", service)
 }
 
 // hasSecretsChanged compares new secrets against existing decrypted secrets.

@@ -10,6 +10,10 @@ and keeps compatibility and default-provider tables under a read/write lock.
   `clouddns`, Azure to `azuredns`, and Baremetal/VMware to `cloudflare`.
 - OpenStack `cert-manager` uses `designate` when Designate is marked available
   for the cluster; otherwise it uses `cloudflare`.
+- `AutoSelectDNSProvider` is the pure form of that cert-manager/dns selection and
+  is the one production uses: `v2.Config.ResolvedDNSProvider` falls back to it
+  whenever `dns_provider` is unset, so the renderers and readiness agree on the
+  provider in force without mutating the registry.
 - `loki`, `tempo`, and `velero` use the portable `s3` storage contract by
   default, regardless of infrastructure provider. `none` is accepted for Loki
   and Velero, and `filesystem` is accepted for Tempo.
@@ -22,7 +26,7 @@ the compatible choices when a configured provider is unsupported.
 
 ## Current repository integration status
 
-`ServiceProviderValidator` currently has no production callers in this repository. `NewServiceProviderValidator`, `ApplyDefaultProviders`, and `ValidateServiceProviders` are exercised by the package's tests, but no production package constructs or invokes the validator. Consequently, the behavior above is not currently part of the live cluster enable/disable or generate pipeline described in [the platform-services reference](../../../docs/reference/platform-services.md).
+`ServiceProviderValidator` currently has no production callers in this repository. `NewServiceProviderValidator`, `ApplyDefaultProviders`, and `ValidateServiceProviders` are exercised by the package's tests, but no production package constructs or invokes the validator. The cert-manager DNS default is the exception: it is live through `AutoSelectDNSProvider`, called by `v2.Config.ResolvedDNSProvider` in `internal/config/v2/helpers.go`. The rest of the behavior above is not currently part of the live cluster enable/disable or generate pipeline described in [the platform-services reference](../../../docs/reference/platform-services.md).
 
 ## Intended integration order (not currently wired)
 

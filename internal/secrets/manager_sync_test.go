@@ -201,7 +201,7 @@ func TestWriteEncryptedManifest(t *testing.T) {
 		}
 
 		// Generate new manifest with existing metadata
-		newManifest := manager.generateSecretManifest(service, secrets, existingManifest)
+		newManifest := manager.generateSecretManifest(service, secrets, existingManifest, serviceScopedSecretPath(service))
 
 		// Verify metadata is preserved
 		metadata, ok := newManifest["metadata"].(map[string]interface{})
@@ -491,7 +491,7 @@ secrets:
 	writeManagerTestConfig(t, cluster, configData)
 	overlay := filepath.Join(repoDir, "applications", "overlays", cluster)
 	paths := map[string]string{
-		"services/cert-manager/secret.yaml":         "cert-manager manifest",
+		"services/cert-manager/secret.yaml":          "cert-manager manifest",
 		"services/kube-prometheus-stack/secret.yaml": "grafana manifest",
 	}
 	state := artifactState{Version: secretartifacts.OwnershipStateVersion}

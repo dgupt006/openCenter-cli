@@ -15,6 +15,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -204,6 +205,27 @@ func (r *ServiceProviderRegistry) SetDesignateAvailability(clusterName string, a
 			dnsDefaults[ProviderOpenStack] = DNSProviderCloudflare
 		}
 	}
+}
+
+// AutoSelectDNSProvider resolves the cert-manager DNS provider for an
+// infrastructure provider without mutating registry state. It is the pure form
+// of AutoSelectProvider for the cert-manager/dns capability: Designate only for
+// OpenStack clusters that enable it, otherwise the per-provider default
+// (route53 on AWS, clouddns on GCP, azuredns on Azure, cloudflare elsewhere).
+// An unknown or empty infrastructure provider yields cloudflare, the portable
+// choice.
+func AutoSelectDNSProvider(infraProvider, clusterName string, designateAvailable bool) ServiceProviderType {
+	if InfrastructureProvider(strings.ToLower(strings.TrimSpace(infraProvider))) == ProviderOpenStack {
+		if designateAvailable {
+			return DNSProviderDesignate
+		}
+		return DNSProviderCloudflare
+	}
+	provider, err := GetProviderRegistry().GetDefaultProvider("cert-manager", "dns", InfrastructureProvider(strings.ToLower(strings.TrimSpace(infraProvider))))
+	if err != nil {
+		return DNSProviderCloudflare
+	}
+	return provider
 }
 
 // GetDefaultProvider returns the default service provider for a given infrastructure provider

@@ -353,12 +353,23 @@ func NewV2DefaultWithRegion(name, provider, region string) (*Config, error) {
 				},
 			},
 			CertManager: CertManagerSecrets{
+				// One disabled placeholder credential per DNS provider, named after
+				// the provider so that `dns_provider: route53` (or cloudflare)
+				// resolves to a credential whose rendered ClusterIssuer is
+				// letsencrypt-<provider>. Enabled by `cluster configure` once real
+				// credentials exist.
 				AWS: map[string]CertManagerAWSCredential{
-					"default": {
+					"route53": {
 						Enabled:            false,
 						AWSAccessKey:       PlaceholderSecret,
 						AWSSecretAccessKey: PlaceholderSecret,
 						Region:             "us-east-1",
+					},
+				},
+				Cloudflare: map[string]CertManagerCloudflareCredential{
+					"cloudflare": {
+						Enabled:  false,
+						APIToken: PlaceholderSecret,
 					},
 				},
 			},

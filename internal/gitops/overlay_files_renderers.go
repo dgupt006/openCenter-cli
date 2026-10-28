@@ -15,7 +15,6 @@ package gitops
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"text/template"
 
@@ -210,54 +209,74 @@ func defaultClusterCertificateSecretName(cfg v2.Config) string {
 	return services.DefaultClusterCertificateSecretName
 }
 
-// gatewayIsBYO reports whether the gateway uses bring-your-own TLS.
+// gatewayIsBYO reports whether the gateway uses bring-your-own TLS: an explicit
+// wildcard/per-listener secret, or the default cluster certificate. The
+// per-service Secret listeners reference (keycloak-tls, harbor-tls, ...) is
+// normally issued by cert-manager through the cluster-issuer annotation, so an
+// ACME-capable dns_provider keeps the annotation; only the default cluster
+// certificate replaces that flow with one pre-issued wildcard Secret.
 func gatewayIsBYO(cfg v2.Config) bool {
-	if isDefaultClusterCertificateEnabled(cfg) {
+	if gw := gatewayServiceConfig(cfg); gw != nil && gw.TLS != nil && (gw.TLS.DefaultClusterCertificate || gw.TLS.WildcardSecretName != "" || len(gw.TLS.PerListenerSecrets) > 0) {
 		return true
 	}
-	return gatewayServiceConfig(cfg).IsBYO()
+	if cm := typedCertManagerConfig(cfg); cm != nil && cm.DefaultClusterCertificateEnabled() {
+		return true
+	}
+	return false
 }
 
-// gatewayDefaultIssuer returns the cert-manager cluster issuer, defaulting to
-// the Route53 ACME issuer when explicitly configured or default cluster certificate is enabled,
-// or "rackspace-ca" to match the original template's default pipeline.
+// gatewayDefaultIssuer returns the ClusterIssuer every gateway/Harbor
+// certificate references when nothing overrides it.
+//
+// Precedence: gateway.default_issuer, then
+// cert-manager default_cluster_certificate.issuer_ref, then the ACME issuer
+// belonging to the configured dns_provider, then "rackspace-ca" (the
+// self-signed CA the base templates always render).
+//
+// The dns_provider branch is what makes the provider the default: with
+// dns_provider: cloudflare (or route53) and a credential, the issuer named
+// after the lowest-sorted credential wins, exactly matching the ClusterIssuer
+// planCertManagerDynamicActions renders. designate resolves to
+// letsencrypt-designate, whose issuer is rendered from infrastructure
+// credentials and needs no service secret.
 func gatewayDefaultIssuer(cfg v2.Config) string {
 	gw := gatewayServiceConfig(cfg)
 	if gw != nil && gw.DefaultIssuer != "" {
 		return gw.DefaultIssuer
 	}
-	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
-		if cm, ok := svc.(*services.CertManagerConfig); ok && cm.DefaultClusterCertificate != nil && cm.DefaultClusterCertificate.IssuerRef != "" {
-			return cm.DefaultClusterCertificate.IssuerRef
-		}
+	certManager := typedCertManagerConfig(cfg)
+	if certManager != nil && certManager.DefaultClusterCertificate != nil && certManager.DefaultClusterCertificate.IssuerRef != "" {
+		return certManager.DefaultClusterCertificate.IssuerRef
 	}
-	canUseACME := isDefaultClusterCertificateEnabled(cfg)
-	if svc, ok := cfg.OpenCenter.Services["cert-manager"]; ok {
-		if cm, ok := svc.(*services.CertManagerConfig); ok {
-			if cm.DNSProvider == "route53" || cm.DNSProvider == "cloudflare" || cm.DefaultClusterCertificateEnabled() {
-				canUseACME = true
-			}
-		}
+
+	// ResolvedDNSProvider reports the provider in force, including the
+	// registry auto-selection used when dns_provider is unset. It is empty when
+	// cert-manager is disabled, which keeps the rackspace-ca fallback.
+	dnsProvider := cfg.ResolvedDNSProvider()
+	if dnsProvider == "designate" {
+		return "letsencrypt-designate"
 	}
-	if canUseACME {
-		if awsCreds := cfg.EnabledCertManagerAWSCredentials(); len(awsCreds) > 0 {
-			var names []string
-			for name := range awsCreds {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			return "letsencrypt-" + names[0]
-		}
-		if cfCreds := cfg.EnabledCertManagerCloudflareCredentials(); len(cfCreds) > 0 {
-			var names []string
-			for name := range cfCreds {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			return "letsencrypt-" + names[0]
-		}
+	if dnsProvider == "" && !isDefaultClusterCertificateEnabled(cfg) {
+		return "rackspace-ca"
+	}
+	if names := sortedNames(cfg.ResolvedCertManagerAWSCredentials()); len(names) > 0 {
+		return "letsencrypt-" + names[0]
+	}
+	if names := sortedNames(cfg.ResolvedCertManagerCloudflareCredentials()); len(names) > 0 {
+		return "letsencrypt-" + names[0]
 	}
 	return "rackspace-ca"
+}
+
+// typedCertManagerConfig returns the cert-manager service config, or nil when
+// the service is absent or is not the typed cert-manager config.
+func typedCertManagerConfig(cfg v2.Config) *services.CertManagerConfig {
+	svc, ok := cfg.OpenCenter.Services["cert-manager"]
+	if !ok {
+		return nil
+	}
+	cm, _ := svc.(*services.CertManagerConfig)
+	return cm
 }
 
 func renderDefaultClusterCertificate(cfg v2.Config) (string, error) {

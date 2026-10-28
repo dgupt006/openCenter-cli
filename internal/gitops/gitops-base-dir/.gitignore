@@ -81,6 +81,9 @@ credentials/
 infrastructure/clusters/*/inventory/
 infrastructure/clusters/*/.terraform/
 infrastructure/clusters/*/.terraform.lock.hcl
+infrastructure/clusters/*/kubespray-outputs.json
+infrastructure/clusters/*/ansible-local-tmp/
+infrastructure/clusters/*/.kubeconfig.fetch.tmp
 
 # Cluster config input is local state, not a GitOps artifact.
 /*-config.yaml

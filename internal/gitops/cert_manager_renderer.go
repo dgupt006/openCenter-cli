@@ -60,16 +60,18 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		return nil, err
 	}
 
-	awsCreds := cfg.EnabledCertManagerAWSCredentials()
-	cfCreds := cfg.EnabledCertManagerCloudflareCredentials()
+	awsCreds := cfg.ResolvedCertManagerAWSCredentials()
+	cfCreds := cfg.ResolvedCertManagerCloudflareCredentials()
 	var credentials []certManagerCredentialData
-	for name, cred := range awsCreds {
+	for _, name := range sortedNames(awsCreds) {
+		cred := awsCreds[name]
 		credentials = append(credentials, certManagerCredentialData{
 			Name: name, Provider: "aws", AWSAccessKey: cred.AWSAccessKey,
 			AWSSecretAccessKey: cred.AWSSecretAccessKey, Region: cred.Region, DNSZones: cred.DNSZones,
 		})
 	}
-	for name, cred := range cfCreds {
+	for _, name := range sortedNames(cfCreds) {
+		cred := cfCreds[name]
 		credentials = append(credentials, certManagerCredentialData{
 			Name: name, Provider: "cloudflare", APIToken: cred.APIToken, DNSZones: cred.DNSZones,
 		})
@@ -82,6 +84,7 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 	})
 
 	certManagerConfig := extractCertManagerConfig(cfg)
+	defaultZones := defaultCertManagerDNSZones(cfg)
 	for i := range credentials {
 		credentials[i].ClusterName = cfg.ClusterName()
 		credentials[i].ClusterFQDN = cfg.OpenCenter.Cluster.ClusterFQDN
@@ -90,24 +93,40 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		if credentials[i].Region == "" {
 			credentials[i].Region = certManagerConfig.region
 		}
-		credentials[i].SecretName = fmt.Sprintf("opencenter-aws-credentials-secret-%s", credentials[i].Name)
+		if len(credentials[i].DNSZones) == 0 {
+			credentials[i].DNSZones = defaultZones
+		}
+		// SecretName is the Kubernetes Secret the ClusterIssuer's secretRefs
+		// resolve against, so it must be the exact name the credential Secret is
+		// materialized under. Derive it from the shared planner builder: the
+		// previous unconditional aws- prefix was wrong for Cloudflare and only
+		// escaped notice because the issuer template inlines its own name.
+		secretFile, err := secretartifacts.CertManagerCredentialFilename(credentials[i].Provider, credentials[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		credentials[i].SecretName = strings.TrimSuffix(secretFile, ".yaml")
+		credentials[i].SecretFile = secretFile
 		credentials[i].AccessKeyKey = "aws-access-key"
 		credentials[i].SecretAccessKeyKey = "aws-secret-access-key"
 	}
 
 	var actions []clusterAppAction
 	for _, cred := range credentials {
-		var templateText, filename string
+		var templateText string
 		switch cred.Provider {
 		case "aws":
 			templateText = awsSecretTemplate
-			filename = fmt.Sprintf("opencenter-aws-credentials-secret-%s.yaml", cred.Name)
 		case "cloudflare":
 			templateText = cloudflareSecretTemplate
-			filename = fmt.Sprintf("opencenter-cloudflare-credentials-secret-%s.yaml", cred.Name)
 		default:
 			return nil, fmt.Errorf("unsupported provider %q", cred.Provider)
 		}
+		// The filename comes from the planner, so the Secret `secrets sync`
+		// encrypts and the Secret this renderer emits are the same file: whichever
+		// side runs first, the other adopts it instead of leaving a plaintext copy
+		// beside it.
+		filename := cred.SecretFile
 		content, err := renderInlineTemplateContent(templateText, filename, cred)
 		if err != nil {
 			return nil, err
@@ -128,10 +147,14 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: filepath.ToSlash(filepath.Join("services/cert-manager", filename)), Content: content})
 	}
 
-	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok && dnsProvider == "designate" {
+	dnsProvider, _ := getStringField(certManagerSvc, "DNSProvider")
+	dnsProvider = strings.ToLower(strings.TrimSpace(dnsProvider))
+	hasDesignate := dnsProvider == "designate"
+	if hasDesignate {
 		issuerData := certManagerCredentialData{
 			Name: "designate", Provider: "designate", ClusterName: cfg.ClusterName(),
 			ClusterFQDN: cfg.OpenCenter.Cluster.ClusterFQDN, LetsEncryptServer: certManagerConfig.letsEncryptServer, Email: certManagerConfig.email,
+			DNSZones: defaultZones,
 		}
 		content, err := renderInlineTemplateContent(issuerDesignateTemplate, "letsencrypt-designate-issuer.yaml", issuerData)
 		if err != nil {
@@ -140,10 +163,6 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 		actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: "services/cert-manager/letsencrypt-designate-issuer.yaml", Content: content})
 	}
 
-	hasDesignate := false
-	if dnsProvider, ok := getStringField(certManagerSvc, "DNSProvider"); ok {
-		hasDesignate = dnsProvider == "designate"
-	}
 	hasCertManagerArtifact := false
 	for _, a := range artifacts {
 		if a.TargetService == "cert-manager" {
@@ -161,6 +180,33 @@ func planCertManagerDynamicActions(cfg v2.Config, artifacts []secretartifacts.Ar
 	}
 	actions = append(actions, clusterAppAction{Owner: "service-cert-manager", Output: "services/cert-manager/kustomization.yaml", Content: content})
 	return actions, nil
+}
+
+// sortedNames returns map keys in lexicographic order, so rendered file order
+// and the default issuer pick are deterministic across runs.
+func sortedNames[V any](credentials map[string]V) []string {
+	names := make([]string, 0, len(credentials))
+	for name := range credentials {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// defaultCertManagerDNSZones is the zone selector applied to a credential that
+// does not list its own: the cluster base domain, falling back to the cluster
+// FQDN. Every customer overlay pins the selector to the zone it delegates, and
+// an empty selector lets cert-manager attempt the challenge on any zone the
+// credential can reach.
+func defaultCertManagerDNSZones(cfg v2.Config) []string {
+	zone := strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Cluster.BaseDomain))
+	if zone == "" {
+		zone = strings.ToLower(strings.TrimSpace(cfg.OpenCenter.Cluster.ClusterFQDN))
+	}
+	if zone == "" {
+		return nil
+	}
+	return []string{zone}
 }
 
 // cert-manager credential secret and its corresponding issuer.
@@ -188,7 +234,12 @@ type certManagerCredentialData struct {
 	LetsEncryptServer string
 	Email             string
 
+	// SecretName is the Kubernetes Secret name the issuer's secretRefs resolve
+	// against; SecretFile is the filename it is materialized under. Both derive
+	// from secretartifacts.CertManagerCredentialFilename so the renderer, the
+	// kustomization, and `secrets sync` agree on one file.
 	SecretName         string
+	SecretFile         string
 	AccessKeyKey       string
 	SecretAccessKeyKey string
 }
@@ -200,26 +251,12 @@ type certManagerServiceConfig struct {
 	region            string
 }
 
-// validateCertManagerCredentialName enforces the DNS-1123 label contract used by
-// credential names in Kubernetes resource names and generated filenames.
+// validateCertManagerCredentialName delegates the DNS-1123 contract to the
+// planner, which owns the path the name becomes. Two independent copies of this
+// rule is how a renderer-accepted name could reach sync unvalidated.
 func validateCertManagerCredentialName(provider, name string) error {
-	if name == "" {
-		return fmt.Errorf("%s credential name must not be empty", provider)
-	}
-	if len(name) > 63 {
-		return fmt.Errorf("%s credential name %q exceeds the 63-character DNS-1123 label limit", provider, name)
-	}
-	isLowerAlphaNumeric := func(char byte) bool {
-		return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
-	}
-	if !isLowerAlphaNumeric(name[0]) || !isLowerAlphaNumeric(name[len(name)-1]) {
-		return fmt.Errorf("%s credential name %q must start and end with a lowercase letter or digit", provider, name)
-	}
-	for i := 0; i < len(name); i++ {
-		char := name[i]
-		if !isLowerAlphaNumeric(char) && char != '-' {
-			return fmt.Errorf("%s credential name %q must be a DNS-1123 label containing only lowercase letters, digits, and hyphens", provider, name)
-		}
+	if err := secretartifacts.ValidateCertManagerCredentialName(name); err != nil {
+		return fmt.Errorf("%s credential: %w", provider, err)
 	}
 	return nil
 }
@@ -385,8 +422,11 @@ spec:
     solvers:
       - dns01:
           cloudflare:
+            # .SecretName is derived from the planner builder, the same value the
+            # materialized Secret carries, so the reference can never point at a
+            # name sync did not encrypt.
             apiTokenSecretRef:
-              name: "opencenter-cloudflare-credentials-secret-{{ .Name }}"
+              name: "{{ .SecretName }}"
               key: api-token
 {{- if .DNSZones }}
         selector:
@@ -434,12 +474,7 @@ resources:
   - "./letsencrypt-designate-issuer.yaml"
 {{- end }}
 {{- range .Credentials }}
-{{- if eq .Provider "aws" }}
-  - "./opencenter-aws-credentials-secret-{{ .Name }}.yaml"
-{{- end }}
-{{- if eq .Provider "cloudflare" }}
-  - "./opencenter-cloudflare-credentials-secret-{{ .Name }}.yaml"
-{{- end }}
+  - "./{{ .SecretFile }}"
   - "./letsencrypt-{{ .Name }}-issuer.yaml"
 {{- end }}
 {{- if .HasMaterializedSecret }}
@@ -448,7 +483,7 @@ resources:
   # Secrets.CertManager fields. It intentionally coexists with the
   # per-credential Secrets rendered above: the flat fields are retained for
   # migration compatibility (see secretartifacts.certManagerPayload), while the
-  # ClusterIssuers only ever reference opencenter-aws-credentials-secret-<name>.
+  # ClusterIssuers only ever reference the per-credential Secrets.
   - "./secret.yaml"
 {{- end }}
 secretGenerator:

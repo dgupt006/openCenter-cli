@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -413,8 +414,30 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 	result := &PromoteResult{Warnings: append(append([]string(nil), warnings...), scanWarnings...)}
 	adoption := make(map[string]bool)
 	var unknown []string
+	// The secret artifact ledger records the credential Secrets `secrets sync`
+	// materialized. Those paths are sync's, not the generator's: they must not be
+	// overwritten with the renderer's plaintext template, must not enter the
+	// generator's ownership ledger (the encrypted bytes on disk would then read
+	// as user tampering on the next generate), and must not be pruned as stale
+	// generated files. Dropping them from the plan covers all three, since every
+	// later stage walks the plan. The service kustomization still lists the file,
+	// so the render stays valid.
+	syncOwned := syncOwnedSecretTreePaths(root, clusterName)
+	verified := loadOwnedSecretTreePaths(root, clusterName)
+	for path := range syncOwned {
+		delete(planned, path)
+		if _, exists := existing[path]; exists && !verified[path] {
+			// The ledger claims the path, but the bytes on disk no longer match
+			// the recorded hash. sync still owns it, so the generator still
+			// leaves it alone — and it is not user-authored, so it must not trip
+			// the unknown-file refusal below either. Reported rather than
+			// silently rewritten, so a drifted credential stays visible.
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"retained %s: it is a credential Secret owned by `secrets sync` whose contents no longer match the secret artifact ledger; run `secrets sync` to re-encrypt it", path))
+		}
+	}
 	for path, onDisk := range existing {
-		if ownedSecretTreePath(root, clusterName, path) {
+		if syncOwned[path] {
 			continue
 		}
 		if isDeployManagedPath(clusterName, path) {
@@ -432,11 +455,31 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 					adoption[path] = true
 					continue
 				}
+				// The reverse direction: a repository created before a
+				// deploy-artifact exclusion existed carries the old seed in the
+				// ledger while the staged base .gitignore already excludes the
+				// new deploy outputs. Heal the tracked file by appending the
+				// missing exclusions to the staged copy (preserving everything
+				// the on-disk file has) and promote the healed file.
+				if healed, ok := healTrackedGitIgnore(path, planned, onDisk); ok {
+					planned[path] = healed
+					adoption[path] = true
+					continue
+				}
 				return nil, fmt.Errorf("ownership conflict: refusing to overwrite modified tracked file %s", path)
 			}
 			continue
 		}
 		if file, isPlanned := planned[path]; isPlanned {
+			// A sync-materialized credential Secret is the exception to the
+			// untracked-file rule. `secrets sync` owns that path: it writes the
+			// file, SOPS-encrypts it, and records its hash in the secret
+			// artifact ledger -- none of which the generator's ownership ledger
+			// knows about. The staged copy is always the renderer's plaintext
+			// template, so adopting it would put the credential back in git
+			// readable. Leave the live file untouched and drop it from the plan;
+			// the service kustomization still lists it, so the render stays
+			// valid.
 			if hashBytes(onDisk) == hashBytes(file.data) && uint32(existingModes[path].Perm()) == uint32(file.mode.Perm()) {
 				continue // bootstrap may claim an identical planned file
 			}
@@ -489,7 +532,7 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 			}
 		}
 	}
-	prune, staleRecords := staleOwnershipPaths(known, planned, existing, clusterName, scopes)
+	prune, staleRecords := staleOwnershipPaths(known, planned, existing, clusterName, scopes, syncOwned)
 	if opts.pruneEnabled() {
 		result.Renamed = detectSafeRenames(prune, result.Added, plannedBytes, existing, known)
 		if len(result.Renamed) > 0 {
@@ -576,12 +619,21 @@ func planRepositoryPromotion(root, clusterName string, planned, seeds map[string
 	return plan, nil
 }
 
-func staleOwnershipPaths(known map[string]GeneratedFileInfo, planned map[string]generatedTreeFile, existing map[string][]byte, clusterName string, scopes []string) (existingPaths, records []string) {
+// staleOwnershipPaths reports generator-owned paths that are no longer part of
+// the plan. syncOwned names the credential Secrets `secrets sync` materialized:
+// the plan deliberately drops them so the plaintext template is never promoted
+// over the encrypted file, which makes them look stale here. They are not —
+// pruning them would delete a live credential and drop its ownership record, so
+// both the file and its record stay put.
+func staleOwnershipPaths(known map[string]GeneratedFileInfo, planned map[string]generatedTreeFile, existing map[string][]byte, clusterName string, scopes []string, syncOwned map[string]bool) (existingPaths, records []string) {
 	for path := range known {
 		if !ownershipPathInScopes(path, scopes) || !ownershipPathAllowed(path, clusterName) || isGeneratedTreeCustomPath(path) {
 			continue
 		}
 		if _, keep := planned[path]; keep {
+			continue
+		}
+		if syncOwned[path] {
 			continue
 		}
 		records = append(records, path)
@@ -605,8 +657,23 @@ func mergedManifest(cluster, global GeneratedManifest) GeneratedManifest {
 	return merged
 }
 
-func ownedSecretTreePath(root, clusterName, path string) bool {
-	return loadOwnedSecretTreePaths(root, clusterName)[path]
+// syncOwnedSecretTreePaths returns the repository-relative paths the secret
+// artifact ledger claims, whether or not the bytes on disk still match the
+// recorded hash. loadOwnedSecretTreePaths is the verified subset; this is the
+// ownership question, and it is what keeps a drifted credential from being
+// quietly replaced by the generator's plaintext copy.
+func syncOwnedSecretTreePaths(root, clusterName string) map[string]bool {
+	owned := make(map[string]bool)
+	overlayDir := filepath.Join(root, "applications", "overlays", clusterName)
+	state, _, err := secretartifacts.LoadOwnershipState(overlayDir)
+	if err != nil {
+		return owned
+	}
+	prefix := filepath.ToSlash(filepath.Join("applications", "overlays", clusterName))
+	for _, record := range state.Artifacts {
+		owned[filepath.ToSlash(filepath.Join(prefix, record.Path))] = true
+	}
+	return owned
 }
 
 func scanLiveRepositoryTree(root, clusterName string, scopes []string) (map[string][]byte, map[string]os.FileMode, []string, error) {
@@ -817,6 +884,18 @@ func isGeneratedTreeCustomPath(path string) bool {
 //   - the SSH key pair (id_rsa, id_rsa.pub): provisioned into the cluster dir
 //     by the kubespray OpenStack keypair terraform local-exec at deploy time;
 //     the generated Makefile/kubespray wiring reads it from there.
+//   - kubespray-outputs.json: the OpenTofu lifecycle contract output written by
+//     the Kubespray lifecycle at deploy time (kubesprayLifecycle.outputsPath).
+//   - ansible-local-tmp/: the ANSIBLE_LOCAL_TEMP scratch dir the lifecycle
+//     points into the cluster dir.
+//   - .kubeconfig.fetch.tmp: the kubeconfig fetch scratch file (only the
+//     fallback case: when no secrets-zone kubeconfig path is resolved, the
+//     lifecycle writes the temp file next to the outputs, inside the cluster
+//     dir).
+//
+// The sibling runtime trees (venv/, kubespray/, .bin/, .opentofu-local*/) are
+// excluded from the scan wholesale by skipGeneratedTreeDir; these loose files
+// need the path-level exemption here.
 //
 // None of these are part of the generator ownership ledger, so the ownership
 // preflight would otherwise reject them as "user-authored files found in
@@ -837,6 +916,12 @@ func isDeployManagedPath(clusterName, path string) bool {
 		return true
 	}
 	if path == clusterDir+"/id_rsa" || path == clusterDir+"/id_rsa.pub" {
+		return true
+	}
+	if path == clusterDir+"/kubespray-outputs.json" || path == clusterDir+"/.kubeconfig.fetch.tmp" {
+		return true
+	}
+	if strings.HasPrefix(path, clusterDir+"/ansible-local-tmp/") {
 		return true
 	}
 	return false
@@ -870,6 +955,104 @@ func gitIgnoreLineSet(data []byte) map[string]bool {
 		}
 	}
 	return set
+}
+
+// DeployArtifactIgnorePatterns are the root .gitignore exclusions that keep
+// deploy-time Kubespray/OpenTofu outputs (written into the cluster dir, which
+// doubles as the cluster state zone) out of the repository. `cluster init`
+// appends them to an existing .gitignore; a repository created before a
+// pattern existed must not stay dirty forever, so promotion heals the tracked
+// hygiene file the same way (see trackedHygieneHealable).
+var DeployArtifactIgnorePatterns = []string{
+	"infrastructure/clusters/*/inventory/",
+	"infrastructure/clusters/*/venv/",
+	"infrastructure/clusters/*/kubespray/",
+	"infrastructure/clusters/*/.bin/",
+	"infrastructure/clusters/*/kubespray-outputs.json",
+	"infrastructure/clusters/*/ansible-local-tmp/",
+	"infrastructure/clusters/*/.kubeconfig.fetch.tmp",
+	"infrastructure/clusters/*/.terraform/",
+	"infrastructure/clusters/*/.terraform.lock.hcl",
+}
+
+// appendDeployArtifactIgnorePatterns returns data with the deploy-artifact
+// exclusions missing from it appended under a managed comment. It returns the
+// input unchanged (and reports false) when nothing is missing.
+func appendDeployArtifactIgnorePatterns(data []byte) ([]byte, bool) {
+	present := gitIgnoreLineSet(data)
+	var missing []string
+	for _, pattern := range DeployArtifactIgnorePatterns {
+		if !present[pattern] {
+			missing = append(missing, pattern)
+		}
+	}
+	if len(missing) == 0 {
+		return data, false
+	}
+	content := string(data)
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += "\n# Deploy-time OpenTofu/Kubespray artifacts (managed by openCenter).\n"
+	for _, pattern := range missing {
+		content += pattern + "\n"
+	}
+	return []byte(content), true
+}
+
+// trackedGitIgnoreExplained reports whether every non-comment line of the
+// tracked root .gitignore on disk is content openCenter itself wrote: either
+// carried by the staged copy or one of the managed deploy-artifact exclusions
+// `cluster init` appends in place. Comments never carry ignore semantics, so
+// they cannot make the drift user content.
+func trackedGitIgnoreExplained(onDisk []byte, plannedLines map[string]bool) bool {
+	deploy := make(map[string]bool, len(DeployArtifactIgnorePatterns))
+	for _, pattern := range DeployArtifactIgnorePatterns {
+		deploy[pattern] = true
+	}
+	for _, raw := range strings.Split(string(onDisk), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if plannedLines[line] || deploy[line] {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// healTrackedGitIgnore repairs the tracked root .gitignore when the on-disk
+// file differs from the ledger only by deploy-artifact hygiene: a shared
+// organization repository whose file `cluster init` extended in place with the
+// managed exclusions (the ledger still records the pre-append file), or a
+// repository whose tracked file predates an exclusion the staged base copy has
+// grown. The healed plan file is the staged copy plus any managed exclusion it
+// is still missing. A non-comment line that neither the staged copy nor the
+// managed exclusion set explains is user content: the caller must still refuse
+// the run.
+func healTrackedGitIgnore(path string, planned map[string]generatedTreeFile, onDisk []byte) (generatedTreeFile, bool) {
+	if path != ".gitignore" {
+		return generatedTreeFile{}, false
+	}
+	file, isPlanned := planned[path]
+	if !isPlanned {
+		return generatedTreeFile{}, false
+	}
+	if !trackedGitIgnoreExplained(onDisk, gitIgnoreLineSet(file.data)) {
+		return generatedTreeFile{}, false
+	}
+	if bytes.Equal(onDisk, file.data) {
+		return generatedTreeFile{}, false // pure ledger drift; normal adoption path
+	}
+	if healed, appended := appendDeployArtifactIgnorePatterns(file.data); appended {
+		return generatedTreeFile{data: healed, mode: file.mode}, true
+	}
+	// The staged copy already carries every exclusion: the on-disk file is
+	// behind (or the ledger is stale), and promoting the planned file as-is
+	// reconciles both.
+	return file, true
 }
 func isTempPath(path string) bool            { return path == ".tmp" || strings.HasPrefix(path, ".tmp/") }
 func hashBytes(data []byte) string           { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }

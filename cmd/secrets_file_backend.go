@@ -111,9 +111,11 @@ func configSecretCatalog() []configSecretEntry {
 			Description: "cert-manager Route53 AWS credentials",
 			PayloadKind: configSecretObject,
 			Present: func(cfg *v2.Config) bool {
-				//lint:ignore SA1019 legacy flat cert-manager field is intentionally retained for migration compatibility.
-				//nolint:staticcheck // SA1019: preserve legacy cert-manager field compatibility.
-				return cfg.Secrets.CertManager.AWSAccessKey != "" || cfg.Secrets.CertManager.AWSSecretAccessKey != ""
+				// The named credential maps are the live storage; the legacy flat
+				// fields count only while they still hold a value.
+				return len(cfg.Secrets.CertManager.AWS) > 0 || len(cfg.Secrets.CertManager.Cloudflare) > 0 ||
+					cfg.Secrets.CertManager.AWSAccessKey != "" || cfg.Secrets.CertManager.AWSSecretAccessKey != "" ||
+					cfg.Secrets.CertManager.CloudflareAPIToken != ""
 			},
 			Get: func(cfg *v2.Config) interface{} {
 				return cfg.Secrets.CertManager

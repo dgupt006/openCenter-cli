@@ -739,7 +739,7 @@ func TestGenerateSecretManifest(t *testing.T) {
 			"aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		}
 
-		manifest := manager.generateSecretManifest("cert-manager", secrets, nil)
+		manifest := manager.generateSecretManifest("cert-manager", secrets, nil, serviceScopedSecretPath("cert-manager"))
 
 		assert.Equal(t, "v1", manifest["apiVersion"])
 		assert.Equal(t, "Secret", manifest["kind"])
@@ -777,7 +777,7 @@ func TestGenerateSecretManifest(t *testing.T) {
 			"new_key": "new-value",
 		}
 
-		manifest := manager.generateSecretManifest("test-service", secrets, existingManifest)
+		manifest := manager.generateSecretManifest("test-service", secrets, existingManifest, serviceScopedSecretPath("test-service"))
 
 		metadata, ok := manifest["metadata"].(map[string]interface{})
 		require.True(t, ok)
@@ -802,7 +802,7 @@ func TestGenerateSecretManifest(t *testing.T) {
 			"client_secret":         "test-client",
 		}
 
-		manifest := manager.generateSecretManifest("test-service", secrets, nil)
+		manifest := manager.generateSecretManifest("test-service", secrets, nil, serviceScopedSecretPath("test-service"))
 
 		data, ok := manifest["stringData"].(map[string]interface{})
 		require.True(t, ok)

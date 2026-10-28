@@ -98,11 +98,67 @@ func TestClusterConfigureGuidedCreatesOpenStackCluster(t *testing.T) {
 	if certManager.Region != "us-east-1" {
 		t.Fatalf("cert-manager region = %q", certManager.Region)
 	}
+	// The guided pass must populate the named credential the ClusterIssuer
+	// reads, not only the AWS application credentials.
+	route53Cred, ok := cfg.Secrets.CertManager.AWS["route53"]
+	if !ok || !route53Cred.Enabled {
+		t.Fatalf("expected the route53 credential to be enabled, got %+v", cfg.Secrets.CertManager.AWS)
+	}
+	if route53Cred.AWSAccessKey != "AKIAGUIDEDTEST" || route53Cred.AWSSecretAccessKey != "guided-secret-key" || route53Cred.Region != "us-east-1" {
+		t.Fatalf("route53 credential = %+v", route53Cred)
+	}
 	if cfg.Secrets.Global.AWS.Application.AccessKey != "AKIAGUIDEDTEST" {
 		t.Fatalf("application access key = %q", cfg.Secrets.Global.AWS.Application.AccessKey)
 	}
 	if cfg.Secrets.Global.AWS.Application.SecretAccessKey != "guided-secret-key" {
 		t.Fatalf("application secret access key = %q", cfg.Secrets.Global.AWS.Application.SecretAccessKey)
+	}
+}
+
+// dns_provider: cloudflare through the guided pass must land in the named
+// credential map, which is what makes the Cloudflare ClusterIssuer render.
+func TestClusterConfigureGuidedCloudflareWritesNamedCredential(t *testing.T) {
+	dir := t.TempDir()
+	prepareCommandTestEnv(t, dir)
+
+	answers := guidedCreateAnswers()
+	answers["dns.provider"] = "cloudflare"
+	answers["dns.cloudflare.api_token"] = "cf-guided-token"
+	delete(answers, "dns.route53.region")
+	delete(answers, "dns.route53.access_key")
+	delete(answers, "dns.route53.secret_key")
+	setGuidedAnswers(t, answers)
+
+	cmd := newClusterConfigureCmd()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"cf-guided", "--org", "opencenter", "--type", "openstack"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cluster configure failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	resetCommandStateForTests()
+
+	cfg, err := loadCanonicalConfig("cf-guided")
+	if err != nil {
+		t.Fatalf("load canonical config: %v", err)
+	}
+	certManager, ok := cfg.OpenCenter.Services["cert-manager"].(*servicescfg.CertManagerConfig)
+	if !ok {
+		t.Fatalf("expected cert-manager config, got %T", cfg.OpenCenter.Services["cert-manager"])
+	}
+	if certManager.DNSProvider != "cloudflare" {
+		t.Fatalf("dns_provider = %q", certManager.DNSProvider)
+	}
+	cred, ok := cfg.Secrets.CertManager.Cloudflare["cloudflare"]
+	if !ok || !cred.Enabled {
+		t.Fatalf("expected the cloudflare credential to be enabled, got %+v", cfg.Secrets.CertManager.Cloudflare)
+	}
+	if cred.APIToken != "cf-guided-token" {
+		t.Fatalf("cloudflare api_token = %q", cred.APIToken)
+	}
+	if _, ok := cfg.Secrets.CertManager.AWS["route53"]; ok && cfg.Secrets.CertManager.AWS["route53"].Enabled {
+		t.Fatal("route53 credential must stay disabled when cloudflare is selected")
 	}
 }
 

@@ -1226,13 +1226,6 @@ func (v *defaultValidator) validatePlaceholderSecrets(cfg *Config) error {
 				placeholders = append(placeholders, fmt.Sprintf("secrets.cert_manager.cloudflare.%s.api_token", name))
 			}
 		}
-		// Legacy flat fields
-		if cfg.Secrets.CertManager.AWSAccessKey == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.cert_manager.aws_access_key")
-		}
-		if cfg.Secrets.CertManager.AWSSecretAccessKey == PlaceholderSecret {
-			placeholders = append(placeholders, "secrets.cert_manager.aws_secret_access_key")
-		}
 	}
 
 	// Global AWS secrets

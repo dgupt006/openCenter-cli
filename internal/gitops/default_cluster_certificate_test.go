@@ -155,7 +155,33 @@ func TestRoute53IssuerResolvesAsDefaultIssuer(t *testing.T) {
 	require.Contains(t, gwContent, "cert-manager.io/cluster-issuer: letsencrypt-ed-2")
 }
 
+// A cluster with no dns_provider and no credential has no ACME path, so the
+// gateway keeps the self-signed rackspace-ca issuer.
 func TestGatewayDefaultIssuerDefaultsToRackspaceCAWithoutACME(t *testing.T) {
+	cfg := v2.Config{
+		OpenCenter: v2.OpenCenterConfig{
+			Cluster: v2.ClusterConfig{
+				ClusterName: "ed-2",
+				ClusterFQDN: "raxai.ed-2.sjc3.k8s.opencenter.cloud",
+			},
+			Services: v2.ServiceMap{
+				"gateway": &services.GatewayConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+				"cert-manager": &services.CertManagerConfig{
+					BaseConfig: services.BaseConfig{Enabled: true},
+				},
+			},
+		},
+	}
+
+	require.Equal(t, "rackspace-ca", gatewayDefaultIssuer(cfg))
+}
+
+// An enabled credential is an ACME path on its own: dns_provider is
+// auto-selected from the infrastructure, so the gateway annotates the rendered
+// issuer instead of falling back to the self-signed CA.
+func TestGatewayDefaultIssuerUsesEnabledCredentialWithoutDNSProvider(t *testing.T) {
 	cfg := v2.Config{
 		OpenCenter: v2.OpenCenterConfig{
 			Cluster: v2.ClusterConfig{
@@ -186,8 +212,7 @@ func TestGatewayDefaultIssuerDefaultsToRackspaceCAWithoutACME(t *testing.T) {
 		},
 	}
 
-	issuer := gatewayDefaultIssuer(cfg)
-	require.Equal(t, "rackspace-ca", issuer)
+	require.Equal(t, "letsencrypt-ed-2", gatewayDefaultIssuer(cfg))
 }
 
 func TestRenderDefaultClusterCertificateEmptyDNSNamesReturnsError(t *testing.T) {

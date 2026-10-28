@@ -21,7 +21,7 @@ func TestGenerateSecretManifestUsesStringDataAndReadableIdentity(t *testing.T) {
 			"name": "grafana-admin-password",
 		},
 		"data": map[string]interface{}{"stale": "must-be-dropped"},
-	})
+	}, serviceScopedSecretPath("grafana"))
 
 	require.Equal(t, "v1", manifest["apiVersion"])
 	require.Equal(t, "Secret", manifest["kind"])
@@ -59,7 +59,7 @@ func TestGenerateSecretManifestAddsFinalValuesSecretMetadata(t *testing.T) {
 		t.Run(test.service, func(t *testing.T) {
 			manifest := manager.generateSecretManifest(test.service, map[string]interface{}{
 				"values.yaml": "loki:\n  storage:\n    s3:\n      accessKeyId: access\n",
-			}, nil)
+			}, nil, serviceScopedSecretPath(test.service))
 
 			metadata, ok := manifest["metadata"].(map[string]interface{})
 			require.True(t, ok)

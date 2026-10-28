@@ -16,6 +16,7 @@ import (
 	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/validation"
+	"github.com/opencenter-cloud/opencenter-cli/internal/gitops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/sops"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/crypto"
 	"github.com/opencenter-cloud/opencenter-cli/internal/util/errors"
@@ -1089,16 +1090,10 @@ var gitIgnoreRequiredPatterns = []string{
 }
 
 // gitIgnoreDeployArtifactPatterns keep deploy-time outputs out of the GitOps
-// worktree's git status.
-var gitIgnoreDeployArtifactPatterns = []string{
-	"infrastructure/clusters/*/inventory/",
-	"infrastructure/clusters/*/venv/",
-	"infrastructure/clusters/*/kubespray/",
-	"infrastructure/clusters/*/.bin/",
-	"infrastructure/clusters/*/kubespray-outputs.json",
-	"infrastructure/clusters/*/.terraform/",
-	"infrastructure/clusters/*/.terraform.lock.hcl",
-}
+// worktree's git status. Single source of truth: gitops.DeployArtifactIgnorePatterns,
+// which `cluster generate` also uses to heal a tracked .gitignore that predates
+// an exclusion.
+var gitIgnoreDeployArtifactPatterns = append([]string(nil), gitops.DeployArtifactIgnorePatterns...)
 
 func writeGitOpsHygiene(gitOpsDir string) error {
 	files := map[string]struct {
@@ -1182,6 +1177,8 @@ infrastructure/clusters/*/venv/
 infrastructure/clusters/*/kubespray/
 infrastructure/clusters/*/.bin/
 infrastructure/clusters/*/kubespray-outputs.json
+infrastructure/clusters/*/ansible-local-tmp/
+infrastructure/clusters/*/.kubeconfig.fetch.tmp
 infrastructure/clusters/*/.terraform/
 infrastructure/clusters/*/.terraform.lock.hcl
 `

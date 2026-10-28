@@ -494,6 +494,20 @@ func setConfigField(obj any, path string, value string) error {
 					if resolvedValue.Kind() == reflect.Interface && !resolvedValue.IsNil() {
 						resolvedValue = resolvedValue.Elem()
 					}
+					// A struct-valued map entry (secrets.cert_manager.aws.<name>)
+					// comes back unaddressable from MapIndex, so edits applied to
+					// its fields would be silently dropped. Copy it out, let the
+					// deeper walk mutate the copy, and write it back when the walk
+					// returns.
+					if resolvedValue.Kind() == reflect.Struct && !resolvedValue.CanSet() {
+						addressable := reflect.New(resolvedValue.Type()).Elem()
+						addressable.Set(resolvedValue)
+						if err := setConfigField(addressable.Addr().Interface(), strings.Join(parts[index+1:], "."), value); err != nil {
+							return err
+						}
+						current.SetMapIndex(reflect.ValueOf(part), addressable)
+						return nil
+					}
 					switch {
 					case resolvedValue.Kind() == reflect.Ptr && resolvedValue.Type().Elem().Kind() == reflect.Struct:
 						current = resolvedValue.Elem()
@@ -510,6 +524,26 @@ func setConfigField(obj any, path string, value string) error {
 						current = existingValue
 						continue
 					}
+				}
+
+				// A missing intermediate key is created with the map's own element
+				// type, so `secrets.cert_manager.cloudflare.<name>.api_token`
+				// materialises a CertManagerCloudflareCredential and the leaf lands
+				// on its api_token field. Falling back to map[string]any only when
+				// the element type cannot host fields is what previously failed the
+				// leaf lookup with "field not found in map".
+				if elemType := current.Type().Elem(); elemType.Kind() == reflect.Struct ||
+					elemType.Kind() == reflect.Ptr && elemType.Elem().Kind() == reflect.Struct {
+					created := reflect.New(elemType).Elem()
+					if created.Kind() == reflect.Ptr {
+						created.Set(reflect.New(created.Type().Elem()))
+						current.SetMapIndex(reflect.ValueOf(part), created)
+						current = created.Elem()
+						continue
+					}
+					current.SetMapIndex(reflect.ValueOf(part), created)
+					current = created
+					continue
 				}
 
 				nestedMap := map[string]any{}
@@ -567,6 +601,14 @@ func setReflectValue(field reflect.Value, value string) error {
 		field.SetInt(parsed)
 	case reflect.Interface:
 		field.Set(reflect.ValueOf(value))
+	case reflect.Struct:
+		// A patch whose path stops at a struct-valued map key
+		// (secrets.cert_manager.aws.<name>) enables that credential; sibling
+		// patches fill its fields. Zero value is the safe default: nothing is
+		// enabled unless a patch says so.
+		if value != "" && !strings.EqualFold(strings.TrimSpace(value), "true") {
+			return fmt.Errorf("cannot set credential %q to %q", field.Type(), value)
+		}
 	default:
 		return fmt.Errorf("unsupported field type %s", field.Type())
 	}

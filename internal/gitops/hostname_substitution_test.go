@@ -27,9 +27,9 @@ import (
 func hostnameSubTestConfig(enabled bool) v2.Config {
 	return v2.Config{OpenCenter: v2.OpenCenterConfig{
 		Cluster: v2.ClusterConfig{
-			ClusterName: "rackai-dev",
-			BaseDomain:  "rax.io",
-			ClusterFQDN: "rackai-dev.rax.io",
+			ClusterName:          "rackai-dev",
+			BaseDomain:           "rax.io",
+			ClusterFQDN:          "rackai-dev.rax.io",
 			HostnameSubstitution: v2.HostnameSubstitutionConfig{Enabled: enabled},
 		},
 		Services: v2.ServiceMap{"gateway": &services.GatewayConfig{BaseConfig: services.BaseConfig{Enabled: true}}},

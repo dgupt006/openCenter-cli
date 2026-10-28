@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-25
+last_updated: 2026-10-27
 id: service-cert-manager
 title: "cert-manager"
 sidebar_label: cert-manager
@@ -46,9 +46,46 @@ opencenter:
 
 The registered validator checks that a configured `letsencrypt_server` starts with `https://` and a configured `email` contains `@`. The provider registry records DNS provider choices and provider compatibility; it does not change the config type's fields.
 
-## Secrets and conditional facts
+## Secrets and credential resolution
 
 `OpenCenterSecrets.CertManager` contains named AWS and Cloudflare credential maps plus legacy flat fields. The service secret mapping records conditional credentials for Route53, Cloudflare, Cloud DNS, and Azure DNS; Designate is documented in that mapping as using infrastructure credentials.
+
+`dns_provider` alone is enough to render an issuer. `Config.ResolvedCertManagerAWSCredentials` and `Config.ResolvedCertManagerCloudflareCredentials` (`internal/config/v2/helpers.go`) are the single source of truth for which credentials the renderer emits and readiness requires:
+
+1. Every enabled entry of `secrets.cert_manager.aws` / `secrets.cert_manager.cloudflare` renders, keyed by its map key.
+2. When none is enabled and `dns_provider` is `route53`, the AWS application credentials (or the legacy flat `aws_access_key`/`aws_secret_access_key` pair) become one enabled credential named `route53`, with the region resolved from `services.cert-manager.region` → `secrets.global.aws.application.region` → `opencenter.meta.region`.
+3. When none is enabled and `dns_provider` is `cloudflare`, the legacy flat `secrets.cert_manager.cloudflare_api_token` becomes one enabled credential named `cloudflare`.
+
+The rendered ClusterIssuer is named `letsencrypt-<credential>` and the gateway annotation `cert-manager.io/cluster-issuer` resolves to the lowest-sorted credential name, so `dns_provider` also selects the default issuer. A credential with no `dns_zones` gets `selector.dnsZones` defaulted to `opencenter.cluster.base_domain`, matching every customer overlay. Designate is the exception: its issuer needs no service credential and resolves as `letsencrypt-designate`.
+
+Write the named map rather than the legacy flat fields; the flat fields exist for migration only:
+
+```bash
+opencenter cluster set my-cluster \
+  opencenter.services.cert-manager.dns_provider=cloudflare \
+  secrets.cert_manager.cloudflare.cloudflare.enabled=true \
+  secrets.cert_manager.cloudflare.cloudflare.api_token=<token>
+```
+
+`cluster set` creates a missing intermediate credential key with the map's element type, so the command above works on a config that has no `cloudflare` block yet.
+
+Setting the credential in the config is only half of it. The credential `Secret`
+that the issuer references is materialized and SOPS-encrypted by `secrets sync`,
+which owns `services/cert-manager/opencenter-<provider>-credentials-secret-<name>.yaml`;
+`cluster generate` renders the issuer and the kustomization only, and adopts an
+existing credential file rather than rewriting it with plaintext. So after
+changing a DNS credential:
+
+```bash
+opencenter secrets sync my-cluster --services cert-manager
+opencenter cluster generate my-cluster
+```
+
+`secrets sync` skips a credential whose material is empty or still the `CHANGEME`
+placeholder, matching the renderer, which emits no issuer for it; and it refuses
+to record a file that is not encrypted afterwards, so a credential cannot reach
+the repository in plaintext unnoticed. See
+[Services and Templates](../../concepts/services-templates.md#secrets-handling).
 
 ## Descriptor rendering
 

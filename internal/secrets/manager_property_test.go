@@ -77,7 +77,7 @@ func TestProperty_SyncRoundTripConsistency(t *testing.T) {
 			// and then extracting secrets back from the manifest format
 			for service, secrets := range configSecrets {
 				// Generate a manifest (simulating what sync does)
-				manifest := manager.generateSecretManifest(service, secrets, nil)
+				manifest := manager.generateSecretManifest(service, secrets, nil, serviceScopedSecretPath(service))
 
 				// Extract the data section (simulating what validate does)
 				manifestData, ok := manifest["stringData"].(map[string]interface{})
@@ -255,7 +255,7 @@ func TestProperty_ManifestFieldPreservation(t *testing.T) {
 			}
 
 			// Generate new manifest with updated secrets
-			newManifest := manager.generateSecretManifest("test-service", newSecrets, existingManifest)
+			newManifest := manager.generateSecretManifest("test-service", newSecrets, existingManifest, serviceScopedSecretPath("test-service"))
 
 			// Property 1: apiVersion should be preserved
 			if newManifest["apiVersion"] != metadataGen.APIVersion {
@@ -353,7 +353,7 @@ func TestProperty_ManifestFieldPreservation(t *testing.T) {
 			}
 
 			// Generate manifest without existing manifest
-			newManifest := manager.generateSecretManifest("test-service", newSecrets, nil)
+			newManifest := manager.generateSecretManifest("test-service", newSecrets, nil, serviceScopedSecretPath("test-service"))
 
 			// Property 1: Should have default apiVersion
 			if newManifest["apiVersion"] != "v1" {
@@ -435,7 +435,7 @@ func TestProperty_SyncRoundTripConsistency_Sanity(t *testing.T) {
 	// Test round-trip for each service
 	for service, secrets := range configSecrets {
 		// Generate manifest
-		manifest := manager.generateSecretManifest(service, secrets, nil)
+		manifest := manager.generateSecretManifest(service, secrets, nil, serviceScopedSecretPath(service))
 
 		// Extract data from manifest
 		manifestData, ok := manifest["stringData"].(map[string]interface{})
@@ -504,7 +504,7 @@ func TestProperty_ManifestFieldPreservation_Sanity(t *testing.T) {
 	}
 
 	// Generate new manifest
-	newManifest := manager.generateSecretManifest("test-service", newSecrets, existingManifest)
+	newManifest := manager.generateSecretManifest("test-service", newSecrets, existingManifest, serviceScopedSecretPath("test-service"))
 
 	// Verify apiVersion preserved
 	require.Equal(t, "v1", newManifest["apiVersion"], "apiVersion should be preserved")
@@ -543,7 +543,7 @@ func TestProperty_ManifestFieldPreservation_Sanity(t *testing.T) {
 	require.False(t, exists, "Old secret should not be present")
 
 	// Test with nil existing manifest
-	newManifestFromNil := manager.generateSecretManifest("test-service", newSecrets, nil)
+	newManifestFromNil := manager.generateSecretManifest("test-service", newSecrets, nil, serviceScopedSecretPath("test-service"))
 	require.Equal(t, "v1", newManifestFromNil["apiVersion"], "Should have default apiVersion")
 	require.Equal(t, "Secret", newManifestFromNil["kind"], "Should have default kind")
 
