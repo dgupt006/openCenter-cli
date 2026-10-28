@@ -47,9 +47,12 @@ type SOPSPathRule struct {
 
 // NewSOPSPathMatcher creates a new path matcher from SOPS configuration
 func NewSOPSPathMatcher(configPath string) (*SOPSPathMatcher, error) {
-	// Check if config file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Return empty matcher if no config exists
+	// An empty matcher means every path matches no rule, so callers that gate
+	// on rule matches silently pass. Warn instead of failing: some flows
+	// legitimately run without a config (dry validation on a fresh tree), but
+	// a missing file is never what the user wants quietly.
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		fmt.Fprintf(os.Stderr, "warning: SOPS config %s not found; path matching will match no rules\n", configPath)
 		return &SOPSPathMatcher{rules: []*SOPSPathRule{}}, nil
 	}
 

@@ -118,6 +118,25 @@ func (m *DefaultSecretsManager) SyncSecrets(ctx context.Context, opts SyncOption
 		"overlay_path", overlayPath,
 		"services_count", len(artifacts))
 
+	// The GitOps repository's .sops.yaml is the creation-rule source for every
+	// downstream consumer: rotation/revocation re-encryption, path matching, and
+	// the render validation stage. Those consumers silently treat a missing file
+	// as "no rules", so a repository created outside cluster init (or recreated
+	// after it) must be repaired here, before anything encrypts into it. The
+	// overlay lives at <repo>/applications/overlays/<cluster>; the repository
+	// root holding .sops.yaml is three levels up.
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(overlayPath)))
+	sopsConfigPath := filepath.Join(repoRoot, sops.SOPSConfigFileName)
+	// Dry-run plans against the repository as it is; creating files would
+	// violate the no-write contract.
+	if !opts.DryRun {
+		if ensured, err := sops.EnsureSOPSConfig(sopsConfigPath, cfg, nil); err != nil {
+			return nil, fmt.Errorf("failed to ensure SOPS configuration: %w", err)
+		} else if ensured == sops.SOPSConfigCreated {
+			m.logger.Info("Created missing SOPS configuration", "config_path", sopsConfigPath)
+		}
+	}
+
 	// Initialize result
 	result := &SyncResult{
 		Created:   []string{},

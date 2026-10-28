@@ -901,66 +901,13 @@ func (s *InitService) generateSOPSKey(clusterPaths *paths.ClusterPaths) error {
 }
 
 func (s *InitService) ensureSOPSConfig(clusterPaths *paths.ClusterPaths, cfg *v2.Config) error {
-	publicKey, err := s.readAgePublicKey(cfg.Secrets.SopsAgeKeyFile)
+	_, err := sops.EnsureSOPSConfig(clusterPaths.SOPSConfigPath, cfg, s.fileSystem)
 	if err != nil {
 		return err
 	}
-
-	content := fmt.Sprintf(`creation_rules:
-  - path_regex: 'secrets/age/keys/.*-key\.txt$'
-    age: >-
-      %s
-  - path_regex: 'secrets/ssh/[^.]+$'
-    age: >-
-      %s
-  - path_regex: 'applications/overlays/[^/]+/(managed-services|services)/.*/.*\.ya?ml$'
-    encrypted_regex: "^(data|stringData)$"
-    age: >-
-      %s
-  - path_regex: '^infrastructure/clusters/%s/.*\.ya?ml$'
-    encrypted_regex: "^(data|stringData|secret)$"
-    age: >-
-      %s
-`, publicKey, publicKey, publicKey, cfg.OpenCenter.Cluster.ClusterName, publicKey)
-
-	if err := s.fileSystem.WriteFileAtomic(clusterPaths.SOPSConfigPath, []byte(content), 0o644); err != nil {
-		return err
-	}
+	// Re-assert the mode even when the file already existed: init with
+	// --regenerate-keys must leave a 0644 config regardless of prior state.
 	return verifyMode(clusterPaths.SOPSConfigPath, 0o644)
-}
-
-func (s *InitService) readAgePublicKey(keyPath string) (string, error) {
-	if keyPath == "" {
-		return "", fmt.Errorf("SOPS age key path cannot be empty")
-	}
-
-	data, err := s.fileSystem.ReadFile(keyPath)
-	if err != nil {
-		return "", fmt.Errorf("reading SOPS age key: %w", err)
-	}
-
-	privateKey := extractAgePrivateKey(string(data))
-	if privateKey == "" {
-		return "", fmt.Errorf("no valid age private key found in %s", keyPath)
-	}
-
-	keyPair, err := crypto.ParseAgeKey(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("parsing SOPS age key: %w", err)
-	}
-
-	return strings.TrimSpace(keyPair.PublicKey), nil
-}
-
-func extractAgePrivateKey(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "AGE-SECRET-KEY-") {
-			return trimmed
-		}
-	}
-
-	return ""
 }
 
 // generateSSHKey generates an SSH key pair for the cluster
