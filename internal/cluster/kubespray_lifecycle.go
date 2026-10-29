@@ -439,6 +439,19 @@ func (l *kubesprayLifecycle) deploy(ctx context.Context, cfg *v2.Config) error {
 			env[key] = value
 		}
 	}
+	// The forward is best-effort by construction — it copies whatever OpenTofu
+	// was handed — so it needs an explicit gate. GitOps owns the CCM, and with
+	// cloud_provider: external the CCM is the ONLY thing that clears the
+	// node.cloudprovider.kubernetes.io/uninitialized taint kubelet applies at
+	// registration. A cluster deployed without usable OS_AUTH_URL /
+	// OS_APPLICATION_CREDENTIAL_* comes up Ready, stays tainted, and schedules
+	// nothing; the deploy itself reports success. Failing here costs minutes
+	// instead of the 24 hours that shape cost on kit-kat. Magnum clusters are
+	// excluded: Magnum provisions its own CCM and needs no in-cluster
+	// OpenStack credential.
+	if missing := missingCCMCredentialKeys(env); len(missing) > 0 && !isMagnumProvider(cfg) {
+		return fmt.Errorf("kubespray deploy aborted: missing in the deploy environment: %s. The external cloud controller manager cannot authenticate without them, so every node would keep the %s taint and nothing would schedule. Bind the cluster to a cloud with `opencenter cluster provider openstack`, then re-run deploy", strings.Join(missing, ", "), cloudProviderInitTaintKey)
+	}
 	ansiblePlaybook := filepath.Join(l.venvPath, "bin", "ansible-playbook")
 	args := []string{"-i", filepath.Join(l.inventoryPath, "inventory.yaml"), filepath.Join(l.kubesprayPath, "cluster.yml"), "-f", "10", "-b", "--become-user=root"}
 	if cfg != nil && cfg.OpenCenter.Cluster.Kubernetes.Security.K8sHardening {
@@ -594,4 +607,44 @@ func cloneStringMap(input map[string]string) map[string]string {
 		output[key] = value
 	}
 	return output
+}
+
+// ccmCredentialEnvKeys are the environment variables the external OpenStack
+// cloud controller manager needs to authenticate. Kubespray's own CCM role is
+// disabled (external_cloud_provider: manual), so GitOps renders the CCM
+// cloudConfig from the cluster config; these keys are what the CLI validates
+// and what the deploy environment must carry for the kubespray-side lookups.
+var ccmCredentialEnvKeys = []string{
+	"OS_AUTH_URL",
+	"OS_APPLICATION_CREDENTIAL_ID",
+	"OS_APPLICATION_CREDENTIAL_SECRET",
+}
+
+// missingCCMCredentialKeys returns the CCM credential variables that are absent
+// from env or still hold a `cluster init` placeholder. Username/password auth
+// satisfies the check the same way it satisfies Keystone: an application
+// credential is preferred, not required.
+func missingCCMCredentialKeys(env map[string]string) []string {
+	hasUserPass := !isEmptyOrPlaceholder(env["OS_USERNAME"]) && !isEmptyOrPlaceholder(env["OS_PASSWORD"])
+	missing := make([]string, 0, len(ccmCredentialEnvKeys))
+	for _, key := range ccmCredentialEnvKeys {
+		if !isEmptyOrPlaceholder(env[key]) {
+			continue
+		}
+		if hasUserPass && key != "OS_AUTH_URL" {
+			continue
+		}
+		missing = append(missing, key)
+	}
+	return missing
+}
+
+// isMagnumProvider reports whether the cluster is provisioned by Magnum, which
+// runs its own cloud controller manager and therefore needs no in-cluster
+// OpenStack credential.
+func isMagnumProvider(cfg *v2.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(cfg.Provider()), "magnum")
 }

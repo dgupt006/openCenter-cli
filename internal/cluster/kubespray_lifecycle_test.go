@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	v2 "github.com/opencenter-cloud/opencenter-cli/internal/config/v2"
 	"github.com/opencenter-cloud/opencenter-cli/internal/core/paths"
 )
 
@@ -448,6 +449,137 @@ func TestKubesprayOSHardeningStagesPinnedRoleAndExistingPlaybookSemantics(t *tes
 			}
 		}
 	}
+}
+
+// newDeployTestLifecycle builds a lifecycle whose outputs are already loaded,
+// so deploy() reaches the credential gate without touching OpenTofu.
+func newDeployTestLifecycle(runner lifecycleCommandRunner, stateDir string, openTofuEnv map[string]string) *kubesprayLifecycle {
+	return &kubesprayLifecycle{
+		runner:        runner,
+		openTofuEnv:   openTofuEnv,
+		stateDir:      stateDir,
+		inventoryPath: filepath.Join(stateDir, "inventory"),
+		venvPath:      filepath.Join(stateDir, "venv"),
+		kubesprayPath: filepath.Join(stateDir, "kubespray"),
+		outputs: kubesprayLifecycleOutputs{
+			InventoryPath:   filepath.Join(stateDir, "inventory", "inventory.yaml"),
+			ContractVersion: kubesprayLifecycleContractVersion,
+			APIAddress:      "10.0.0.5",
+			APIPort:         6443,
+		},
+	}
+}
+
+// TestKubesprayDeployForwardsCCMCredentials covers the positive path of
+// OCTR-750: the OpenTofu credential environment must reach the Ansible run, or
+// the external CCM fails with "external_openstack_auth_url is missing" and
+// every node keeps the cloud-provider-uninitialized taint.
+func TestKubesprayDeployForwardsCCMCredentials(t *testing.T) {
+	runner := &fakeLifecycleRunner{}
+	lifecycle := newDeployTestLifecycle(runner, t.TempDir(), map[string]string{
+		"OS_AUTH_URL":                      "https://keystone.api.iad3.rackspacecloud.com/v3/",
+		"OS_APPLICATION_CREDENTIAL_ID":     "cred-id",
+		"OS_APPLICATION_CREDENTIAL_SECRET": "cred-secret",
+		"OS_REGION_NAME":                   "IAD3",
+		"TF_VAR_unrelated":                 "must-not-leak",
+	})
+	cfg := mustNewClusterTestConfig("fwd", "openstack")
+
+	if err := lifecycle.deploy(context.Background(), &cfg); err != nil {
+		t.Fatalf("deploy() error = %v", err)
+	}
+	var env map[string]string
+	for _, call := range runner.calls {
+		if strings.HasSuffix(call.name, filepath.Join("venv", "bin", "ansible-playbook")) {
+			env = call.env
+		}
+	}
+	if env == nil {
+		t.Fatal("no ansible-playbook invocation recorded")
+	}
+	if env["OS_AUTH_URL"] != "https://keystone.api.iad3.rackspacecloud.com/v3/" || env["OS_APPLICATION_CREDENTIAL_SECRET"] != "cred-secret" {
+		t.Fatalf("CCM credentials were not forwarded to ansible: %#v", env)
+	}
+	if _, ok := env["TF_VAR_unrelated"]; ok {
+		t.Fatalf("non-OS_ variable leaked into the ansible environment: %#v", env)
+	}
+}
+
+// TestKubesprayDeployAbortsWithoutCCMCredentials pins the gate: deploying
+// without credible OpenStack credentials produces a cluster that is Ready,
+// permanently tainted, and unable to schedule anything, while deploy reports
+// success. The gate must fail before Ansible starts.
+func TestKubesprayDeployAbortsWithoutCCMCredentials(t *testing.T) {
+	tests := []struct {
+		name        string
+		openTofuEnv map[string]string
+		wantMissing string
+	}{
+		{
+			name:        "no credentials at all",
+			openTofuEnv: nil,
+			wantMissing: "OS_AUTH_URL",
+		},
+		{
+			name: "init placeholders",
+			openTofuEnv: map[string]string{
+				"OS_AUTH_URL":                      "https://keystone.api.iad3.rackspacecloud.com/v3/",
+				"OS_APPLICATION_CREDENTIAL_ID":     v2.PlaceholderSecret,
+				"OS_APPLICATION_CREDENTIAL_SECRET": v2.PlaceholderSecret,
+			},
+			wantMissing: "OS_APPLICATION_CREDENTIAL_ID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeLifecycleRunner{}
+			lifecycle := newDeployTestLifecycle(runner, t.TempDir(), tt.openTofuEnv)
+			cfg := mustNewClusterTestConfig("gate", "openstack")
+
+			err := lifecycle.deploy(context.Background(), &cfg)
+			if err == nil {
+				t.Fatal("deploy() accepted an environment the CCM cannot authenticate with")
+			}
+			for _, want := range []string{tt.wantMissing, cloudProviderInitTaintKey, "cluster provider openstack"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err.Error(), want)
+				}
+			}
+			for _, call := range runner.calls {
+				if strings.HasSuffix(call.name, "ansible-playbook") {
+					t.Fatalf("ansible-playbook ran despite the credential gate: %#v", call.args)
+				}
+			}
+		})
+	}
+}
+
+// TestKubesprayDeployAcceptsPasswordAuthAndSkipsMagnum covers the two shapes
+// that must NOT be gated: username/password credentials (valid Keystone auth
+// without an application credential) and Magnum, which runs its own CCM.
+func TestKubesprayDeployAcceptsPasswordAuthAndSkipsMagnum(t *testing.T) {
+	t.Run("username and password satisfy the gate", func(t *testing.T) {
+		runner := &fakeLifecycleRunner{}
+		lifecycle := newDeployTestLifecycle(runner, t.TempDir(), map[string]string{
+			"OS_AUTH_URL": "https://keystone.api.iad3.rackspacecloud.com/v3/",
+			"OS_USERNAME": "user",
+			"OS_PASSWORD": "pass",
+		})
+		cfg := mustNewClusterTestConfig("password-auth", "openstack")
+		if err := lifecycle.deploy(context.Background(), &cfg); err != nil {
+			t.Fatalf("deploy() error = %v", err)
+		}
+	})
+
+	t.Run("magnum is exempt", func(t *testing.T) {
+		runner := &fakeLifecycleRunner{}
+		lifecycle := newDeployTestLifecycle(runner, t.TempDir(), nil)
+		cfg := mustNewClusterTestConfig("magnum-cluster", "magnum")
+		if err := lifecycle.deploy(context.Background(), &cfg); err != nil {
+			t.Fatalf("deploy() error = %v, want the Magnum CCM exemption to apply", err)
+		}
+	})
 }
 
 type waitCloudInitRunner struct {

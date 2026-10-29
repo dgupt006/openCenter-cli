@@ -222,7 +222,8 @@ func TestClusterDeployFailurePrintsLogAndResumeState(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected deploy command to fail")
 	}
-	if !strings.Contains(err.Error(), "openstack credentials are incomplete") {
+	// The credential resolver rejects the placeholder before any command runs.
+	if !strings.Contains(err.Error(), "application_credential_id") || !strings.Contains(err.Error(), "cluster provider openstack") {
 		t.Fatalf("unexpected deploy error: %v", err)
 	}
 

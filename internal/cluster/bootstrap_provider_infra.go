@@ -135,8 +135,16 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 	}
 
 	if strings.EqualFold(strings.TrimSpace(cfg.Deployment.Method), "kubespray") {
-		kubeLifecycle = newKubesprayLifecycle(p.runner, openTofuPath, clusterDir, clusterPaths, opts.KubeconfigPath, nil)
-		kubeLifecycle.osHardening = cfg.OpenCenter.Infrastructure.Networking.Security.OSHardening
+		// Seed the credential environment from the config so it is present no
+		// matter which step sequence actually runs: a full deploy refreshes it
+		// in opentofu-init/apply, but `--step kubespray-deploy` / `--from-step`
+		// reach deploy() without ever running those. Planning must not fail
+		// here: deploy() gates on the credentials themselves.
+		var kubeEnv map[string]string
+		if seeded, seedErr := buildProviderBootstrapEnvironment(cfg, opts.KubeconfigPath); seedErr == nil {
+			kubeEnv = seeded
+		}
+		kubeLifecycle = newKubesprayLifecycle(p.runner, openTofuPath, clusterDir, clusterPaths, opts.KubeconfigPath, kubeEnv)
 		cloudInitTimeout, err := kubesprayCloudInitTimeout(cfg)
 		if err != nil {
 			return nil, err
@@ -209,6 +217,16 @@ func (p *openstackBootstrapProvider) BuildSteps(cfg *v2.Config, clusterPaths *pa
 		deployCommands := []BootstrapPlanCommand{}
 		deployPlanEnv := kubeLifecycle.environment()
 		deployPlanEnv["ANSIBLE_ROLES_PATH"] = filepath.Join(kubeLifecycle.kubesprayPath, "roles")
+		// The plan must show what the run actually sends: deploy() forwards the
+		// OpenTofu credential environment to Ansible because the external CCM
+		// reads OS_AUTH_URL / OS_APPLICATION_CREDENTIAL_* from it. Omitting them
+		// here made a dry-run plan look credential-free for a step that cannot
+		// produce a schedulable cluster without them.
+		for _, entry := range providerPlanEnv(provider, opts.KubeconfigPath) {
+			if strings.HasPrefix(entry.Name, "OS_") {
+				deployPlanEnv[entry.Name] = entry.Value
+			}
+		}
 		deployCommands = append(deployCommands, commandPlan(filepath.Join(kubeLifecycle.venvPath, "bin", "ansible-playbook"), "-i", filepath.Join(kubeLifecycle.inventoryPath, "inventory.yaml"), filepath.Join(kubeLifecycle.kubesprayPath, "cluster.yml"), "-f", "10", "-b", "--become-user=root"))
 		steps = append(steps,
 			bootstrapStep{
@@ -453,8 +471,51 @@ func extractOpenStackBootstrapCredentials(cfg *v2.Config) (*credentials.OpenStac
 	return creds, nil
 }
 
-// validateOpenStackBootstrap performs the offline credential shape checks and
-// then authenticates against Keystone for real.
+// resolveOpenStackBootstrapCredentials extracts the cluster's OpenStack
+// credentials and rejects any that still hold an unreplaced placeholder.
+//
+// `cluster init` writes CHANGEME into application_credential_id/secret, so a
+// config that was never bound to a cloud carries syntactically valid but
+// useless values. The extractor's IsEmpty check passes them, and
+// mergeBootstrapEnvironment then publishes OS_APPLICATION_CREDENTIAL_ID=CHANGEME
+// into the OpenTofu environment and, via the kubespray deploy step, into the
+// Ansible run. The result is the kit-kat failure: OpenTofu applies against the
+// operator's own OS_* ambient cloud, the cluster comes up, and the GitOps CCM
+// renders a cloudConfig whose credential is the literal string CHANGEME. It
+// can never authenticate, so it never sets spec.providerID or clears the
+// node.cloudprovider.kubernetes.io/uninitialized taint, and the cluster stays
+// unschedulable behind a deploy that reported success.
+//
+// Failing here — before any command runs — is the only place that catches it:
+// OpenTofu authenticates with whatever OS_* it is handed, so a placeholder
+// never surfaces as a provisioning error.
+func resolveOpenStackBootstrapCredentials(cfg *v2.Config) (*credentials.OpenStackCredentials, error) {
+	creds, err := extractOpenStackBootstrapCredentials(cfg)
+	if err != nil {
+		return nil, err
+	}
+	identity := cfg.ClusterName()
+	if organization := strings.TrimSpace(cfg.Organization()); organization != "" {
+		identity = organization + "/" + identity
+	}
+	for _, field := range []struct {
+		path  string
+		value string
+	}{
+		{"opencenter.infrastructure.cloud.openstack.auth_url", creds.AuthURL},
+		{"opencenter.infrastructure.cloud.openstack.application_credential_id", creds.ApplicationCredentialID},
+		{"opencenter.infrastructure.cloud.openstack.application_credential_secret", creds.ApplicationCredentialSecret},
+	} {
+		if isEmptyOrPlaceholder(field.value) {
+			return nil, fmt.Errorf("%s for cluster %s is %s; bind the cluster to a cloud with `opencenter cluster provider openstack` (or set the value) before deploying", field.path, identity, strings.TrimSpace(field.value))
+		}
+	}
+	return creds, nil
+}
+
+// validateOpenStackBootstrap authenticates the cluster's OpenStack credentials
+// against Keystone for real. Placeholder rejection lives in
+// resolveOpenStackBootstrapCredentials, which every caller goes through first.
 //
 // The live check is what makes this worth the network call. auth_url is
 // rendered verbatim into the in-cluster OpenStack CCM cloudConfig and the
@@ -467,11 +528,6 @@ func extractOpenStackBootstrapCredentials(cfg *v2.Config) (*credentials.OpenStac
 func (p *openstackBootstrapProvider) validateOpenStackBootstrap(creds *credentials.OpenStackCredentials) error {
 	if creds == nil || creds.IsEmpty() {
 		return fmt.Errorf("openstack credentials are incomplete; set auth_url and application credentials or username/password before bootstrap")
-	}
-
-	// Reject placeholder credentials
-	if creds.ApplicationCredentialID == "CHANGEME" || creds.ApplicationCredentialSecret == "CHANGEME" {
-		return fmt.Errorf("openstack credentials are incomplete; application_credential_id and application_credential_secret must be replaced before bootstrap")
 	}
 
 	for _, warning := range openstackprovider.PreflightOpenStack(creds.AuthURL) {
@@ -727,7 +783,7 @@ func (p *openstackBootstrapProvider) buildPreflightStep(cfg *v2.Config, provider
 func (p *openstackBootstrapProvider) validateProviderBootstrap(cfg *v2.Config, provider string) error {
 	switch provider {
 	case "openstack":
-		creds, err := extractOpenStackBootstrapCredentials(cfg)
+		creds, err := resolveOpenStackBootstrapCredentials(cfg)
 		if err != nil {
 			return err
 		}
@@ -811,13 +867,18 @@ func (p *openstackBootstrapProvider) checkBastionSSH(ctx context.Context, cfg *v
 
 // buildProviderBootstrapEnvironment returns environment variables for the
 // OpenTofu run, selecting credentials based on the infrastructure provider.
+//
+// The OpenStack branch resolves credentials through
+// resolveOpenStackBootstrapCredentials, so a placeholder never reaches the
+// environment: this map is what OpenTofu authenticates with AND what the
+// kubespray deploy step forwards to Ansible for the external CCM.
 func buildProviderBootstrapEnvironment(cfg *v2.Config, kubeconfigPath string) (map[string]string, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider()))
 	env := buildBootstrapEnvironment(kubeconfigPath)
 
 	switch provider {
 	case "openstack":
-		creds, err := extractOpenStackBootstrapCredentials(cfg)
+		creds, err := resolveOpenStackBootstrapCredentials(cfg)
 		if err != nil {
 			return nil, err
 		}

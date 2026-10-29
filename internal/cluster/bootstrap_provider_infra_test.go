@@ -283,6 +283,8 @@ func TestOpenStackBootstrapProviderForwardsInventoryStateZoneToOpenTofu(t *testi
 	}
 	provider := &openstackBootstrapProvider{runner: fakeRunner}
 	cfg := mustNewClusterTestConfig("inv-forward", "openstack")
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "app-cred-id"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "app-cred-secret"
 	cfg.OpenTofu.Path = "tofu"
 	cfg.Deployment.Method = "kubespray"
 	clusterPaths := &paths.ClusterPaths{
@@ -1060,4 +1062,62 @@ func TestKindInstallCalicoSkipsChartCRDsAndForcesConflicts(t *testing.T) {
 	// again under a different field manager.
 	assertRecordedCommandContains(t, fakeRunner.calls, "kubectl", "--kubeconfig "+kubeconfigPath+" wait --for=condition=established crd/installations.operator.tigera.io crd/apiservers.operator.tigera.io crd/goldmanes.operator.tigera.io crd/whiskers.operator.tigera.io --timeout=60s")
 	assertRecordedCommandContains(t, fakeRunner.calls, "helm", "--create-namespace --skip-crds --force-conflicts --kubeconfig "+kubeconfigPath+" -f "+valuesPath)
+}
+
+// TestResolveOpenStackBootstrapCredentialsRejectsPlaceholders pins the guard
+// that keeps `cluster init`'s CHANGEME credentials out of the deploy
+// environment. The extractor's IsEmpty passes them, so without this the
+// literal string CHANGEME reaches OS_APPLICATION_CREDENTIAL_ID and the GitOps
+// CCM renders a cloudConfig that can never authenticate — the kit-kat shape,
+// where nodes stayed tainted with node.cloudprovider.kubernetes.io/uninitialized
+// and nothing scheduled behind a deploy that reported success.
+func TestResolveOpenStackBootstrapCredentialsRejectsPlaceholders(t *testing.T) {
+	cfg := mustNewClusterTestConfig("placeholder-guard", "openstack")
+	if cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID != v2.PlaceholderSecret {
+		t.Fatalf("precondition: application_credential_id = %q, want the init placeholder", cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID)
+	}
+
+	_, err := resolveOpenStackBootstrapCredentials(&cfg)
+	if err == nil {
+		t.Fatal("resolveOpenStackBootstrapCredentials() accepted init placeholder credentials")
+	}
+	for _, want := range []string{
+		"opencenter.infrastructure.cloud.openstack.application_credential_id",
+		"placeholder-guard",
+		"cluster provider openstack",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err.Error(), want)
+		}
+	}
+	// The secret value must never be echoed into the message.
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "real-id"
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "super-secret-value"
+	if _, err := resolveOpenStackBootstrapCredentials(&cfg); err != nil {
+		t.Fatalf("resolveOpenStackBootstrapCredentials() rejected usable credentials: %v", err)
+	}
+}
+
+// TestBuildProviderBootstrapEnvironmentNeverExportsPlaceholders asserts the
+// OpenTofu/Ansible environment is either fully credible or absent: a partial
+// credential set must fail the step rather than export CHANGEME.
+func TestBuildProviderBootstrapEnvironmentNeverExportsPlaceholders(t *testing.T) {
+	cfg := mustNewClusterTestConfig("env-guard", "openstack")
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialID = "app-cred-id"
+
+	if _, err := buildProviderBootstrapEnvironment(&cfg, filepath.Join(t.TempDir(), "kubeconfig.yaml")); err == nil {
+		t.Fatal("buildProviderBootstrapEnvironment() accepted a half-populated credential pair")
+	}
+
+	cfg.OpenCenter.Infrastructure.Cloud.OpenStack.ApplicationCredentialSecret = "app-cred-secret"
+	env, err := buildProviderBootstrapEnvironment(&cfg, filepath.Join(t.TempDir(), "kubeconfig.yaml"))
+	if err != nil {
+		t.Fatalf("buildProviderBootstrapEnvironment() error = %v", err)
+	}
+	for _, key := range []string{"OS_AUTH_URL", "OS_APPLICATION_CREDENTIAL_ID", "OS_APPLICATION_CREDENTIAL_SECRET"} {
+		value := env[key]
+		if value == "" || strings.EqualFold(value, v2.PlaceholderSecret) {
+			t.Fatalf("%s = %q, want a usable credential", key, value)
+		}
+	}
 }
