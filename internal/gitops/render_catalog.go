@@ -23,13 +23,19 @@ type RenderSpec struct {
 	BasePath         string
 	PostBaseStages   []postBaseStageSpec
 
-	SingleStage             bool
-	BaseOnly                bool
-	OmitTargetNamespace     bool
-	PrivilegedNamespace     bool
-	HasOverrideValues       bool
-	NamespaceStage          bool
-	KustomizationName       string
+	SingleStage         bool
+	BaseOnly            bool
+	OmitTargetNamespace bool
+	PrivilegedNamespace bool
+	HasOverrideValues   bool
+	NamespaceStage      bool
+	KustomizationName   string
+	// HelmReleaseName is the metadata.name of the HelmRelease the base ships,
+	// for the services where it differs from ServiceName. The "-base" Flux
+	// Kustomization's healthChecks reference the HelmRelease by name; a wrong
+	// name targets a resource that never exists, so the Kustomization never
+	// reports Ready. Empty means the HelmRelease is named after the service.
+	HelmReleaseName         string
 	EnterpriseRegistry      bool
 	GeneratedResourceFiles  []string
 	ExtraDependencies       []string
@@ -104,7 +110,8 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			ServiceName: "gateway-api", DefaultNamespace: "envoy-gateway-system", HasOverrideValues: true,
 			SourceName: "opencenter-gateway-api", SourceGroup: "gateway-api", EmitSource: true,
 			BasePath: "applications/base/services/gateway-api", KustomizationName: "envoy-gateway-api",
-			OverrideValues: "---\nconfig:\n  envoyGateway:\n    gateway:\n      controllerName: gateway.envoyproxy.io/gatewayclass-controller\n    provider:\n      type: Kubernetes\n    logging:\n      level:\n        default: info\n    extensionApis:\n      enableEnvoyPatchPolicy: true\n      enableBackend: true\n",
+			HelmReleaseName: "envoy-gateway-api",
+			OverrideValues:  "---\nconfig:\n  envoyGateway:\n    gateway:\n      controllerName: gateway.envoyproxy.io/gatewayclass-controller\n    provider:\n      type: Kubernetes\n    logging:\n      level:\n        default: info\n    extensionApis:\n      enableEnvoyPatchPolicy: true\n      enableBackend: true\n",
 		},
 		{
 			ServiceName: "headlamp", DefaultNamespace: "headlamp", HasOverrideValues: true,
@@ -163,6 +170,10 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			BasePath: "applications/base/services/openstack-ccm", ExtraDependencies: []string{"openstack-ccm-override"}, OverrideDependsOn: []string{"openstack-ccm-namespace"}, SkipSourcesDependency: true,
 			OverrideValuesRenderer:           templateRenderer(openstackCCMTemplate),
 			BaseKustomizationPatchesRenderer: openstackCCMBaseKustomizationPatchesRenderer,
+			// The upstream base ships the HelmRelease as openstack-cloud-controller-manager,
+			// not openstack-ccm; the base-stage healthChecks must name it exactly or the
+			// Kustomization never reports Ready.
+			HelmReleaseName: openstackCCMHelmReleaseName,
 		},
 		{
 			ServiceName: "openstack-csi", DefaultNamespace: "openstack-csi", HasOverrideValues: true, NamespaceStage: true,
@@ -170,6 +181,9 @@ func newBuiltInRenderCatalog() RenderCatalog {
 			SourceName:          "opencenter-openstack-csi", SourceGroup: "openstack-csi", EmitSource: true,
 			BasePath: "applications/base/services/openstack-csi", ExtraDependencies: []string{"openstack-csi-override"}, OverrideDependsOn: []string{"sources", "openstack-csi-namespace"},
 			OverrideValuesRenderer: templateRenderer(openstackCSITemplate),
+			// The upstream base ships the HelmRelease as openstack-cinder-csi, not
+			// openstack-csi; same health-check name contract as openstack-ccm.
+			HelmReleaseName: "openstack-cinder-csi",
 		},
 		{
 			ServiceName: "tempo", DefaultNamespace: "observability", HasOverrideValues: true,

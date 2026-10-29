@@ -31,17 +31,25 @@ import (
 
 // autoServiceContext holds the data passed to generic service templates.
 type autoServiceContext struct {
-	ServiceName                      string
-	Namespace                        string
-	SourceName                       string
-	EmitSource                       bool
-	BasePath                         string
-	SingleStage                      bool
-	BaseOnly                         bool
-	PostBaseStages                   []postBaseStageSpec
-	OmitTargetNamespace              bool
-	PrivilegedNamespace              bool
-	KustomizationName                string
+	ServiceName         string
+	Namespace           string
+	SourceName          string
+	EmitSource          bool
+	BasePath            string
+	SingleStage         bool
+	BaseOnly            bool
+	PostBaseStages      []postBaseStageSpec
+	OmitTargetNamespace bool
+	PrivilegedNamespace bool
+	KustomizationName   string
+	// HelmReleaseName is the metadata.name of the HelmRelease the base ships,
+	// for the services where it differs from ServiceName. The "-base" Flux
+	// Kustomization's healthChecks reference the HelmRelease by name; a wrong
+	// name targets a resource that never exists, so the Kustomization never
+	// reports Ready. buildAutoServiceContextWithArtifacts fills it with the
+	// service name when the catalog entry leaves it empty, so the template
+	// renders it unconditionally.
+	HelmReleaseName                  string
 	HasOverrideValues                bool
 	NamespaceStage                   bool
 	EnterpriseRegistry               bool
@@ -261,6 +269,7 @@ func buildAutoServiceContextWithArtifacts(serviceName string, base *services.Bas
 		OmitTargetNamespace:              spec.OmitTargetNamespace,
 		PrivilegedNamespace:              spec.PrivilegedNamespace,
 		KustomizationName:                kustomizationName(serviceName, spec.KustomizationName),
+		HelmReleaseName:                  kustomizationName(serviceName, spec.HelmReleaseName),
 		HasOverrideValues:                spec.HasOverrideValues,
 		NamespaceStage:                   spec.NamespaceStage,
 		EnterpriseRegistry:               spec.EnterpriseRegistry,
@@ -667,7 +676,7 @@ spec:
   healthChecks:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
-      name: {{ .ServiceName }}
+      name: {{ .HelmReleaseName }}
       namespace: {{ .Namespace }}
   commonMetadata:
     labels:
